@@ -1,1 +1,9 @@
-streamlit pandas yfinance pandas-ta numpy urllib3 nsepython requests plotly
+streamlit 
+pandas 
+yfinance 
+pandas-ta 
+numpy 
+urllib3 
+nsepython 
+requests 
+plotly
