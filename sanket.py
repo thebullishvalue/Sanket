@@ -961,42 +961,42 @@ def compute_ilfo_signal(ticker, df, end_date):
             nl_string = f'<span class="pct-negative">NEG</span>'
 
         if "Long" in signal_text:
-            if 3.10 <= ilfo_value <= 3.60:
+            if 3.062 <= ilfo_value <= 3.692:
                 ilfo_string = f'<span class="pct-positive">{ilfo_value:.2f}</span>'
                 match_count += 1
-            if 73 <= vol_value <= 91:
+            if 72.350 <= vol_value <= 90.373:
                 vol_string = f'<span class="pct-positive">{vol_value:.1f}</span>'
                 match_count += 1
-            if 0.000 <= mom_rsi_val <= 38.50:
+            if 39.047 <= mom_rsi_val <= 42.789:
                 mom_rsi_string = f'<span class="pct-positive">{mom_rsi_val:.2f}</span>'
                 match_count += 1
-            if 1.77 <= osc_mom_val <= 3.48:
+            if 1.363 <= osc_mom_val <= 3.701:
                 osc_mom_string = f'<span class="pct-positive">{osc_mom_val:.2f}</span>'
                 match_count += 1
-            if -0.26 <= osc_accel_val <= 1.51:
+            if 0.833 <= osc_accel_val <= 3.788:
                 osc_accel_string = f'<span class="pct-positive">{osc_accel_val:.2f}</span>'
                 match_count += 1
-            if -0.46 <= vol_score_val <= 0.45:
+            if -0.589 <= vol_score_val <= -0.452:
                 vol_score_string = f'<span class="pct-positive">{vol_score_val:.2f}</span>'
                 match_count += 1
                 
         elif "Short" in signal_text:
-            if -10.35 <= ilfo_value <= -3.75:
+            if -3.936 <= ilfo_value <= -3.220:
                 ilfo_string = f'<span class="pct-negative">{ilfo_value:.2f}</span>'
                 match_count += 1
-            if 79.0 <= vol_value <= 95.60:
+            if 77.883 <= vol_value <= 96.083:
                 vol_string = f'<span class="pct-negative">{vol_value:.1f}</span>'
                 match_count += 1
-            if 53.30 <= mom_rsi_val <= 57.08:
+            if 56.678 <= mom_rsi_val <= 60.686:
                 mom_rsi_string = f'<span class="pct-negative">{mom_rsi_val:.2f}</span>'
                 match_count += 1
-            if -9.77 <= osc_mom_val <= -4.13:
+            if -6.542 <= osc_mom_val <= -4.154:
                 osc_mom_string = f'<span class="pct-negative">{osc_mom_val:.2f}</span>'
                 match_count += 1
-            if -12.09 <= osc_accel_val <= -3.99:
+            if -7.139 <= osc_accel_val <= -4.184:
                 osc_accel_string = f'<span class="pct-negative">{osc_accel_val:.2f}</span>'
                 match_count += 1
-            if 0.77 <= vol_score_val <= 1.000:
+            if 0.526 <= vol_score_val <= 0.655:
                 vol_score_string = f'<span class="pct-negative">{vol_score_val:.2f}</span>'
                 match_count += 1
 
