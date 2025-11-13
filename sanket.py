@@ -34,7 +34,7 @@ st.set_page_config(
 )
 
 # --- Constants ---
-VERSION = "v3.3.0 (Confidence Scoring)" # UPDATED VERSION
+VERSION = "v3.3.0" # UPDATED VERSION
 SECTOR_MAP_FILE = "sector_map.pkl"
 INDEX_LIST = [
     "NIFTY 50", "NIFTY NEXT 50", "NIFTY 100", "NIFTY 200", "NIFTY 500",
@@ -378,6 +378,8 @@ st.markdown("""
     .metric-card.warning h2 { color: var(--warning-amber); }
     .metric-card.info h2 { color: var(--info-cyan); }
     .metric-card.neutral h2 { color: var(--neutral); }
+    .metric-card.primary h2 { color: var(--primary-color); } /* New class for 6th color */
+    .metric-card.white h2 { color: var(--text-primary); } /* New class for white text */
     
     .status-badge {
         display: inline-flex;
@@ -407,6 +409,56 @@ st.markdown("""
         font-size: 1rem;
         font-weight: 700;
     }
+
+    /* --- START: Button CSS from sanket.py --- */
+    /* Buttons */
+    .stButton>button {
+        border: 2px solid var(--primary-color);
+        background: transparent;
+        color: var(--primary-color);
+        font-weight: 700;
+        border-radius: 12px;
+        padding: 0.75rem 2rem;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .stButton>button:hover {
+        box-shadow: 0 0 25px rgba(var(--primary-rgb), 0.6);
+        background: var(--primary-color);
+        color: #1A1A1A; /* Dark text on hover for contrast */
+        transform: translateY(-2px);
+    }
+    
+    .stButton>button:active {
+        transform: translateY(0);
+    }
+
+    /* Download Links */
+    .download-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.75rem 1.5rem;
+        border: 2px solid var(--primary-color);
+        background: transparent;
+        color: var(--primary-color);
+        text-decoration: none;
+        border-radius: 12px;
+        font-weight: 700;
+        transition: all 0.3s ease;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .download-link:hover {
+        box-shadow: 0 0 25px rgba(var(--primary-rgb), 0.6);
+        background: var(--primary-color);
+        color: #1A1A1A; /* Dark text on hover for contrast */
+        transform: translateY(-2px);
+    }
+    /* --- END: Button CSS from sanket.py --- */
     
     .stMarkdown table {
         width: 100%;
@@ -474,7 +526,6 @@ st.markdown("""
 st.markdown(f"""
 <div class="premium-header">
     <h1>Sanket | Quantitative Signal Analytics</h1>
-    <div class="tagline">Advanced Confidence Scoring System</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1750,7 +1801,8 @@ else:
     
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     
-    # Feature highlights
+    # --- MODIFIED: Added second row of cards ---
+    # Feature highlights - Row 1 (from v.py)
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -1773,103 +1825,51 @@ else:
     
     with col3:
         st.markdown("""
-        <div class='metric-card warning'>
+        <div class='metric-card white'>
             <h4>🔬 VALIDATED</h4>
             <h2>10-Year</h2>
             <div class='sub-metric'>Backtested Ranges</div>
         </div>
         """, unsafe_allow_html=True)
-    
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    
-    # Confidence Scoring Explanation
-    st.markdown("### 🧮 How Confidence Scoring Works")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("""
-        <div class='info-box'>
-            <h4>📐 Proximity Algorithm</h4>
-            <p>Each parameter is evaluated based on its distance from the optimal range center:</p>
-            <ul>
-                <li><strong>At Center:</strong> 100% contribution (1.0x weight)</li>
-                <li><strong>At Range Edge:</strong> 50% contribution (0.5x weight)</li>
-                <li><strong>Near Miss:</strong> 40% contribution (exponential decay)</li>
-                <li><strong>Far Miss:</strong> 15% contribution (minimal credit)</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class='info-box'>
-            <h4>⚖️ Parameter Weighting</h4>
-            <p>Not all parameters are equal. Weights based on importance:</p>
-            <ul>
-                <li><strong>Critical (25-35%):</strong> ILFO Value, Liq Osc, RSI</li>
-                <li><strong>High (20%):</strong> Volume Surge, Momentum</li>
-                <li><strong>Medium (10-15%):</strong> Oscillator Momentum</li>
-                <li><strong>Low (10%):</strong> Supporting indicators</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class='info-box'>
-        <h4>🎁 Synergy Bonuses</h4>
-        <p>
-            When multiple critical or high-importance parameters align perfectly, the system awards synergy bonuses:
-        </p>
-        <ul>
-            <li><strong>+5 points:</strong> 2+ critical parameters in optimal range</li>
-            <li><strong>+3 points:</strong> 1 critical + 2 high parameters in optimal range</li>
-        </ul>
-        <p style="margin-top: 0.5rem;">
-            This rewards signals where multiple independent factors confirm the same direction, 
-            indicating higher probability of success.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    
-    # Example Comparison
-    st.markdown("### 📊 Example: Old vs New System")
-    
-    comparison_data = {
-        "Metric": ["Signal Quality", "Decision Making", "Granularity", "Ranking"],
-        "Old System (Count)": [
-            "Binary (6/6 or 3/6)",
-            "Hard to prioritize",
-            "Low (0-6 scale)",
-            "No automatic sorting"
-        ],
-        "New System (Confidence)": [
-            "Continuous (0-100%)",
-            "Clear A+ to D grades",
-            "High (100-point scale)",
-            "Auto-sorted by quality"
-        ]
-    }
-    
-    comparison_df = pd.DataFrame(comparison_data)
-    st.dataframe(comparison_df, use_container_width=True, hide_index=True)
-    
-    st.markdown("""
-    <div class='info-box'>
-        <h4>💡 Practical Example</h4>
-        <p><strong>Scenario:</strong> Two stocks both show "Long" signal</p>
-        <ul>
-            <li><strong>Stock A:</strong> 5/6 parameters in range → Old: "Good". New: 87.3% (Grade A) - All critical params optimal</li>
-            <li><strong>Stock B:</strong> 5/6 parameters in range → Old: "Good". New: 62.1% (Grade B) - Critical params near edges</li>
-        </ul>
-        <p style="margin-top: 0.5rem;">
-            The new system reveals that Stock A is significantly stronger despite both showing 5/6 matches, 
-            because Stock A's parameters are centered in optimal ranges while Stock B's are at the edges.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+        
+    # Feature highlights - Row 2 (from sanket.py)
+    col4, col5, col6 = st.columns(3)
 
+    with col4:
+        st.markdown("""
+        <div class='metric-card danger'>
+            <h4>🎯 PRECISION</h4>
+            <h2>Multi-Factor</h2>
+            <div class='sub-metric'>Confirmation System</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col5:
+        st.markdown("""
+        <div class='metric-card neutral'>
+            <h4>⚡ SPEED</h4>
+            <h2>Real-Time</h2>
+            <div class='sub-metric'>Market Analysis</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col6:
+        st.markdown("""
+        <div class='metric-card primary'>
+            <h4>📊 INSIGHTS</h4>
+            <h2>Sector-Level</h2>
+            <div class='sub-metric'>Deep Analytics</div>
+        </div>
+        """, unsafe_allow_html=True)
+    # --- END MODIFICATION ---
+    
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    
+    # --- MODIFIED: Removed content below this line ---
+    # Confidence Scoring Explanation
+    
+    # All content below this title (Proximity, Weighting, Synergy, Example) has been removed
+    # as per the request.
+    
 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-st.caption(f"© 2025 Sanket | Quantitative Signal Analytics | {VERSION} | Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S IST')}")
+st.caption(f"© 2025 Sanket | Hemrek Capital | {VERSION} | Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S IST')}")
