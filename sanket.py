@@ -1872,4 +1872,4 @@ else:
     # as per the request.
     
 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-st.caption(f"© 2025 Sanket | Hemrek Capital | {VERSION} | Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S IST')}")
+st.caption(f"© 2025 Sanket | @thebullishvalue | {VERSION} | Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S IST')}")
