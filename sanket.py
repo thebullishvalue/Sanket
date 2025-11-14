@@ -605,45 +605,61 @@ def fetch_all_data(stock_list, end_date):
     start_date = end_date - timedelta(days=buffer_days)
     download_end_date = end_date + timedelta(days=1)
     
-    try:
-        all_data = yf.download(
-            stock_list,
-            start=start_date,
-            end=download_end_date,
-            progress=False,
-            auto_adjust=True,
-            group_by='ticker',
-            repair=True  # --- FIX: Add repair flag for robustness ---
-        )
+    # --- FIX: Download in chunks to avoid IP blocks on Streamlit Cloud ---
+    CHUNK_SIZE = 100
+    total_data_dict = {} # Master dictionary to hold all results
+    
+    for i in range(0, len(stock_list), CHUNK_SIZE):
+        chunk = stock_list[i:i + CHUNK_SIZE]
+        logging.info(f"Downloading data chunk {i//CHUNK_SIZE + 1}/{len(stock_list)//CHUNK_SIZE + 1}...")
         
-        if all_data.empty:
-            return None, "No data returned"
+        try:
+            all_data = yf.download(
+                chunk,
+                start=start_date,
+                end=download_end_date,
+                progress=False,
+                auto_adjust=True,
+                group_by='ticker',
+                repair=True
+            )
             
-        if isinstance(all_data, pd.DataFrame) and isinstance(all_data.columns, pd.MultiIndex):
-            data_dict = {}
-            for ticker in stock_list:
-                try:
-                    # --- FIX: Handle potential KeyErrors for failed downloads ---
-                    if ticker not in all_data.columns.levels[0]:
-                        logging.warning(f"No data for {ticker} in bulk download.")
-                        continue
-                        
-                    ticker_df = all_data.xs(ticker, level=0, axis=1)
-                    if not ticker_df.empty and not ticker_df['Close'].isnull().all():
-                        data_dict[ticker] = ticker_df
-                except KeyError:
-                    logging.warning(f"No data or KeyError for {ticker}")
-            return data_dict, f"✓ Downloaded {len(data_dict)} tickers"
+            if all_data.empty:
+                logging.warning(f"Chunk {i//CHUNK_SIZE + 1} returned no data.")
+                continue # Skip to the next chunk
+                
+            if isinstance(all_data, pd.DataFrame) and isinstance(all_data.columns, pd.MultiIndex):
+                chunk_data_dict = {}
+                for ticker in chunk: # Use the chunk list to iterate
+                    try:
+                        if ticker not in all_data.columns.levels[0]:
+                            logging.warning(f"No data for {ticker} in bulk download.")
+                            continue
+                            
+                        ticker_df = all_data.xs(ticker, level=0, axis=1)
+                        if not ticker_df.empty and not ticker_df['Close'].isnull().all():
+                            chunk_data_dict[ticker] = ticker_df
+                    except KeyError:
+                        logging.warning(f"No data or KeyError for {ticker}")
+                total_data_dict.update(chunk_data_dict)
 
-        elif isinstance(all_data, dict):
-            valid_data = {t:df for t,df in all_data.items() if not df.empty and not df['Close'].isnull().all()}
-            return data_dict, f"✓ Downloaded {len(valid_data)} tickers"
+            elif isinstance(all_data, dict):
+                valid_data = {t:df for t,df in all_data.items() if not df.empty and not df['Close'].isnull().all()}
+                total_data_dict.update(valid_data)
 
-        else:
-             return None, "Unexpected data structure"
+            else:
+                 logging.warning(f"Chunk {i//CHUNK_SIZE + 1} returned unexpected data structure.")
 
-    except Exception as e:
-        return None, f"Download error: {e}"
+        except Exception as e:
+            logging.error(f"Error downloading chunk {i//CHUNK_SIZE + 1}: {e}")
+        
+        time.sleep(0.2) # Add a small 200ms delay between chunks
+    
+    if not total_data_dict:
+        return None, "No data returned" # This is the original error
+        
+    return total_data_dict, f"✓ Downloaded {len(total_data_dict)} tickers"
+    # --- End of FIX ---
 
 @st.cache_resource(show_spinner=False)
 def load_sector_map():
