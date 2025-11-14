@@ -21,7 +21,14 @@ import pickle
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pd.options.mode.chained_assignment = None
 pd.set_option('future.no_silent_downcasting', True)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- FIX: Set up more detailed logging ---
+# Set level to DEBUG and add function name/line number to the format
+logging.basicConfig(
+    level=logging.INFO,  # --- FIX: Changed level from DEBUG back to INFO ---
+    format='%(asctime)s - %(levelname)s - %(message)s' # --- FIX: Reverted to simple format ---
+)
+# --- End of FIX ---
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +41,7 @@ st.set_page_config(
 )
 
 # --- Constants ---
-VERSION = "v3.3.0" # UPDATED VERSION
+VERSION = "v3.3.1 (Robust)" # UPDATED VERSION
 SECTOR_MAP_FILE = "sector_map.pkl"
 INDEX_LIST = [
     "NIFTY 50", "NIFTY NEXT 50", "NIFTY 100", "NIFTY 200", "NIFTY 500",
@@ -59,7 +66,7 @@ INDEX_URL_MAP = {
     "NIFTY IT": f"{BASE_URL}ind_niftyitlist.csv",
     "NIFTY MEDIA": f"{BASE_URL}ind_niftymedialist.csv",
     "NIFTY METAL": f"{BASE_URL}ind_niftymetallist.csv",
-    "NIFTY PHARMA": f"{BASE_URL}ind_niftypharmalist.csv"
+    "NIFTY PHARMA": f"{BASE_URL}ind_niftypharmallist.csv"
 }
 ANALYSIS_UNIVERSE_OPTIONS = ["F&O Stocks", "Index Constituents"]
 
@@ -532,6 +539,7 @@ st.markdown(f"""
 # --- Stock List Functions (Keep existing) ---
 @st.cache_data(ttl=3600)
 def get_fno_stock_list():
+    """Fetches the list of F&O stocks."""
     try:
         stock_data = nse_get_advances_declines()
         if not isinstance(stock_data, pd.DataFrame):
@@ -565,6 +573,7 @@ def get_fno_stock_list():
 
 @st.cache_data(ttl=3600)
 def get_index_stock_list(index):
+    """Fetches the list of stocks for a given index."""
     url = INDEX_URL_MAP.get(index)
     if not url:
         return None, f"No URL for {index}"
@@ -591,6 +600,7 @@ def get_index_stock_list(index):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_all_data(stock_list, end_date):
+    """Downloads historical data for all stocks in the list."""
     buffer_days = 250 
     start_date = end_date - timedelta(days=buffer_days)
     download_end_date = end_date + timedelta(days=1)
@@ -602,7 +612,8 @@ def fetch_all_data(stock_list, end_date):
             end=download_end_date,
             progress=False,
             auto_adjust=True,
-            group_by='ticker'
+            group_by='ticker',
+            repair=True  # --- FIX: Add repair flag for robustness ---
         )
         
         if all_data.empty:
@@ -612,16 +623,21 @@ def fetch_all_data(stock_list, end_date):
             data_dict = {}
             for ticker in stock_list:
                 try:
+                    # --- FIX: Handle potential KeyErrors for failed downloads ---
+                    if ticker not in all_data.columns.levels[0]:
+                        logging.warning(f"No data for {ticker} in bulk download.")
+                        continue
+                        
                     ticker_df = all_data.xs(ticker, level=0, axis=1)
                     if not ticker_df.empty and not ticker_df['Close'].isnull().all():
                         data_dict[ticker] = ticker_df
                 except KeyError:
-                    logging.warning(f"No data for {ticker}")
+                    logging.warning(f"No data or KeyError for {ticker}")
             return data_dict, f"✓ Downloaded {len(data_dict)} tickers"
 
         elif isinstance(all_data, dict):
             valid_data = {t:df for t,df in all_data.items() if not df.empty and not df['Close'].isnull().all()}
-            return valid_data, f"✓ Downloaded {len(valid_data)} tickers"
+            return data_dict, f"✓ Downloaded {len(valid_data)} tickers"
 
         else:
              return None, "Unexpected data structure"
@@ -631,6 +647,7 @@ def fetch_all_data(stock_list, end_date):
 
 @st.cache_resource(show_spinner=False)
 def load_sector_map():
+    """Loads the persistent sector map from disk."""
     if os.path.exists(SECTOR_MAP_FILE):
         logging.info(f"Loading cached sector map from {SECTOR_MAP_FILE}")
         with open(SECTOR_MAP_FILE, 'rb') as f:
@@ -639,22 +656,30 @@ def load_sector_map():
     return {}
 
 def save_sector_map(sector_map):
+    """Saves the sector map to disk."""
     logging.info(f"Saving updated sector map ({len(sector_map)} entries) to {SECTOR_MAP_FILE}")
     with open(SECTOR_MAP_FILE, 'wb') as f:
         pickle.dump(sector_map, f)
 
+# --- FIX: Replaced this function with the robust, rate-limited version ---
 def fetch_sectors_for_list(stock_list):
+    """Fetches sector info ONLY for new tickers, one by one, with delays."""
     logging.info(f"Fetching sector info for {len(stock_list)} new tickers...")
     new_sectors = {}
     
     if not stock_list:
         return new_sectors
-        
-    tickers = yf.Tickers(stock_list)
+    
+    # Do NOT use yf.Tickers() as it's bad for rate-limiting.
+    # Loop one by one.
     
     for i, ticker_symbol in enumerate(stock_list):
         try:
-            info = tickers.tickers[ticker_symbol].info
+            # Create a Ticker object
+            ticker_obj = yf.Ticker(ticker_symbol)
+            # Fetch .info (this uses the network)
+            info = ticker_obj.info
+            
             sector = info.get('sector')
             new_sectors[ticker_symbol] = sector if sector else "Other"
             
@@ -662,11 +687,16 @@ def fetch_sectors_for_list(stock_list):
                 logging.info(f"Fetched {i+1}/{len(stock_list)} new tickers")
                 
         except Exception as e:
+            # This handles network errors, timeouts, and JSON parse errors
             logging.warning(f"Could not fetch .info for {ticker_symbol}: {e}")
             new_sectors[ticker_symbol] = "Other"
+        
+        # --- IMPORTANT: Add a small delay to avoid rate-limiting ---
+        time.sleep(0.1) # 100ms delay between each .info request
             
     logging.info("Finished fetching new sectors.")
     return new_sectors
+# --- End of FIX ---
 
 # --- ILFO Signal Calculation (Keep existing, add confidence scoring) ---
 def compute_ilfo_signal(ticker, df, end_date):
@@ -683,7 +713,8 @@ def compute_ilfo_signal(ticker, df, end_date):
     EPSILON = 1e-10
 
     def get_error_dict(signal, details, e=""):
-        logging.error(f"Error for {ticker}: {details} - {e}")
+        # --- FIX: Changed log level to WARNING for less noise ---
+        logging.error(f"Error for {ticker}: {details} - {e}") # --- FIX: Reverted to ERROR ---
         return {
             "ticker": ticker, "signal": signal, "details": details, "pct_change": np.nan,
             "confidence_score": 0.0, "confidence_grade": "D", "confidence_class": "poor",
@@ -1026,7 +1057,8 @@ def compute_roc_slope_signal(ticker, df, end_date):
     rsi_length = 14
 
     def get_error_dict(signal, details, e=""):
-        logging.error(f"Error for {ticker}: {details} - {e}")
+        # --- FIX: Changed log level to WARNING for less noise ---
+        logging.error(f"Error for {ticker}: {details} - {e}") # --- FIX: Reverted to ERROR ---
         return {
             "ticker": ticker, "signal": signal, "details": details, "pct_change": np.nan,
             "confidence_score": 0.0, "confidence_grade": "D", "confidence_class": "poor",
@@ -1461,6 +1493,15 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
         "confidence_score": "Confidence",
         "confidence_grade": "Grade"
     })
+    
+    # --- FIX: Handle empty results_df ---
+    if results_df.empty:
+        logging.warning("No data could be processed for any tickers.")
+        # Add columns to prevent errors downstream
+        results_df = pd.DataFrame(columns=[
+            "Ticker", "Signal", "% Change", "Details", "Confidence", "Grade", "Sector"
+        ])
+    
     results_df = results_df.set_index("Ticker")
     
     # --- NEW: Sort by Confidence Score (descending) for actionable signals ---
@@ -1636,12 +1677,14 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
             yaxis=dict(title="Signal Count", gridcolor=grid_color), xaxis=dict(title="Sector"),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        st.plotly_chart(fig_sector, use_container_width=True)
+        # --- FIX: Replaced use_container_width=True with width='stretch' ---
+        st.plotly_chart(fig_sector, width='stretch')
         
         st.markdown("### 📋 Detailed Sector Breakdown")
         sector_display_cols = [col for col in display_cols if col in sector_df.columns]
         sector_display = sector_df[sector_display_cols].copy()
-        st.dataframe(sector_display, use_container_width=True, height=400)
+        # --- FIX: Replaced use_container_width=True with width='stretch' ---
+        st.dataframe(sector_display, use_container_width=True, height=400) # --- FIX: Reverted width='stretch' to use_container_width=True ---
 
     def render_styled_html(df):
         """Applies formatting and renders HTML"""
@@ -1732,7 +1775,7 @@ with st.sidebar:
     
     submit_button = st.button(
         label="Run Analysis",
-        use_container_width=True,
+        use_container_width=True,  # --- FIX: Changed back from width='stretch' ---
         type="primary"
     )
     
