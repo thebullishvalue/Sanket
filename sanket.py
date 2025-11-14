@@ -853,7 +853,7 @@ def compute_ilfo_signal(ticker, df, end_date):
         
         priceHH = df['High'] > (df['last_pivot_high_price'] * 1.002)
         oscLH = oscillator < (df['last_pivot_high_osc'] * 0.95)
-        bearishDiv = priceHH & oscLH & inOversold & volConfirm
+        bearishDiv = priceHH & oscLH & inOverbought & volConfirm
 
         # Signal Generation
         extremeLong = inOversold & (oscMomentum > 0) & (oscAccel > 0) & (volSurge > volThreshold * 50)
@@ -1636,12 +1636,12 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
             yaxis=dict(title="Signal Count", gridcolor=grid_color), xaxis=dict(title="Sector"),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        st.plotly_chart(fig_sector, width='stretch')
+        st.plotly_chart(fig_sector, use_container_width=True)
         
         st.markdown("### 📋 Detailed Sector Breakdown")
         sector_display_cols = [col for col in display_cols if col in sector_df.columns]
         sector_display = sector_df[sector_display_cols].copy()
-        st.dataframe(sector_display, width='stretch', height=400)
+        st.dataframe(sector_display, use_container_width=True, height=400)
 
     def render_styled_html(df):
         """Applies formatting and renders HTML"""
@@ -1732,7 +1732,7 @@ with st.sidebar:
     
     submit_button = st.button(
         label="Run Analysis",
-        width='stretch',
+        use_container_width=True,
         type="primary"
     )
     
@@ -1872,4 +1872,4 @@ else:
     # as per the request.
     
 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-st.caption(f"© 2025 Sanket | @thebullishvalue | {VERSION} | Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S IST')}")
+st.caption(f"© 2025 Sanket | Hemrek Capital | {VERSION} | Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S IST')}")
