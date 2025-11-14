@@ -895,14 +895,14 @@ def compute_ilfo_signal(ticker, df, end_date):
             signal_text = "Extreme Long"
         elif isExtremeShort and isBearishDiv:
             signal_text = "Extreme Short"
-        elif isBullishDiv:  # RE-ORDERED: Check for standalone divergence first
-            signal_text = "Divergence Long"
-        elif isBearishDiv:  # RE-ORDERED: Check for standalone divergence first
-            signal_text = "Divergence Short"
-        elif isExtremeLong: # RE-ORDERED: Standalone extreme is last
+        elif isExtremeLong:
             signal_text = "Long"
-        elif isExtremeShort: # RE-ORDERED: Standalone extreme is last
+        elif isBullishDiv:
+            signal_text = "Divergence Long"
+        elif isExtremeShort:
             signal_text = "Short"
+        elif isBearishDiv:
+            signal_text = "Divergence Short"
 
         nl_value = float(normalizedLiq.loc[target_date])
         ilfo_value = float(oscillator.loc[target_date])
