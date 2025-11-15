@@ -34,7 +34,7 @@ st.set_page_config(
 )
 
 # --- Constants ---
-VERSION = "v3.3.0" # UPDATED VERSION
+VERSION = "v3.5.0" # UPDATED VERSION: Removed ROC Model, ILFO only
 SECTOR_MAP_FILE = "sector_map.pkl"
 INDEX_LIST = [
     "NIFTY 50", "NIFTY NEXT 50", "NIFTY 100", "NIFTY 200", "NIFTY 500",
@@ -42,7 +42,7 @@ INDEX_LIST = [
     "NIFTY AUTO", "NIFTY FIN SERVICE", "NIFTY FMCG", "NIFTY IT",
     "NIFTY MEDIA", "NIFTY METAL", "NIFTY PHARMA"
 ]
-BASE_URL = "https://www.niftyindices.com/IndexConstituent/"
+BASE_URL = "https.www.niftyindices.com/IndexConstituent/"
 INDEX_URL_MAP = {
     "NIFTY 50": f"{BASE_URL}ind_nifty50list.csv",
     "NIFTY NEXT 50": f"{BASE_URL}ind_niftynext50list.csv",
@@ -63,48 +63,71 @@ INDEX_URL_MAP = {
 }
 ANALYSIS_UNIVERSE_OPTIONS = ["F&O Stocks", "Index Constituents"]
 
-# --- NEW: Backtested Optimal Ranges Configuration ---
+# --- Backtested Optimal Ranges (Weights & Importance) ---
 OPTIMAL_RANGES = {
     "Long": {
-        'ilfo_value': {'min': 3.062, 'max': 3.692, 'weight': 0.25, 'importance': 'critical'},
-        'vol_surge': {'min': 72.350, 'max': 90.373, 'weight': 0.20, 'importance': 'high'},
-        'momentum_rsi': {'min': 39.047, 'max': 42.789, 'weight': 0.20, 'importance': 'high'},
-        'osc_momentum': {'min': 1.363, 'max': 3.701, 'weight': 0.15, 'importance': 'medium'},
-        'osc_accel': {'min': 0.833, 'max': 3.788, 'weight': 0.10, 'importance': 'medium'},
-        'volume_score': {'min': -0.589, 'max': -0.452, 'weight': 0.10, 'importance': 'low'}
+        'ilfo_value': {'min': 0.362, 'max': 2.521, 'weight': 0.13, 'importance': 'critical'},
+        'normalized_liq': {'min': 1.158, 'max': 2.010, 'weight': 0.12, 'importance': 'low'},
+        'vol_surge': {'min': 60.354, 'max': 72.076, 'weight': 0.13, 'importance': 'high'},
+        'momentum_rsi': {'min': 41.230, 'max': 45.518, 'weight': 0.13, 'importance': 'high'},
+        'osc_momentum': {'min': 1.973, 'max': 4.491, 'weight': 0.13, 'importance': 'medium'},
+        'osc_accel': {'min': -0.438, 'max': 1.962, 'weight': 0.12, 'importance': 'medium'},
+        'volume_score': {'min': -0.551, 'max': -0.318, 'weight': 0.12, 'importance': 'low'},
+        'confidence_score': {'min': 7.148, 'max': 57.958, 'weight': 0.0, 'importance': 'low'}, # New
+        'body_conviction': {'min': 88.889, 'max': 100.000, 'weight': 0.12, 'importance': 'low'} # New
     },
     "Short": {
-        'ilfo_value': {'min': -3.936, 'max': -3.220, 'weight': 0.25, 'importance': 'critical'},
-        'vol_surge': {'min': 77.883, 'max': 96.083, 'weight': 0.20, 'importance': 'high'},
-        'momentum_rsi': {'min': 56.678, 'max': 60.686, 'weight': 0.20, 'importance': 'high'},
-        'osc_momentum': {'min': -6.542, 'max': -4.154, 'weight': 0.15, 'importance': 'medium'},
-        'osc_accel': {'min': -7.139, 'max': -4.184, 'weight': 0.10, 'importance': 'medium'},
-        'volume_score': {'min': 0.526, 'max': 0.655, 'weight': 0.10, 'importance': 'low'}
-    },
-    "Buy": {
-        'liq_osc': {'min': 3.10, 'max': 3.60, 'weight': 0.35, 'importance': 'critical'},
-        'momentum_rsi': {'min': 0.000, 'max': 38.50, 'weight': 0.35, 'importance': 'critical'},
-        'volume_score': {'min': -0.46, 'max': 0.45, 'weight': 0.30, 'importance': 'high'}
-    },
-    "Sell": {
-        'liq_osc': {'min': -10.35, 'max': -3.75, 'weight': 0.35, 'importance': 'critical'},
-        'momentum_rsi': {'min': 53.30, 'max': 57.08, 'weight': 0.35, 'importance': 'critical'},
-        'volume_score': {'min': 0.77, 'max': 1.000, 'weight': 0.30, 'importance': 'high'}
+        'ilfo_value': {'min': -2.600, 'max': -0.590, 'weight': 0.13, 'importance': 'critical'},
+        'normalized_liq': {'min': -1.359, 'max': 2.527, 'weight': 0.12, 'importance': 'low'},
+        'vol_surge': {'min': 60.449, 'max': 72.079, 'weight': 0.12, 'importance': 'high'},
+        'momentum_rsi': {'min': 53.625, 'max': 57.618, 'weight': 0.12, 'importance': 'high'},
+        'osc_momentum': {'min': -1.931, 'max': -0.160, 'weight': 0.13, 'importance': 'medium'},
+        'osc_accel': {'min': -4.572, 'max': -1.777, 'weight': 0.12, 'importance': 'medium'},
+        'volume_score': {'min': 0.737, 'max': 1.000, 'weight': 0.13, 'importance': 'low'},
+        'confidence_score': {'min': 8.149, 'max': 45.797, 'weight': 0.0, 'importance': 'low'}, # New
+        'body_conviction': {'min': 66.667, 'max': 88.889, 'weight': 0.13, 'importance': 'low'} # New
     }
 }
 
-# --- NEW: Advanced Confidence Scoring Function ---
+# --- NEW: Statistical Anchors for Median-Based Scoring ---
+STATISTICAL_ANCHORS = {
+    "Long": {
+        'ilfo_value': {'Success_Mean': 2.206, 'Success_Median': 2.399, 'Fail_Mean': 2.315},
+        'normalized_liq': {'Success_Mean': 1.746, 'Success_Median': 1.999, 'Fail_Mean': 1.798},
+        'vol_surge': {'Success_Mean': 73.493, 'Success_Median': 71.887, 'Fail_Mean': 74.562},
+        'momentum_rsi': {'Success_Mean': 44.888, 'Success_Median': 45.282, 'Fail_Mean': 45.023},
+        'osc_momentum': {'Success_Mean': 2.317, 'Success_Median': 1.983, 'Fail_Mean': 2.384},
+        'osc_accel': {'Success_Mean': 1.928, 'Success_Median': 1.858, 'Fail_Mean': 1.856},
+        'volume_score': {'Success_Mean': -0.449, 'Success_Median': -0.541, 'Fail_Mean': -0.455},
+        'confidence_score': {'Success_Mean': 4.917, 'Success_Median': 0.000, 'Fail_Mean': 4.231},
+        'body_conviction': {'Success_Mean': 64.343, 'Success_Median': 72.222, 'Fail_Mean': 62.500}
+    },
+    "Short": {
+        'ilfo_value': {'Success_Mean': -2.264, 'Success_Median': -2.532, 'Fail_Mean': -2.415},
+        'normalized_liq': {'Success_Mean': -1.842, 'Success_Median': -2.024, 'Fail_Mean': -1.865},
+        'vol_surge': {'Success_Mean': 74.617, 'Success_Median': 72.262, 'Fail_Mean': 73.775},
+        'momentum_rsi': {'Success_Mean': 54.560, 'Success_Median': 53.762, 'Fail_Mean': 54.208},
+        'osc_momentum': {'Success_Mean': -1.999, 'Success_Median': -1.788, 'Fail_Mean': -2.122},
+        'osc_accel': {'Success_Mean': -1.780, 'Success_Median': -1.809, 'Fail_Mean': -1.654},
+        'volume_score': {'Success_Mean': 0.526, 'Success_Median': 0.635, 'Fail_Mean': 0.507},
+        'confidence_score': {'Success_Mean': 5.117, 'Success_Median': 0.558, 'Fail_Mean': 4.855},
+        'body_conviction': {'Success_Mean': 62.891, 'Success_Median': 66.667, 'Fail_Mean': 60.488}
+    }
+}
+
+# --- UPDATED: Advanced Confidence Scoring Function ---
 def calculate_weighted_confidence_score(values_dict, signal_type):
     """
     Calculate sophisticated confidence score based on:
-    1. Proximity to optimal range center (closer = better)
-    2. Weighted contribution of each parameter
-    3. Penalties for values outside optimal range
-    4. Bonus for multiple strong signals
+    - Proximity to statistical Success_Median (vs. Fail_Mean)
+    - Weighted contribution of each parameter
+    - Penalties for values outside optimal range
+    - Bonus for multiple strong signals
     
     Returns: confidence_score (0-100), detailed_breakdown (dict)
     """
-    if signal_type not in OPTIMAL_RANGES:
+    if signal_type not in ["Long", "Short"]:
+        logging.warning(f"Unsupported signal type for confidence scoring: {signal_type}")
         return 0.0, {}
     
     ranges = OPTIMAL_RANGES[signal_type]
@@ -114,76 +137,66 @@ def calculate_weighted_confidence_score(values_dict, signal_type):
     critical_hits = 0
     high_hits = 0
     
+    # --- Median-based logic for ILFO model ---
     for param, config in ranges.items():
         if param not in values_dict or pd.isna(values_dict[param]):
             breakdown[param] = {
-                'value': None,
-                'status': 'missing',
-                'contribution': 0.0,
+                'value': None, 'status': 'missing', 'contribution': 0.0,
                 'max_contribution': config['weight'] * 100
             }
             max_possible_score += config['weight'] * 100
             continue
         
         value = values_dict[param]
-        min_val = config['min']
-        max_val = config['max']
         weight = config['weight']
         importance = config['importance']
         
-        range_center = (min_val + max_val) / 2
-        range_width = max_val - min_val
+        if param not in STATISTICAL_ANCHORS[signal_type]:
+            # This parameter (from OPTIMAL_RANGES) doesn't have a statistical anchor.
+            # Score it as 0 but count its max possible score.
+            breakdown[param] = {
+                'value': value, 'status': 'no_stats', 'contribution': 0.0,
+                'max_contribution': config['weight'] * 100, 'importance': importance
+            }
+            max_possible_score += config['weight'] * 100
+            continue
         
-        # Calculate contribution based on position
-        if min_val <= value <= max_val:
-            # Inside optimal range
-            distance_from_center = abs(value - range_center)
-            normalized_distance = distance_from_center / (range_width / 2)
-            
-            # Proximity score: 1.0 at center, decays to 0.5 at edges
-            proximity_factor = 1.0 - (normalized_distance * 0.5)
-            
-            # Base contribution
-            contribution = weight * proximity_factor * 100
-            
-            # Bonus for being very close to center (within 25% of range)
-            if normalized_distance < 0.25:
-                contribution *= 1.15  # 15% bonus
-                
-            status = 'optimal'
-            
-            # Track importance hits
-            if importance == 'critical':
-                critical_hits += 1
-            elif importance == 'high':
-                high_hits += 1
-                
-        else:
-            # Outside optimal range - calculate penalty
-            if value < min_val:
-                overshoot = (min_val - value) / range_width
-            else:
-                overshoot = (value - max_val) / range_width
-            
-            # Exponential decay: closer misses get more credit
-            if overshoot < 0.5:
-                # Within 50% of range width - partial credit
-                decay_factor = np.exp(-2 * overshoot)
-                contribution = weight * decay_factor * 100 * 0.4  # Max 40% credit
-                status = 'near_miss'
-            elif overshoot < 1.0:
-                # Within 100% of range width - minimal credit
-                contribution = weight * 100 * 0.15  # Max 15% credit
-                status = 'far_miss'
-            else:
-                # Very far - almost no credit
-                contribution = weight * 100 * 0.05  # Max 5% credit
-                status = 'very_far'
+        stats = STATISTICAL_ANCHORS[signal_type][param]
+        target_median = stats['Success_Median']
+        fail_mean = stats['Fail_Mean']
         
+        # Calculate spread, with fallback for division by zero
+        spread = abs(target_median - fail_mean)
+        if spread < 1e-6:
+            spread = abs(target_median * 0.1) # 10% of median as a fallback
+            if spread < 1e-6: # If median is also zero
+                spread = 0.1 # Absolute fallback
+        
+        distance = abs(value - target_median)
+        
+        # Proximity score: 1.0 at median, 0.0 at/beyond fail_mean
+        proximity_score = max(0.0, 1.0 - (distance / spread))
+        
+        contribution = weight * proximity_score * 100
+        status = 'far_from_median'
+        
+        # Check for "hit" status
+        if proximity_score > 0.0: # Is it better than the fail_mean?
+            status = 'near_median'
+            # Is it more than halfway to the median?
+            if proximity_score > 0.5: 
+                 status = 'optimal_proximity'
+                 if importance == 'critical':
+                     critical_hits += 1
+                 elif importance == 'high':
+                     high_hits += 1
+
         breakdown[param] = {
             'value': value,
-            'optimal_range': (min_val, max_val),
+            'target_median': target_median,
+            'fail_mean': fail_mean,
             'status': status,
+            'proximity_score': proximity_score,
             'contribution': contribution,
             'max_contribution': weight * 100,
             'importance': importance
@@ -191,7 +204,9 @@ def calculate_weighted_confidence_score(values_dict, signal_type):
         
         total_score += contribution
         max_possible_score += weight * 100
+
     
+    # --- COMMON LOGIC ---
     # Apply synergy bonus if multiple critical/high criteria are met
     synergy_bonus = 0
     if critical_hits >= 2:
@@ -800,7 +815,7 @@ def compute_ilfo_signal(ticker, df, end_date):
         
         rawScore = rawScore.replace([np.inf, -np.inf], 0).fillna(0).clip(-5, 5)
         
-        oscillator = -(rawScore * 8)
+        oscillator = (rawScore * 8)
         oscillator = oscillator.replace([np.inf, -np.inf], 0).fillna(0).clip(-10, 10)
         
         signal = ta.sma(oscillator, signalSmooth)
@@ -913,8 +928,10 @@ def compute_ilfo_signal(ticker, df, end_date):
         vol_score_val = float(volumeScore.loc[target_date])
 
         # --- NEW: Calculate Confidence Score ---
+        # --- MODIFIED: Added 'normalized_liq' to the dictionary ---
         values_for_scoring = {
             'ilfo_value': ilfo_value,
+            'normalized_liq': nl_value,
             'vol_surge': vol_value,
             'momentum_rsi': mom_rsi_val,
             'osc_momentum': osc_mom_val,
@@ -924,9 +941,13 @@ def compute_ilfo_signal(ticker, df, end_date):
         
         # Only calculate confidence for actionable signals
         if "Long" in signal_text or "Short" in signal_text:
+            signal_type_for_scoring = signal_text.split()[-1] # Gets "Long" or "Short"
+            if signal_type_for_scoring not in ["Long", "Short"]:
+                signal_type_for_scoring = "Long" if "Long" in signal_text else "Short"
+                
             confidence_score, breakdown = calculate_weighted_confidence_score(
                 values_for_scoring, 
-                signal_text if signal_text in ["Long", "Short"] else signal_text.split()[-1]
+                signal_type_for_scoring
             )
             grade, grade_class = get_confidence_grade(confidence_score)
         else:
@@ -942,17 +963,20 @@ def compute_ilfo_signal(ticker, df, end_date):
         osc_mom_string = f'<span class="signal-neutral">{osc_mom_val:.2f}</span>'
         osc_accel_string = f'<span class="signal-neutral">{osc_accel_val:.2f}</span>'
         vol_score_string = f'<span class="signal-neutral">{vol_score_val:.2f}</span>'
+        
+        # --- FIX: Removed "NL" prefix from variable, it's already in the f-string ---
+        # Default to neutral
+        nl_string = f'<span class="signal-neutral">{nl_value:.2f}</span>'
 
-        if nl_value >= 0:
-            nl_string = f'<span class="pct-positive">POS</span>'
-        else:
-            nl_string = f'<span class="pct-negative">NEG</span>'
 
-        # Highlight based on optimal ranges
+        # Highlight based on optimal ranges (This is now just for visual display)
+        # The actual scoring is handled by the new median-based function
         if "Long" in signal_text:
             ranges = OPTIMAL_RANGES["Long"]
             if ranges['ilfo_value']['min'] <= ilfo_value <= ranges['ilfo_value']['max']:
                 ilfo_string = f'<span class="pct-positive">{ilfo_value:.2f}</span>'
+            if ranges['normalized_liq']['min'] <= nl_value <= ranges['normalized_liq']['max']:
+                 nl_string = f'<span class="pct-positive">{nl_value:.2f}</span>' # FIX
             if ranges['vol_surge']['min'] <= vol_value <= ranges['vol_surge']['max']:
                 vol_string = f'<span class="pct-positive">{vol_value:.1f}</span>'
             if ranges['momentum_rsi']['min'] <= mom_rsi_val <= ranges['momentum_rsi']['max']:
@@ -968,6 +992,8 @@ def compute_ilfo_signal(ticker, df, end_date):
             ranges = OPTIMAL_RANGES["Short"]
             if ranges['ilfo_value']['min'] <= ilfo_value <= ranges['ilfo_value']['max']:
                 ilfo_string = f'<span class="pct-negative">{ilfo_value:.2f}</span>'
+            if ranges['normalized_liq']['min'] <= nl_value <= ranges['normalized_liq']['max']:
+                 nl_string = f'<span class="pct-negative">{nl_value:.2f}</span>' # FIX
             if ranges['vol_surge']['min'] <= vol_value <= ranges['vol_surge']['max']:
                 vol_string = f'<span class="pct-negative">{vol_value:.1f}</span>'
             if ranges['momentum_rsi']['min'] <= mom_rsi_val <= ranges['momentum_rsi']['max']:
@@ -1014,251 +1040,6 @@ def compute_ilfo_signal(ticker, df, end_date):
     except Exception as e:
         return get_error_dict("Error (Calc)", str(e), e)
 
-# --- ROC Signal Calculation (Keep existing, add confidence scoring) ---
-def compute_roc_slope_signal(ticker, df, end_date):
-    """ROC signal with enhanced confidence scoring"""
-    
-    rocLength = 14
-    length = 20
-    delta = 0.95
-    multiplier = 2.0
-    impact_window = 5
-    rsi_length = 14
-
-    def get_error_dict(signal, details, e=""):
-        logging.error(f"Error for {ticker}: {details} - {e}")
-        return {
-            "ticker": ticker, "signal": signal, "details": details, "pct_change": np.nan,
-            "confidence_score": 0.0, "confidence_grade": "D", "confidence_class": "poor",
-            "ilfo_value": np.nan, "vol_surge": np.nan, "momentum_rsi": np.nan,
-            "osc_momentum": np.nan, "osc_accel": np.nan, "volume_score": np.nan,
-            "normalized_liq": np.nan
-        }
-    
-    try:
-        if df.empty or len(df) < length * 2:
-            return get_error_dict("Insufficient Data", "N/A")
-            
-        df['rsi'] = ta.rsi(df['Close'], length=rsi_length)
-        df['roc'] = ta.roc(df['Close'], length=rocLength)
-        
-        rocMax = df['roc'].rolling(window=length).max()
-        rocMin = df['roc'].rolling(window=length).min()
-        scaledRoc = 16 * (df['roc'] - rocMin) / (rocMax - rocMin + 1e-9) - 8
-        df['scaledRoc'] = scaledRoc.replace([np.inf, -np.inf], 0).fillna(0) if scaledRoc is not None else 0.0
-
-        df['Volume'] = df['Volume'].fillna(0).replace(0, 1)
-        spread = (df['High'] + df['Low']) / 2 - df['Open']
-        
-        vol_ma = ta.sma(df['Volume'], length)
-        vol_ma = vol_ma.replace(0, 1e-9).fillna(1e-9) if vol_ma is not None else pd.Series(1e-9, index=df.index)
-        
-        vwap_spread = ta.sma((spread * df['Volume'] / vol_ma), length)
-        price_impact = ta.sma(((df['Close'] - df['Close'].shift(impact_window)) * df['Volume'] / vol_ma), length)
-        
-        liquidity_score = vwap_spread.fillna(0) - price_impact.fillna(0)
-        
-        liq_sma = ta.sma(liquidity_score, length)
-        liq_stdev = ta.stdev(liquidity_score, length)
-        if liq_sma is None or liq_stdev is None:
-            normalized_liq = pd.Series(0.0, index=df.index)
-        else:
-            normalized_liq = (liquidity_score - liq_sma) / (liq_stdev.replace(0, 1e-9) + 1e-9)
-
-        vol_reg = ta.linreg(liquidity_score, length)
-        
-        if vol_reg is None or vol_reg.isnull().all():
-            normalized_reg = pd.Series(0.0, index=df.index)
-        else:
-            reg_sma = ta.sma(vol_reg, length)
-            reg_stdev = ta.stdev(vol_reg, length)
-            if reg_sma is None or reg_stdev is None:
-                normalized_reg = pd.Series(0.0, index=df.index)
-            else:
-                normalized_reg = (vol_reg - reg_sma) / (reg_stdev.replace(0, 1e-9) + 1e-9)
-
-        combined_liquidity = normalized_liq.fillna(0) + normalized_reg.fillna(0)
-
-        so_value = df['Close'] + liquidity_score
-        low_value = so_value.rolling(window=length).min()
-        high_value = so_value.rolling(window=length).max()
-        
-        oscillator = 16 * (so_value - low_value) / (high_value - low_value + 1e-9) - 8
-        oscillator = oscillator.replace([np.inf, -np.inf], 0).fillna(0) if oscillator is not None else pd.Series(0.0, index=df.index)
-        
-        df['ad'] = ta.ad(df['High'], df['Low'], df['Close'], df['Volume']).fillna(0)
-        
-        nv = (df['Close'].diff() > 0).astype(int) * df['Volume'] - (df['Close'].diff() < 0).astype(int) * df['Volume']
-        cnv = nv.cumsum()
-        cnv_tb = cnv - ta.sma(cnv, length)
-        cnv_tb = cnv_tb.fillna(0) if cnv_tb is not None else pd.Series(0.0, index=df.index)
-
-        mean = ta.sma(df['Close'], length)
-        stdev = ta.stdev(df['Close'], length)
-        if mean is None or stdev is None:
-            return get_error_dict("Error (Calc)", "SMA/STDEV failed")
-            
-        non_conformity_score = (df['Close'] - mean).abs()
-        threshold = non_conformity_score.rolling(window=length).quantile(delta)
-        
-        upper_bound = mean + multiplier * stdev
-        lower_bound = mean - multiplier * stdev
-
-        lowerBandSlope = lower_bound - lower_bound.shift(5)
-        upperBandSlope = upper_bound - upper_bound.shift(5)
-        basis = (lowerBandSlope + upperBandSlope) / 2
-        basisSlope = basis - basis.shift(5)
-
-        basisSlope_sma = ta.sma(basisSlope, 5).fillna(0)
-        
-        basisSlope_trend = (basisSlope > basisSlope_sma).astype(int) - (basisSlope < basisSlope_sma).astype(int)
-        basisSlope_acceleration = basisSlope.diff(1)
-        
-        basis_stdev = ta.stdev(basisSlope, length).replace(0, 0.01).fillna(0.01)
-        basisSlope_magnitude = basisSlope.abs() / (basis_stdev + 0.01)
-        
-        basisSlope_divergence = (df['Close'].diff(1) > 0).astype(int) & (basisSlope.diff(1) < 0).astype(int) * -1 + \
-                                (df['Close'].diff(1) < 0).astype(int) & (basisSlope.diff(1) > 0).astype(int) * 1
-        basisSlope_reversal_signal = (basisSlope > basisSlope_sma).astype(int) & (basisSlope.shift(1) < basisSlope_sma.shift(1)).astype(int) * 1 + \
-                                     (basisSlope < basisSlope_sma).astype(int) & (basisSlope.shift(1) > basisSlope_sma.shift(1)).astype(int) * -1
-
-        basisSlope_score = (basisSlope_trend * 0.3 + 
-                            (basisSlope_acceleration / (basisSlope.abs().replace(0, 1e-9))) * 0.2 + 
-                            basisSlope_magnitude * 0.2 + 
-                            basisSlope_divergence * 0.2 + 
-                            basisSlope_reversal_signal * 0.3)
-
-        typical_price = (df['High'] + df['Low'] + df['Close']) / 3
-        money_flow = typical_price * df['Volume']
-        positive_money_flow = ta.sma(money_flow * (df['Close'] > df['Close'].shift(1)), 10).fillna(0)
-        negative_money_flow = ta.sma(money_flow * (df['Close'] < df['Close'].shift(1)), 10).fillna(0)
-        
-        accumulation_score = positive_money_flow / (positive_money_flow + negative_money_flow + 1e-9)
-
-        signal_score = ((df['rsi'] < 40).astype(int) - (df['rsi'] > 70).astype(int) +
-                        (basisSlope_score > 0.75).astype(int) - (basisSlope_score < -0.75).astype(int) +
-                        (accumulation_score > 0.65).astype(int) - (accumulation_score < 0.35).astype(int) +
-                        (df['Close'] < lower_bound).astype(int) - (df['Close'] > upper_bound).astype(int) +
-                        (normalized_liq > 0).astype(int) - (normalized_liq < 0).astype(int))
-
-        liquidity = basisSlope_score - (combined_liquidity + signal_score)
-
-        lowest_value = liquidity.rolling(window=length).min()
-        highest_value = liquidity.rolling(window=length).max()
-        
-        liq_osc = 16 * (liquidity - lowest_value) / (highest_value - lowest_value + 1e-9) - 8
-        liq_osc = liq_osc.replace([np.inf, -np.inf], 0).fillna(0) if liq_osc is not None else pd.Series(0.0, index=df.index)
-
-        data_sell = df['Close'] > upper_bound
-        data_buy = df['Close'] < lower_bound
-
-        signal_direction = (
-            (signal_score >= 1) & (liq_osc < -7.5) & data_buy
-        ).astype(int) * 1 + (
-            (signal_score <= -1) & (liq_osc > 7.5) & data_sell
-        ).astype(int) * -1
-
-        analysis_datetime = datetime.combine(end_date, datetime.max.time())
-        df.index = pd.to_datetime(df.index)
-        target_date = df.index.asof(analysis_datetime)
-        
-        if pd.isna(target_date):
-             return get_error_dict("No Data", f"No data at {end_date.date()}")
-        
-        critical_cols_roc = [
-            df['rsi'], scaledRoc, df['ad'], df['Volume'], df['Close'], df['High'], df['Low'], df['Open'], 
-            signal_score, liq_osc, signal_direction, df['Close'].shift(1)
-        ]
-        if any(pd.isna(col.loc[target_date]) for col in critical_cols_roc):
-            return get_error_dict("No Data", "Incomplete calc data")
-
-        final_signal_val = signal_direction.loc[target_date]
-        
-        if final_signal_val == 1:
-            signal_text = "Buy"
-        elif final_signal_val == -1:
-            signal_text = "Sell"
-        else:
-            signal_text = "Neutral"
-            
-        rsi_val = df.loc[target_date, 'rsi']
-        sig_score_val = signal_score.loc[target_date]
-        liq_osc_val = liq_osc.loc[target_date]
-        nl_val = normalized_liq.loc[target_date]
-
-        # --- NEW: Calculate Confidence Score ---
-        values_for_scoring = {
-            'liq_osc': liq_osc_val,
-            'momentum_rsi': rsi_val,
-            'volume_score': sig_score_val
-        }
-        
-        if signal_text in ["Buy", "Sell"]:
-            confidence_score, breakdown = calculate_weighted_confidence_score(
-                values_for_scoring, 
-                signal_text
-            )
-            grade, grade_class = get_confidence_grade(confidence_score)
-        else:
-            confidence_score = 0.0
-            grade = "N/A"
-            grade_class = "neutral"
-        # --- END NEW ---
-        
-        rsi_string = f'<span class="signal-neutral">{rsi_val:.1f}</span>'
-        sig_score_string = f'<span class="signal-neutral">{sig_score_val:.2f}</span>'
-        liq_osc_string = f'<span class="signal-neutral">{liq_osc_val:.2f}</span>'
-        
-        if nl_val >= 0:
-            nl_string = f'<span class="pct-positive">POS</span>'
-        else:
-            nl_string = f'<span class="pct-negative">NEG</span>'
-
-        if signal_text == "Buy":
-            ranges = OPTIMAL_RANGES["Buy"]
-            if ranges['liq_osc']['min'] <= liq_osc_val <= ranges['liq_osc']['max']:
-                liq_osc_string = f'<span class="pct-positive">{liq_osc_val:.2f}</span>'
-            if ranges['momentum_rsi']['min'] <= rsi_val <= ranges['momentum_rsi']['max']:
-                rsi_string = f'<span class="pct-positive">{rsi_val:.1f}</span>'
-            if ranges['volume_score']['min'] <= sig_score_val <= ranges['volume_score']['max']:
-                sig_score_string = f'<span class="pct-positive">{sig_score_val:.2f}</span>'
-                
-        elif signal_text == "Sell":
-            ranges = OPTIMAL_RANGES["Sell"]
-            if ranges['liq_osc']['min'] <= liq_osc_val <= ranges['liq_osc']['max']:
-                liq_osc_string = f'<span class="pct-negative">{liq_osc_val:.2f}</span>'
-            if ranges['momentum_rsi']['min'] <= rsi_val <= ranges['momentum_rsi']['max']:
-                rsi_string = f'<span class="pct-negative">{rsi_val:.1f}</span>'
-            if ranges['volume_score']['min'] <= sig_score_val <= ranges['volume_score']['max']:
-                sig_score_string = f'<span class="pct-negative">{sig_score_val:.2f}</span>'
-
-        details_text = (
-            f"RSI: {rsi_string} | SigScore: {sig_score_string} | LiqOsc: {liq_osc_string} | NL: {nl_string}"
-        )
-        
-        pct_change = df.loc[target_date, 'Close'] / df['Close'].shift(1).loc[target_date] - 1
-        pct_change_val = (pct_change * 100) if pd.notna(pct_change) else np.nan
-            
-        return {
-            "ticker": ticker, 
-            "signal": signal_text, 
-            "details": details_text, 
-            "pct_change": pct_change_val,
-            "confidence_score": confidence_score,
-            "confidence_grade": grade,
-            "confidence_class": grade_class,
-            "ilfo_value": liq_osc_val,
-            "vol_surge": np.nan, 
-            "momentum_rsi": rsi_val,
-            "osc_momentum": np.nan, 
-            "osc_accel": np.nan, 
-            "volume_score": sig_score_val,
-            "normalized_liq": nl_val
-        }
-
-    except Exception as e:
-        return get_error_dict("Error (Calc)", str(e), e)
-
 # --- UI Functions ---
 def format_dataframe_for_display(df):
     """Format dataframe with proper HTML for colored display"""
@@ -1279,16 +1060,14 @@ def format_dataframe_for_display(df):
                 return f'<span class="signal-long">{val_str}</span>'
             elif val_str == "Divergence Long":
                 return f'<span class="signal-div-long">{val_str}</span>'
-            elif val_str == "Buy":
-                return f'<span class="signal-long">{val_str}</span>'
+            # --- REMOVED "Buy" ---
             elif val_str == "Extreme Short":
                 return f'<span class="signal-extreme-short">{val_str}</span>'
             elif val_str == "Short":
                 return f'<span class="signal-short">{val_str}</span>'
             elif val_str == "Divergence Short":
                 return f'<span class="signal-div-short">{val_str}</span>'
-            elif val_str == "Sell":
-                return f'<span class="signal-short">{val_str}</span>'
+            # --- REMOVED "Sell" ---
             elif "Error" in val_str or "Data" in val_str:
                 return f'<span class="signal-error">{val_str}</span>'
             return f'<span class="signal-neutral">{val_str}</span>'
@@ -1345,7 +1124,7 @@ def create_export_link(df, filename):
     return href
 
 # --- Main Analysis Function ---
-def run_analysis(analysis_universe, selected_index, analysis_date, selected_model):
+def run_analysis(analysis_universe, selected_index, analysis_date): # --- REMOVED selected_model
     """Main analysis orchestrator with confidence scoring"""
     
     if analysis_universe == "F&O Stocks":
@@ -1363,24 +1142,18 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
         
     logging.info(fetch_msg)
     
-    if selected_model == "ILFO (Pine v6 Rebuild)":
-        compute_function = compute_ilfo_signal
-        signal_types = [
-            "Extreme Long", "Long", "Divergence Long",
-            "Extreme Short", "Short", "Divergence Short",
-            "Neutral", "Error"
-        ]
-        get_buy_sell_counts = lambda counts: (
-            counts["Extreme Long"] + counts["Long"] + counts["Divergence Long"],
-            counts["Extreme Short"] + counts["Short"] + counts["Divergence Short"]
-        )
-    elif selected_model == "ROC & BasisSlope":
-        compute_function = compute_roc_slope_signal
-        signal_types = ["Buy", "Sell", "Neutral", "Error"]
-        get_buy_sell_counts = lambda counts: (
-            counts.get("Buy", 0),
-            counts.get("Sell", 0)
-        )
+    # --- HARCODED ILFO MODEL ---
+    compute_function = compute_ilfo_signal
+    signal_types = [
+        "Extreme Long", "Long", "Divergence Long",
+        "Extreme Short", "Short", "Divergence Short",
+        "Neutral", "Error"
+    ]
+    get_buy_sell_counts = lambda counts: (
+        counts["Extreme Long"] + counts["Long"] + counts["Divergence Long"],
+        counts["Extreme Short"] + counts["Short"] + counts["Divergence Short"]
+    )
+    # --- END HARCODED ---
 
     logging.info(f"📡 Loading persistent sector map...")
     sector_map = load_sector_map()
@@ -1464,7 +1237,7 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
     results_df = results_df.set_index("Ticker")
     
     # --- NEW: Sort by Confidence Score (descending) for actionable signals ---
-    actionable_mask = results_df['Signal'].str.contains('Long|Short|Buy|Sell', na=False)
+    actionable_mask = results_df['Signal'].str.contains('Long|Short', na=False) # --- REMOVED Buy/Sell
     actionable_df = results_df[actionable_mask].copy()
     if not actionable_df.empty:
         actionable_df = actionable_df.sort_values('Confidence', ascending=False)
@@ -1502,8 +1275,8 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
     elif ratio > 0.8: ratio_class = "neutral"
     else: ratio_class = "danger"
 
-    buy_df = results_df[results_df['Signal'].str.contains("Long|Buy", na=False)].copy()
-    sell_df = results_df[results_df['Signal'].str.contains("Short|Sell", na=False)].copy()
+    buy_df = results_df[results_df['Signal'].str.contains("Long", na=False)].copy() # --- REMOVED Buy
+    sell_df = results_df[results_df['Signal'].str.contains("Short", na=False)].copy() # --- REMOVED Sell
     errors_df = results_df[results_df['Signal'].fillna('').astype(str).str.contains("Error|Data")].copy()
 
     # --- NEW: Calculate Confidence Statistics ---
@@ -1525,11 +1298,12 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
     # --- UI DISPLAY ---
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     
+    # --- UPDATED TAB NAMES ---
     tab_dash, tab_sector, tab_buy, tab_sell, tab_all, tab_errors = st.tabs([
         f"📊 Dashboard", 
         f"🏢 Sector Analysis",
-        f"⬆️ All Long/Buy ({total_buy_signals})", 
-        f"⬇️ All Short/Sell ({total_sell_signals})", 
+        f"⬆️ All Long ({total_buy_signals})", 
+        f"⬇️ All Short ({total_sell_signals})", 
         "📋 All Signals", 
         f"⚠️ Errors ({total_error_stocks})"
     ])
@@ -1539,9 +1313,9 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.markdown(f"<div class='metric-card success'><h4>⬆️ Total Long/Buy</h4><h2>{total_buy_signals:,}</h2><div class='sub-metric'>Avg Confidence: {avg_buy_confidence:.1f}%</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='metric-card success'><h4>⬆️ Total Long</h4><h2>{total_buy_signals:,}</h2><div class='sub-metric'>Avg Confidence: {avg_buy_confidence:.1f}%</div></div>", unsafe_allow_html=True)
         with col2:
-            st.markdown(f"<div class='metric-card danger'><h4>⬇️ Total Short/Sell</h4><h2>{total_sell_signals:,}</h2><div class='sub-metric'>Avg Confidence: {avg_sell_confidence:.1f}%</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='metric-card danger'><h4>⬇️ Total Short</h4><h2>{total_sell_signals:,}</h2><div class='sub-metric'>Avg Confidence: {avg_sell_confidence:.1f}%</div></div>", unsafe_allow_html=True)
         with col3:
             st.markdown(f"<div class='metric-card neutral'><h4>➖ Neutral</h4><h2>{total_neutral_signals:,}</h2><div class='sub-metric'>No Clear Signal</div></div>", unsafe_allow_html=True)
         with col4:
@@ -1559,29 +1333,29 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
         # --- END NEW ---
 
         try:
-            bg_color = st.config.get_option('theme.backgroundColor') or 'rgba(0,0,0,0)'
-            text_color = st.config.get_option('theme.textColor') or '#EAEAEA'
-            border_color = st.config.get_option('theme.fadedText') or '#2A2A2A'
-            grid_color = st.config.get_option('theme.fadedText') or '#2A2A2A'
-        except RuntimeError:
+            # Try to get theme colors from Streamlit config
+            bg_color = 'rgba(15, 15, 15, 1)' # --background-color: #0F0F0F;
+            text_color = '#EAEAEA' # --text-primary: #EAEAEA;
+            grid_color = '#2A2A2A' # --border-color: #2A2A2A;
+        except Exception:
+            # Fallback colors if config fails
             bg_color = 'rgba(0,0,0,0)'
             text_color = '#EAEAEA'
-            border_color = '#2A2A2A'
             grid_color = '#2A2A2A'
 
-        if selected_model == "ILFO (Pine v6 Rebuild)":
-            st.markdown("### Granular Signal Distribution")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.markdown(f"<div class='metric-card' style='border-left-color: var(--extreme-long);'><h4>🔥 Extreme Long</h4><h2 style='color: var(--extreme-long);'>{signal_counts['Extreme Long']:,}</h2></div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='metric-card' style='border-left-color: var(--extreme-short);'><h4>📉 Extreme Short</h4><h2 style='color: var(--extreme-short);'>{signal_counts['Extreme Short']:,}</h2></div>", unsafe_allow_html=True)
-            with col2:
-                st.markdown(f"<div class='metric-card' style='border-left-color: var(--long);'><h4>🟢 Long</h4><h2 style='color: var(--long);'>{signal_counts['Long']:,}</h2></div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='metric-card' style='border-left-color: var(--short);'><h4>🔴 Short</h4><h2 style='color: var(--short);'>{signal_counts['Short']:,}</h2></div>", unsafe_allow_html=True)
-            with col3:
-                st.markdown(f"<div class='metric-card' style='border-left-color: var(--div-long);'><h4>🔎 Div. Long</h4><h2 style='color: var(--div-long);'>{signal_counts['Divergence Long']:,}</h2></div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='metric-card' style='border-left-color: var(--div-short);'><h4>🔎 Div. Short</h4><h2 style='color: var(--div-short);'>{signal_counts['Divergence Short']:,}</h2></div>", unsafe_allow_html=True)
+        # --- REMOVED selected_model check ---
+        st.markdown("### Granular Signal Distribution")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown(f"<div class='metric-card' style='border-left-color: var(--extreme-long);'><h4>🔥 Extreme Long</h4><h2 style='color: var(--extreme-long);'>{signal_counts['Extreme Long']:,}</h2></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='metric-card' style='border-left-color: var(--extreme-short);'><h4>📉 Extreme Short</h4><h2 style='color: var(--extreme-short);'>{signal_counts['Extreme Short']:,}</h2></div>", unsafe_allow_html=True)
+        with col2:
+            st.markdown(f"<div class='metric-card' style='border-left-color: var(--long);'><h4>🟢 Long</h4><h2 style='color: var(--long);'>{signal_counts['Long']:,}</h2></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='metric-card' style='border-left-color: var(--short);'><h4>🔴 Short</h4><h2 style='color: var(--short);'>{signal_counts['Short']:,}</h2></div>", unsafe_allow_html=True)
+        with col3:
+            st.markdown(f"<div class='metric-card' style='border-left-color: var(--div-long);'><h4>🔎 Div. Long</h4><h2 style='color: var(--div-long);'>{signal_counts['Divergence Long']:,}</h2></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='metric-card' style='border-left-color: var(--div-short);'><h4>🔎 Div. Short</h4><h2 style='color: var(--div-short);'>{signal_counts['Divergence Short']:,}</h2></div>", unsafe_allow_html=True)
 
     with tab_sector:
         st.markdown("### 🏢 Sector-wise Signal Distribution")
@@ -1597,37 +1371,26 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
         
         fig_sector = go.Figure()
 
-        if selected_model == "ILFO (Pine v6 Rebuild)":
-            sector_df['Total Long'] = sector_df["Extreme Long"] + sector_df["Long"] + sector_df["Divergence Long"]
-            sector_df['Total Short'] = sector_df["Extreme Short"] + sector_df["Short"] + sector_df["Divergence Short"]
-            
-            fig_sector.add_trace(go.Bar(
-                name='Total Long', x=sector_df.index, y=sector_df['Total Long'], marker_color='#10b981'
-            ))
-            fig_sector.add_trace(go.Bar(
-                name='Total Short', x=sector_df.index, y=sector_df['Total Short'], marker_color='#ef4444'
-            ))
-            fig_sector.add_trace(go.Bar(
-                name='Neutral', x=sector_df.index, y=sector_df['Neutral'], marker_color='#888888'
-            ))
-            display_cols = [
-                "Total Long", "Total Short", "Neutral",
-                "Extreme Long", "Long", "Divergence Long",
-                "Extreme Short", "Short", "Divergence Short",
-                "Total"
-            ]
-
-        elif selected_model == "ROC & BasisSlope":
-            fig_sector.add_trace(go.Bar(
-                name='Buy', x=sector_df.index, y=sector_df['Buy'], marker_color='#10b981'
-            ))
-            fig_sector.add_trace(go.Bar(
-                name='Sell', x=sector_df.index, y=sector_df['Sell'], marker_color='#ef4444'
-            ))
-            fig_sector.add_trace(go.Bar(
-                name='Neutral', x=sector_df.index, y=sector_df['Neutral'], marker_color='#888888'
-            ))
-            display_cols = ["Buy", "Sell", "Neutral", "Total"]
+        # --- REMOVED selected_model check, hardcoded ILFO ---
+        sector_df['Total Long'] = sector_df["Extreme Long"] + sector_df["Long"] + sector_df["Divergence Long"]
+        sector_df['Total Short'] = sector_df["Extreme Short"] + sector_df["Short"] + sector_df["Divergence Short"]
+        
+        fig_sector.add_trace(go.Bar(
+            name='Total Long', x=sector_df.index, y=sector_df['Total Long'], marker_color='#10b981'
+        ))
+        fig_sector.add_trace(go.Bar(
+            name='Total Short', x=sector_df.index, y=sector_df['Total Short'], marker_color='#ef4444'
+        ))
+        fig_sector.add_trace(go.Bar(
+            name='Neutral', x=sector_df.index, y=sector_df['Neutral'], marker_color='#888888'
+        ))
+        display_cols = [
+            "Total Long", "Total Short", "Neutral",
+            "Extreme Long", "Long", "Divergence Long",
+            "Extreme Short", "Short", "Divergence Short",
+            "Total"
+        ]
+        # --- END REMOVAL ---
 
         fig_sector.update_layout(
             barmode='stack', title="Aggregate Signals by Sector", template="plotly_dark",
@@ -1656,7 +1419,7 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
         return styler.to_html(escape=False)
 
     with tab_buy:
-        st.markdown(f"### ⬆️ All Long / Buy Signals ({total_buy_signals})")
+        st.markdown(f"### ⬆️ All Long Signals ({total_buy_signals})")
         st.markdown(f"*Sorted by Confidence Score (Highest First)*")
         if not buy_df.empty:
             html_buy = render_styled_html(buy_df)
@@ -1664,10 +1427,10 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
             st.markdown("")
             st.markdown(create_export_link(buy_df, f"{analysis_title}_{analysis_date}_all_long.csv"), unsafe_allow_html=True)
         else:
-            st.info("No long/buy signals generated for this analysis period.")
+            st.info("No long signals generated for this analysis period.")
 
     with tab_sell:
-        st.markdown(f"### ⬇️ All Short / Sell Signals ({total_sell_signals})")
+        st.markdown(f"### ⬇️ All Short Signals ({total_sell_signals})")
         st.markdown(f"*Sorted by Confidence Score (Highest First)*")
         if not sell_df.empty:
             html_sell = render_styled_html(sell_df)
@@ -1675,7 +1438,7 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
             st.markdown("")
             st.markdown(create_export_link(sell_df, f"{analysis_title}_{analysis_date}_all_short.csv"), unsafe_allow_html=True)
         else:
-            st.info("No short/sell signals generated for this analysis period.")
+            st.info("No short signals generated for this analysis period.")
 
     with tab_all:
         st.markdown("### 📋 Complete Signal Report")
@@ -1698,12 +1461,7 @@ def run_analysis(analysis_universe, selected_index, analysis_date, selected_mode
 with st.sidebar:
     st.markdown("# ⚙️ Configuration")
     
-    st.markdown("### 🔬 Model Selection")
-    selected_model = st.selectbox(
-        "Select Analysis Model",
-        ["ILFO (Pine v6 Rebuild)", "ROC & BasisSlope"],
-        help="Choose the quantitative model for signal generation with confidence scoring."
-    )
+    # --- REMOVED Model Selection ---
     
     st.markdown("### 🎯 Universe Selection")
     analysis_universe = st.selectbox(
@@ -1743,7 +1501,7 @@ with st.sidebar:
     <div class='info-box'>
         <p style='font-size: 0.85rem; margin: 0; color: var(--text-muted); line-height: 1.6;'>
             <strong>Version:</strong> {VERSION}<br>
-            <strong>Model:</strong> {selected_model}<br> 
+            <strong>Model:</strong> ILFO (Median Scoring)<br> 
             <strong>Data:</strong> yfinance<br>
             <strong>Feature:</strong> Confidence Scoring
         </p>
@@ -1754,10 +1512,9 @@ with st.sidebar:
     with st.expander("🎯 How It Works"):
         st.markdown("""
         **Advanced Weighted Scoring:**
-        - Measures proximity to optimal backtested ranges
-        - Closer to range center = higher score
-        - Critical parameters weighted more heavily
-        - Synergy bonus for multiple strong signals
+        - Uses a granular score based on proximity to the *statistical success median* vs. the *fail mean* for each parameter.
+        - Critical parameters are weighted more heavily.
+        - A synergy bonus is applied for multiple strong signals.
         
         **Grade System:**
         - **A+ (90-100%)**: Exceptional - All criteria optimal
@@ -1777,7 +1534,7 @@ if submit_button:
     if analysis_date > datetime.today().date():
         st.error("⚠️ Analysis date cannot be in the future.")
     else:
-        run_analysis(analysis_universe, selected_index, analysis_date, selected_model)
+        run_analysis(analysis_universe, selected_index, analysis_date) # --- REMOVED selected_model
 else:
     st.markdown("""
     <div class='info-box welcome'>
@@ -1872,4 +1629,4 @@ else:
     # as per the request.
     
 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-st.caption(f"© 2025 Sanket | Hemrek Capital | {VERSION} | Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S IST')}")
+st.caption(f"© 2025 Sanket | @thebullishvalue | {VERSION} | Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S IST')}")
