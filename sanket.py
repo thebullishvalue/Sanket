@@ -566,7 +566,8 @@ def get_fno_stock_list():
             elif len(stock_data.index) > 0:
                 symbols = stock_data.index.tolist()
 
-        if symbols === None: # Use === instead of is None for non-pandas objects
+        # --- FIX: Changed invalid '===' operator to Python's 'is' for checking None ---
+        if symbols is None:
              return None, f"Could not extract symbols"
             
         symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
