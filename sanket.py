@@ -42,24 +42,25 @@ INDEX_LIST = [
     "NIFTY AUTO", "NIFTY FIN SERVICE", "NIFTY FMCG", "NIFTY IT",
     "NIFTY MEDIA", "NIFTY METAL", "NIFTY PHARMA"
 ]
-BASE_URL = "https://www.niftyindices.com/IndexConstituent/"
+# --- FIX: Removed trailing slash from BASE_URL to prevent potential double-slash issues or misinterpretations ---
+BASE_URL = "https://www.niftyindices.com/IndexConstituent" 
 INDEX_URL_MAP = {
-    "NIFTY 50": f"{BASE_URL}ind_nifty50list.csv",
-    "NIFTY NEXT 50": f"{BASE_URL}ind_niftynext50list.csv",
-    "NIFTY 100": f"{BASE_URL}ind_nifty100list.csv",
-    "NIFTY 200": f"{BASE_URL}ind_nifty200list.csv",
-    "NIFTY 500": f"{BASE_URL}ind_nifty500list.csv",
-    "NIFTY MIDCAP 50": f"{BASE_URL}ind_niftymidcap50list.csv",
-    "NIFTY MIDCAP 100": f"{BASE_URL}ind_niftymidcap100list.csv",
-    "NIFTY SMLCAP 100": f"{BASE_URL}ind_niftysmallcap100list.csv",
-    "NIFTY BANK": f"{BASE_URL}ind_niftybanklist.csv",
-    "NIFTY AUTO": f"{BASE_URL}ind_niftyautolist.csv",
-    "NIFTY FIN SERVICE": f"{BASE_URL}ind_niftyfinancelist.csv",
-    "NIFTY FMCG": f"{BASE_URL}ind_niftyfmcglist.csv",
-    "NIFTY IT": f"{BASE_URL}ind_niftyitlist.csv",
-    "NIFTY MEDIA": f"{BASE_URL}ind_niftymedialist.csv",
-    "NIFTY METAL": f"{BASE_URL}ind_niftymetallist.csv",
-    "NIFTY PHARMA": f"{BASE_URL}ind_niftypharmalist.csv"
+    "NIFTY 50": f"{BASE_URL}/ind_nifty50list.csv",
+    "NIFTY NEXT 50": f"{BASE_URL}/ind_niftynext50list.csv",
+    "NIFTY 100": f"{BASE_URL}/ind_nifty100list.csv",
+    "NIFTY 200": f"{BASE_URL}/ind_nifty200list.csv",
+    "NIFTY 500": f"{BASE_URL}/ind_nifty500list.csv",
+    "NIFTY MIDCAP 50": f"{BASE_URL}/ind_niftymidcap50list.csv",
+    "NIFTY MIDCAP 100": f"{BASE_URL}/ind_niftymidcap100list.csv",
+    "NIFTY SMLCAP 100": f"{BASE_URL}/ind_niftysmallcap100list.csv",
+    "NIFTY BANK": f"{BASE_URL}/ind_niftybanklist.csv",
+    "NIFTY AUTO": f"{BASE_URL}/ind_niftyautolist.csv",
+    "NIFTY FIN SERVICE": f"{BASE_URL}/ind_niftyfinancelist.csv",
+    "NIFTY FMCG": f"{BASE_URL}/ind_niftyfmcglist.csv",
+    "NIFTY IT": f"{BASE_URL}/ind_niftyitlist.csv",
+    "NIFTY MEDIA": f"{BASE_URL}/ind_niftymedialist.csv",
+    "NIFTY METAL": f"{BASE_URL}/ind_niftymetallist.csv",
+    "NIFTY PHARMA": f"{BASE_URL}/ind_niftypharmalist.csv"
 }
 ANALYSIS_UNIVERSE_OPTIONS = ["F&O Stocks", "Index Constituents"]
 
@@ -565,7 +566,7 @@ def get_fno_stock_list():
             elif len(stock_data.index) > 0:
                 symbols = stock_data.index.tolist()
 
-        if symbols is None:
+        if symbols === None: # Use === instead of is None for non-pandas objects
              return None, f"Could not extract symbols"
             
         symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
@@ -588,6 +589,8 @@ def get_index_stock_list(index):
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
+        # The URL structure is now confirmed to include the scheme (https://)
+        # and should resolve the original "No scheme supplied" error.
         response = requests.get(url, headers=headers, verify=False, timeout=10)
         response.raise_for_status()
         
