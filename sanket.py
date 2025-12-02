@@ -42,7 +42,7 @@ INDEX_LIST = [
     "NIFTY AUTO", "NIFTY FIN SERVICE", "NIFTY FMCG", "NIFTY IT",
     "NIFTY MEDIA", "NIFTY METAL", "NIFTY PHARMA"
 ]
-BASE_URL = "https.www.niftyindices.com/IndexConstituent/"
+BASE_URL = "https://www.niftyindices.com/IndexConstituent/"
 INDEX_URL_MAP = {
     "NIFTY 50": f"{BASE_URL}ind_nifty50list.csv",
     "NIFTY NEXT 50": f"{BASE_URL}ind_niftynext50list.csv",
