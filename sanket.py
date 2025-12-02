@@ -1403,12 +1403,14 @@ def run_analysis(analysis_universe, selected_index, analysis_date): # --- REMOVE
             yaxis=dict(title="Signal Count", gridcolor=grid_color), xaxis=dict(title="Sector"),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        st.plotly_chart(fig_sector, use_container_width=True)
+        # --- FIX: Replace use_container_width=True with width='stretch' ---
+        st.plotly_chart(fig_sector, width='stretch')
         
         st.markdown("### 📋 Detailed Sector Breakdown")
         sector_display_cols = [col for col in display_cols if col in sector_df.columns]
         sector_display = sector_df[sector_display_cols].copy()
-        st.dataframe(sector_display, use_container_width=True, height=400)
+        # --- FIX: Replace use_container_width=True with width='stretch' ---
+        st.dataframe(sector_display, width='stretch', height=400)
 
     def render_styled_html(df):
         """Applies formatting and renders HTML"""
@@ -1492,9 +1494,10 @@ with st.sidebar:
     
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     
+    # --- FIX: Replace use_container_width=True with width='stretch' ---
     submit_button = st.button(
         label="Run Analysis",
-        use_container_width=True,
+        width='stretch',
         type="primary"
     )
     
