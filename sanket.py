@@ -38,8 +38,8 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
     
     :root {
-        --primary-color: #22d3ee;
-        --primary-rgb: 34, 211, 238;
+        --primary-color: #FFC300;
+        --primary-rgb: 255, 195, 0;
         --background-color: #0F0F0F;
         --secondary-background-color: #1A1A1A;
         --bg-card: #1A1A1A;
@@ -548,7 +548,7 @@ def create_distribution_chart(results_df):
     fig.add_trace(go.Histogram(
         x=results_df['Signal'], 
         nbinsx=20, 
-        marker=dict(color='#22d3ee', line=dict(color='#2A2A2A', width=1)), 
+        marker=dict(color='#FFC300', line=dict(color='#2A2A2A', width=1)), 
         opacity=0.8
     ))
     fig.add_vline(x=-5, line=dict(color='#10b981', width=2, dash='dash'))
@@ -580,7 +580,7 @@ def create_ranking_chart(results_df, top_n=20):
         marker=dict(color=colors, line=dict(color='#2A2A2A', width=1)),
         text=[f"{v:.1f}" for v in combined['Signal']], textposition='outside', textfont=dict(size=10, color='#888888')
     ))
-    fig.add_vline(x=0, line=dict(color='#22d3ee', width=1))
+    fig.add_vline(x=0, line=dict(color='#FFC300', width=1))
     fig.add_vline(x=-5, line=dict(color='rgba(16,185,129,0.5)', width=1, dash='dash'))
     fig.add_vline(x=5, line=dict(color='rgba(239,68,68,0.5)', width=1, dash='dash'))
     fig.update_layout(
@@ -609,7 +609,7 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("""
         <div style="text-align: center; padding: 1rem 0; margin-bottom: 1rem;">
-            <div style="font-size: 1.75rem; font-weight: 800; color: #22d3ee;">Sanket</div>
+            <div style="font-size: 1.75rem; font-weight: 800; color: #FFC300;">Sanket</div>
             <div style="color: #888888; font-size: 0.75rem; margin-top: 0.25rem;">Signal Scanner</div>
         </div>
         """, unsafe_allow_html=True)
@@ -878,12 +878,12 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len):
                         if not bull_divs.empty:
                             st.markdown('<span class="status-badge divergence">BULLISH DIVERGENCES</span>', unsafe_allow_html=True)
                             for _, row in bull_divs.head(10).iterrows():
-                                st.markdown(f'<div class="symbol-row"><span class="symbol-name">{row["DisplayName"]}</span><span style="color: #22d3ee;">Price ▼ | Signal ▲</span></div>', unsafe_allow_html=True)
+                                st.markdown(f'<div class="symbol-row"><span class="symbol-name">{row["DisplayName"]}</span><span style="color: #FFC300;">Price ▼ | Signal ▲</span></div>', unsafe_allow_html=True)
                     with div_cols[1]:
                         if not bear_divs.empty:
                             st.markdown('<span class="status-badge divergence">BEARISH DIVERGENCES</span>', unsafe_allow_html=True)
                             for _, row in bear_divs.head(10).iterrows():
-                                st.markdown(f'<div class="symbol-row"><span class="symbol-name">{row["DisplayName"]}</span><span style="color: #22d3ee;">Price ▲ | Signal ▼</span></div>', unsafe_allow_html=True)
+                                st.markdown(f'<div class="symbol-row"><span class="symbol-name">{row["DisplayName"]}</span><span style="color: #FFC300;">Price ▲ | Signal ▼</span></div>', unsafe_allow_html=True)
             
             with tab2:
                 st.markdown("##### 🏆 Top 20 Most Oversold")
