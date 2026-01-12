@@ -8,3 +8,4 @@ nsepython
 requests 
 plotly
 pandas_datareader
+distutils
