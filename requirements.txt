@@ -7,3 +7,4 @@ urllib3
 nsepython 
 requests 
 plotly
+pandas_datareader
