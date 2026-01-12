@@ -1,10 +1,11 @@
 """
 Sanket - Market Signal Screener | A Pragyam Product Family Member
-MSF-Based Quantitative Signal Scanner for Indian Markets
+MSF + MMR Quantitative Signal Scanner for Indian Markets
 """
 
 import streamlit as st
 import pandas as pd
+import pandas_datareader.data as web
 import yfinance as yf
 import datetime
 import numpy as np
@@ -27,7 +28,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-VERSION = "v1.0.0"
+VERSION = "v1.1.0 - MMR Engine"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PRAGYAM DESIGN SYSTEM CSS
@@ -248,6 +249,26 @@ INDEX_URL_MAP = {
 }
 
 UNIVERSE_OPTIONS = ["F&O Stocks", "Index Constituents"]
+TIMEFRAME_OPTIONS = ["Daily", "Weekly"]
+
+# Macro symbols for MMR calculation
+MACRO_SYMBOLS_STOOQ = {
+    "India 10Y": "10YINY.B", "India 02Y": "2YINY.B",
+    "US 30Y": "30YUSY.B", "US 10Y": "10YUSY.B", "US 05Y": "5YUSY.B", "US 02Y": "2YUSY.B",
+    "UK 30Y": "30YUKY.B", "UK 10Y": "10YUKY.B", "UK 05Y": "5YUKY.B", "UK 02Y": "2YUKY.B",
+    "EU (DE) 30Y": "30YDEY.B", "EU (DE) 10Y": "10YDEY.B", "EU (DE) 05Y": "5YDEY.B", "EU (DE) 02Y": "2YDEY.B",
+    "China 10Y": "10YCNY.B", "China 02Y": "2YCNY.B",
+    "Japan 30Y": "30YJPY.B", "Japan 10Y": "10YJPY.B", "Japan 02Y": "2YJPY.B",
+    "Singapore 10Y": "10YSGY.B",
+}
+
+MACRO_SYMBOLS_YF = {
+    "Dollar Index": "DX-Y.NYB", "Crude Oil": "CL=F", "Brent Crude": "BZ=F",
+    "USD/INR": "INR=X", "GBP/INR": "GBPINR=X", "EUR/INR": "EURINR=X",
+    "SGD/INR": "SGDINR=X", "JPY/INR": "JPYINR=X", "Gold": "GC=F", "Silver": "SI=F"
+}
+
+MACRO_SYMBOLS = {**MACRO_SYMBOLS_STOOQ, **MACRO_SYMBOLS_YF}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA FETCHING FUNCTIONS
@@ -316,6 +337,59 @@ def get_index_stock_list(index):
         return None, f"Error: {e}"
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_macro_data(days_back=100):
+    """Fetch all macro data ONCE - to be reused across all stocks"""
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=days_back + 365)
+    
+    stooq_df = pd.DataFrame()
+    try:
+        stooq_tickers = list(MACRO_SYMBOLS_STOOQ.values())
+        stooq_raw = web.DataReader(stooq_tickers, "stooq", start=start_date, end=end_date)
+        if isinstance(stooq_raw.columns, pd.MultiIndex):
+            if 'Close' in stooq_raw.columns.get_level_values(0):
+                stooq_df = stooq_raw['Close']
+            elif 'Value' in stooq_raw.columns.get_level_values(0):
+                stooq_df = stooq_raw['Value']
+        else:
+            stooq_df = stooq_raw
+        stooq_df = stooq_df.sort_index()
+    except Exception:
+        pass
+
+    yf_df = pd.DataFrame()
+    try:
+        yf_tickers = list(MACRO_SYMBOLS_YF.values())
+        yf_raw = yf.download(yf_tickers, start=start_date, end=end_date, progress=False)
+        if not yf_raw.empty:
+            if isinstance(yf_raw.columns, pd.MultiIndex):
+                if 'Close' in yf_raw.columns.get_level_values(0):
+                    yf_df = yf_raw['Close']
+                elif 'Adj Close' in yf_raw.columns.get_level_values(0):
+                    yf_df = yf_raw['Adj Close']
+            else:
+                if 'Close' in yf_raw.columns:
+                    yf_df = yf_raw[['Close']]
+                else:
+                    yf_df = yf_raw
+            if yf_df.index.tz is not None:
+                yf_df.index = yf_df.index.tz_localize(None)
+            yf_df = yf_df.sort_index()
+    except Exception:
+        pass
+
+    if not stooq_df.empty and not yf_df.empty:
+        combined_macro = pd.concat([stooq_df, yf_df], axis=1).sort_index()
+    elif not stooq_df.empty:
+        combined_macro = stooq_df
+    elif not yf_df.empty:
+        combined_macro = yf_df
+    else:
+        return pd.DataFrame()
+    return combined_macro.ffill()
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_batch_data(stock_list, end_date=None, days_back=100, include_live=True):
     """Batch download for screener with optional live data for current day"""
@@ -357,8 +431,6 @@ def fetch_batch_data(stock_list, end_date=None, days_back=100, include_live=True
         
         # Fetch live data for today if requested and end_date is today
         if include_live and end_date == datetime.date.today() and data_dict:
-            today_ts = pd.Timestamp(datetime.date.today())
-            
             # Check if today's data is missing from at least one ticker
             sample_df = list(data_dict.values())[0]
             sample_df.index = pd.to_datetime(sample_df.index)
@@ -410,8 +482,42 @@ def fetch_batch_data(stock_list, end_date=None, days_back=100, include_live=True
     except Exception as e:
         return None, f"Download error: {e}"
 
+
+def resample_to_weekly(df):
+    """Resample daily OHLCV data to weekly candles"""
+    if df is None or df.empty:
+        return df
+    
+    df = df.copy()
+    df.index = pd.to_datetime(df.index)
+    
+    # Resample OHLCV to weekly (Week ending Friday)
+    weekly = df.resample('W-FRI').agg({
+        'Open': 'first',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'last',
+        'Volume': 'sum'
+    }).dropna()
+    
+    return weekly
+
+
+def resample_macro_to_weekly(macro_df):
+    """Resample macro data to weekly (using last value of each week)"""
+    if macro_df is None or macro_df.empty:
+        return macro_df
+    
+    macro_df = macro_df.copy()
+    macro_df.index = pd.to_datetime(macro_df.index)
+    
+    # Resample to weekly using last value
+    weekly = macro_df.resample('W-FRI').last().dropna(how='all')
+    
+    return weekly
+
 # ══════════════════════════════════════════════════════════════════════════════
-# MSF INDICATOR CALCULATION
+# MSF + MMR INDICATOR CALCULATION
 # ══════════════════════════════════════════════════════════════════════════════
 
 def sigmoid(x, scale=1.0):
@@ -504,29 +610,116 @@ def calculate_msf(df, length=20, roc_len=14, clip=3.0):
     osc_flow = (accum_norm + regime_norm) / np.sqrt(2.0)
     
     msf_raw = (osc_momentum + osc_structure + osc_flow) / np.sqrt(3.0)
+    msf_signal = sigmoid(msf_raw * np.sqrt(3.0), 1.0)
     
-    return msf_raw, micro_norm, momentum_norm, osc_flow
+    return msf_signal, micro_norm, momentum_norm, accum_norm
 
 
-def run_msf_analysis(df, length, roc_len):
-    """Run MSF analysis on a dataframe"""
+def calculate_mmr(df, length=20, num_vars=5):
+    """
+    Macro Market Regression (MMR) Indicator
+    Correlates price with macro factors
+    """
+    available_macros = [v for v in MACRO_SYMBOLS.values() if v in df.columns]
+    target = df['Close']
+    
+    if len(df) < length + 10 or not available_macros:
+        return pd.Series(0, index=df.index), pd.Series(0, index=df.index)
+
+    correlations = df[available_macros].corrwith(target).abs().sort_values(ascending=False)
+    top_drivers = correlations.head(num_vars).index.tolist()
+    
+    preds = []
+    r2_sum = 0
+    r2_sq_sum = 0
+    y_mean = target.rolling(length).mean()
+    y_std = target.rolling(length).std()
+
+    for ticker in top_drivers:
+        x = df[ticker]
+        x_mean = x.rolling(length).mean()
+        x_std = x.rolling(length).std()
+        roll_corr = x.rolling(length).corr(target)
+        slope = roll_corr * (y_std / x_std)
+        intercept = y_mean - (slope * x_mean)
+        
+        pred = (slope * x) + intercept
+        r2 = roll_corr ** 2
+        
+        preds.append(pred * r2)
+        r2_sum += r2
+        r2_sq_sum += r2 ** 2
+
+    r2_sum = r2_sum.replace(0, np.nan)
+    
+    if len(preds) > 0:
+        y_predicted = sum(preds) / r2_sum
+    else:
+        y_predicted = y_mean
+
+    deviation = target - y_predicted
+    mmr_z = zscore_clipped(deviation, length, 3.0)
+    mmr_signal = sigmoid(mmr_z, 1.5)
+    
+    model_r2 = r2_sq_sum / r2_sum
+    mmr_quality = np.sqrt(model_r2.fillna(0))
+    
+    return mmr_signal, mmr_quality
+
+
+def run_full_analysis(df, length, roc_len, regime_sensitivity=1.5, base_weight=0.5):
+    """Run full MSF + MMR analysis"""
     df['MSF'], df['Micro'], df['Momentum'], df['Flow'] = calculate_msf(df, length, roc_len)
+    df['MMR'], df['MMR_Quality'] = calculate_mmr(df, length, num_vars=5)
     
-    df['Signal_Osc'] = df['MSF'] * 10
+    # Adaptive weighting
+    msf_clarity = df['MSF'].abs()
+    mmr_clarity = df['MMR'].abs()
+    msf_clarity_scaled = msf_clarity.pow(regime_sensitivity)
+    mmr_clarity_scaled = (mmr_clarity * df['MMR_Quality']).pow(regime_sensitivity)
+    clarity_sum = msf_clarity_scaled + mmr_clarity_scaled + 0.001
     
-    df['Buy_Signal'] = df['Signal_Osc'] < -5
-    df['Sell_Signal'] = df['Signal_Osc'] > 5
+    msf_w_adaptive = msf_clarity_scaled / clarity_sum
+    mmr_w_adaptive = mmr_clarity_scaled / clarity_sum
     
-    osc_rising = df['Signal_Osc'] > df['Signal_Osc'].shift(1)
+    msf_w_final = 0.5 * base_weight + 0.5 * msf_w_adaptive
+    mmr_w_final = 0.5 * (1.0 - base_weight) + 0.5 * mmr_w_adaptive
+    w_sum = msf_w_final + mmr_w_final
+    msf_w_norm = msf_w_final / w_sum
+    mmr_w_norm = mmr_w_final / w_sum
+    
+    unified_signal = (msf_w_norm * df['MSF']) + (mmr_w_norm * df['MMR'])
+    
+    # Agreement multiplier
+    agreement = df['MSF'] * df['MMR']
+    agree_strength = agreement.abs()
+    multiplier = np.where(agreement > 0, 1.0 + 0.2 * agree_strength, 1.0 - 0.1 * agree_strength)
+    
+    df['Unified'] = (unified_signal * multiplier).clip(-1.0, 1.0)
+    df['Unified_Osc'] = df['Unified'] * 10
+    df['MSF_Osc'] = df['MSF'] * 10
+    df['MMR_Osc'] = df['MMR'] * 10
+    df['MSF_Weight'] = msf_w_norm
+    df['MMR_Weight'] = mmr_w_norm
+    df['Agreement'] = agreement
+    
+    # Signals require strong agreement
+    strong_agreement = agreement > 0.3
+    df['Buy_Signal'] = strong_agreement & (df['Unified_Osc'] < -5)
+    df['Sell_Signal'] = strong_agreement & (df['Unified_Osc'] > 5)
+    
+    # Divergences
+    osc_rising = df['Unified_Osc'] > df['Unified_Osc'].shift(1)
     price_falling = df['Close'] < df['Close'].shift(1)
-    osc_falling = df['Signal_Osc'] < df['Signal_Osc'].shift(1)
+    osc_falling = df['Unified_Osc'] < df['Unified_Osc'].shift(1)
     price_rising = df['Close'] > df['Close'].shift(1)
 
-    df['Bullish_Div'] = osc_rising & price_falling & (df['Signal_Osc'] < -5)
-    df['Bearish_Div'] = osc_falling & price_rising & (df['Signal_Osc'] > 5)
+    df['Bullish_Div'] = osc_rising & price_falling & (df['Unified_Osc'] < -5)
+    df['Bearish_Div'] = osc_falling & price_rising & (df['Unified_Osc'] > 5)
     
+    # Condition labels
     conditions = []
-    for val in df['Signal_Osc']:
+    for val in df['Unified_Osc']:
         if val < -5:
             conditions.append("Oversold")
         elif val > 5:
@@ -534,7 +727,6 @@ def run_msf_analysis(df, length, roc_len):
         else:
             conditions.append("Neutral")
     df['Condition'] = conditions
-    df['Agreement'] = df['MSF'] ** 2  # Self-agreement
 
     return df
 
@@ -600,7 +792,7 @@ def render_header():
     st.markdown("""
     <div class="premium-header">
         <h1>Sanket : Market Signal Screener</h1>
-        <div class="tagline">MSF-Based Quantitative Signal Scanner</div>
+        <div class="tagline">MSF + MMR Quantitative Signal Scanner</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -613,6 +805,17 @@ def render_sidebar():
             <div style="color: #888888; font-size: 0.75rem; margin-top: 0.25rem;">Signal Scanner</div>
         </div>
         """, unsafe_allow_html=True)
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        
+        # Timeframe Selection (NEW)
+        st.markdown('<div class="sidebar-title">⏱️ Timeframe</div>', unsafe_allow_html=True)
+        timeframe = st.radio(
+            "Select Timeframe",
+            TIMEFRAME_OPTIONS,
+            horizontal=True,
+            help="Daily: Analyze daily candles | Weekly: Analyze weekly candles"
+        )
+        
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
         # Universe Selection
@@ -647,9 +850,11 @@ def render_sidebar():
         
         # Parameters
         st.markdown('<div class="sidebar-title">⚙️ Parameters</div>', unsafe_allow_html=True)
-        with st.expander("MSF Settings", expanded=False):
+        with st.expander("MSF + MMR Settings", expanded=False):
             length = st.slider("Lookback Period", 10, 50, 20)
             roc_len = st.slider("ROC Length", 5, 30, 14)
+            regime_sensitivity = st.slider("Regime Sensitivity", 0.5, 3.0, 1.5, 0.1)
+            base_weight = st.slider("Base MSF Weight", 0.0, 1.0, 0.5, 0.05)
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
@@ -657,32 +862,33 @@ def render_sidebar():
         <div class='info-box'>
             <p style='font-size: 0.8rem; margin: 0; color: var(--text-muted); line-height: 1.5;'>
                 <strong>Version:</strong> {VERSION}<br>
-                <strong>Engine:</strong> MSF Signal Analysis<br>
+                <strong>Engine:</strong> MSF + MMR Synthesis<br>
                 <strong>Data:</strong> Live Market Feed
             </p>
         </div>
         """, unsafe_allow_html=True)
         
-        return universe, selected_index, analysis_date, length, roc_len
+        return universe, selected_index, analysis_date, length, roc_len, regime_sensitivity, base_weight, timeframe
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN SCREENER FUNCTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_screener(universe, selected_index, analysis_date, length, roc_len):
-    """Main screener function"""
+def run_screener(universe, selected_index, analysis_date, length, roc_len, regime_sensitivity, base_weight, timeframe):
+    """Main screener function with MMR and timeframe support"""
     
     # Format display
     analysis_date_str = analysis_date.strftime("%d %b %Y")
     is_today = analysis_date == datetime.date.today()
     
     universe_title = selected_index if universe == "Index Constituents" and selected_index else "F&O Stocks"
+    timeframe_label = "Weekly" if timeframe == "Weekly" else "Daily"
     
     st.markdown(f"""
     <div class='info-box'>
-        <h4>📊 Scanning {universe_title}</h4>
-        <p>MSF-based signal analysis across all securities.<br>
-        <strong>Analysis Date:</strong> {analysis_date_str} {"(Today)" if is_today else ""}</p>
+        <h4>📊 Scanning {universe_title} ({timeframe_label})</h4>
+        <p>MSF + MMR signal analysis across all securities.<br>
+        <strong>Analysis Date:</strong> {analysis_date_str} {"(Today)" if is_today else ""} | <strong>Timeframe:</strong> {timeframe_label}</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -697,7 +903,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # Fetch stock list based on universe selection
+        # Step 1: Fetch stock list
         status_text.markdown(f"**⏳ Fetching {universe_title} stock list...**")
         
         if universe == "F&O Stocks":
@@ -713,12 +919,28 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len):
         
         st.toast(fetch_msg, icon="✅")
         total_stocks = len(stock_list)
+        progress_bar.progress(0.05)
         
-        # Batch download data
-        status_text.markdown(f"**⏳ Downloading data for {total_stocks} stocks...**")
+        # Step 2: Fetch macro data ONCE (optimized)
+        status_text.markdown("**⏳ Fetching global macro data (one-time)...**")
+        days_back_macro = 200 if timeframe == "Weekly" else 100
+        macro_df = fetch_macro_data(days_back=days_back_macro + (datetime.date.today() - analysis_date).days)
+        
+        if macro_df.empty:
+            st.warning("⚠️ Could not fetch macro data. Running with MSF-only mode.")
+        else:
+            # Resample macro data if weekly
+            if timeframe == "Weekly":
+                macro_df = resample_macro_to_weekly(macro_df)
+            st.toast(f"✓ Loaded {len(macro_df.columns)} macro factors", icon="📊")
+        
         progress_bar.progress(0.1)
         
-        data_dict, batch_msg = fetch_batch_data(stock_list, end_date=analysis_date, days_back=100)
+        # Step 3: Batch download stock data
+        status_text.markdown(f"**⏳ Downloading data for {total_stocks} stocks...**")
+        
+        days_back = 200 if timeframe == "Weekly" else 100
+        data_dict, batch_msg = fetch_batch_data(stock_list, end_date=analysis_date, days_back=days_back)
         
         if data_dict is None:
             st.error(f"Failed to download data: {batch_msg}")
@@ -727,68 +949,87 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len):
             return
         
         st.toast(batch_msg, icon="📥")
+        progress_bar.progress(0.2)
         
-        # Process each stock
+        # Step 4: Process each stock
         results = []
         valid_tickers = list(data_dict.keys())
         total_valid = len(valid_tickers)
         
         for i, ticker in enumerate(valid_tickers):
             status_text.markdown(f"**⏳ Analyzing {ticker.replace('.NS', '')} ({i+1}/{total_valid})**")
-            progress_bar.progress(0.1 + (0.9 * (i + 1) / total_valid))
+            progress_bar.progress(0.2 + (0.8 * (i + 1) / total_valid))
             
             df = data_dict[ticker]
             
-            if df is not None and len(df) > length + 5:
-                try:
-                    # Run MSF analysis
-                    df = run_msf_analysis(df, length, roc_len)
-                    
-                    # Find the row for the analysis date
-                    df.index = pd.to_datetime(df.index)
-                    if df.index.tz is not None:
-                        df.index = df.index.tz_localize(None)
-                    
-                    # Get the closest date on or before analysis_date
-                    analysis_datetime = pd.Timestamp(analysis_date)
+            if df is None or len(df) < length + 10:
+                continue
+                
+            try:
+                # Normalize index
+                df.index = pd.to_datetime(df.index)
+                if df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+                
+                # Resample to weekly if needed
+                if timeframe == "Weekly":
+                    df = resample_to_weekly(df)
+                    if df is None or len(df) < length + 5:
+                        continue
+                
+                # Join with macro data (reusing the pre-fetched macro_df)
+                if not macro_df.empty:
+                    df = df.join(macro_df, how='left').ffill()
+                
+                # Run full MSF + MMR analysis
+                df = run_full_analysis(df, length, roc_len, regime_sensitivity, base_weight)
+                
+                # Find the row for the analysis date
+                analysis_datetime = pd.Timestamp(analysis_date)
+                
+                if timeframe == "Weekly":
+                    # For weekly, find the week containing the analysis date
                     valid_dates = df.index[df.index <= analysis_datetime]
-                    
-                    if len(valid_dates) == 0:
-                        continue
-                    
-                    target_date = valid_dates[-1]
-                    target_idx = df.index.get_loc(target_date)
-                    
-                    if target_idx < 1:
-                        continue
-                    
-                    last_row = df.iloc[target_idx]
-                    prev_row = df.iloc[target_idx - 1]
-                    price_change = ((last_row['Close'] - prev_row['Close']) / prev_row['Close']) * 100
-                    
-                    signal_str = "BUY" if last_row['Buy_Signal'] else "SELL" if last_row['Sell_Signal'] else "-"
-                    div_str = "BULL" if last_row['Bullish_Div'] else "BEAR" if last_row['Bearish_Div'] else "-"
-                    
-                    results.append({
-                        "Symbol": ticker,
-                        "DisplayName": ticker.replace(".NS", ""),
-                        "Price": round(last_row['Close'], 2),
-                        "Change": round(price_change, 2),
-                        "Signal": round(last_row['Signal_Osc'], 2),
-                        "MSF": round(last_row['MSF'] * 10, 2),
-                        "Zone": last_row['Condition'],
-                        "Trigger": signal_str,
-                        "Divergence": div_str,
-                        "Agreement": round(last_row['Agreement'], 3)
-                    })
-                except Exception:
-                    pass
+                else:
+                    valid_dates = df.index[df.index <= analysis_datetime]
+                
+                if len(valid_dates) == 0:
+                    continue
+                
+                target_date = valid_dates[-1]
+                target_idx = df.index.get_loc(target_date)
+                
+                if target_idx < 1:
+                    continue
+                
+                last_row = df.iloc[target_idx]
+                prev_row = df.iloc[target_idx - 1]
+                price_change = ((last_row['Close'] - prev_row['Close']) / prev_row['Close']) * 100
+                
+                signal_str = "BUY" if last_row['Buy_Signal'] else "SELL" if last_row['Sell_Signal'] else "-"
+                div_str = "BULL" if last_row['Bullish_Div'] else "BEAR" if last_row['Bearish_Div'] else "-"
+                
+                results.append({
+                    "Symbol": ticker,
+                    "DisplayName": ticker.replace(".NS", ""),
+                    "Price": round(last_row['Close'], 2),
+                    "Change": round(price_change, 2),
+                    "Signal": round(last_row['Unified_Osc'], 2),
+                    "MSF": round(last_row['MSF_Osc'], 2),
+                    "MMR": round(last_row['MMR_Osc'], 2),
+                    "Zone": last_row['Condition'],
+                    "Trigger": signal_str,
+                    "Divergence": div_str,
+                    "Agreement": round(last_row['Agreement'], 3)
+                })
+            except Exception:
+                pass
         
         progress_bar.empty()
         status_text.empty()
         
         if results:
-            st.success(f"✅ Scan Complete! Analyzed {len(results)}/{total_stocks} stocks for {analysis_date_str}")
+            st.success(f"✅ Scan Complete! Analyzed {len(results)}/{total_stocks} stocks ({timeframe_label}) for {analysis_date_str}")
             results_df = pd.DataFrame(results)
             
             # Calculate summary stats
@@ -888,7 +1129,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len):
             with tab2:
                 st.markdown("##### 🏆 Top 20 Most Oversold")
                 top_oversold = results_df.nsmallest(20, 'Signal')
-                cols_o = ['DisplayName', 'Price', 'Change', 'Signal', 'Zone', 'Trigger']
+                cols_o = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'MMR', 'Zone', 'Trigger']
                 st.dataframe(top_oversold[cols_o].rename(columns={'DisplayName': 'Symbol', 'Change': 'Chg %'}), width="stretch", hide_index=True)
                 
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -931,18 +1172,18 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len):
                     }
                     st.dataframe(pd.DataFrame(stats_data), width="stretch", hide_index=True)
                     
-                    st.markdown("##### Top Gainers Today")
+                    st.markdown("##### Top Gainers")
                     top_gainers = results_df.nlargest(10, 'Change')[['DisplayName', 'Price', 'Change', 'Signal']]
                     top_gainers.columns = ['Symbol', 'Price', 'Chg %', 'Signal']
                     st.dataframe(top_gainers, width="stretch", hide_index=True)
                     
-                    st.markdown("##### Top Losers Today")
+                    st.markdown("##### Top Losers")
                     top_losers = results_df.nsmallest(10, 'Change')[['DisplayName', 'Price', 'Change', 'Signal']]
                     top_losers.columns = ['Symbol', 'Price', 'Chg %', 'Signal']
                     st.dataframe(top_losers, width="stretch", hide_index=True)
             
             with tab4:
-                st.markdown(f"##### Complete Scan Results ({len(results_df)} stocks) - {analysis_date_str}")
+                st.markdown(f"##### Complete Scan Results ({len(results_df)} stocks) - {analysis_date_str} ({timeframe_label})")
                 
                 # Filter options
                 filter_col1, filter_col2, filter_col3 = st.columns(3)
@@ -959,9 +1200,9 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len):
                     (results_df['Trigger'].isin(signal_filter))
                 ].sort_values(sort_by, ascending=(sort_by == 'DisplayName'))
                 
-                display_cols = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'Zone', 'Trigger', 'Divergence']
+                display_cols = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'MMR', 'Zone', 'Trigger', 'Divergence']
                 display_df = filtered_df[display_cols].copy()
-                display_df.columns = ['Symbol', 'Price', 'Chg %', 'Signal', 'MSF', 'Zone', 'Trigger', 'Divergence']
+                display_df.columns = ['Symbol', 'Price', 'Chg %', 'Signal', 'MSF', 'MMR', 'Zone', 'Trigger', 'Divergence']
                 
                 st.dataframe(display_df, width="stretch", hide_index=True, height=500)
                 
@@ -970,7 +1211,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len):
                 st.download_button(
                     label="📥 Download Full Report (CSV)",
                     data=csv_data,
-                    file_name=f"sanket_{universe_title.replace(' ', '_')}_{analysis_date.strftime('%Y%m%d')}.csv",
+                    file_name=f"sanket_{universe_title.replace(' ', '_')}_{timeframe_label}_{analysis_date.strftime('%Y%m%d')}.csv",
                     mime="text/csv"
                 )
         else:
@@ -981,7 +1222,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    universe, selected_index, analysis_date, length, roc_len = render_sidebar()
+    universe, selected_index, analysis_date, length, roc_len, regime_sensitivity, base_weight, timeframe = render_sidebar()
     render_header()
     
     # Signal interpretation guide
@@ -994,7 +1235,7 @@ def main():
                 <h4 style='color: #10b981; margin-bottom: 0.5rem;'>🟢 Oversold Zone</h4>
                 <p style='color: #888888; font-size: 0.85rem;'>Signal < -5</p>
                 <p style='color: #EAEAEA; font-size: 0.85rem;'>
-                    Potential buying opportunity. Look for divergences and volume confirmation.
+                    Potential buying opportunity. Look for MSF + MMR agreement.
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -1005,7 +1246,7 @@ def main():
                 <h4 style='color: #888888; margin-bottom: 0.5rem;'>⚪ Neutral Zone</h4>
                 <p style='color: #888888; font-size: 0.85rem;'>Signal -5 to +5</p>
                 <p style='color: #EAEAEA; font-size: 0.85rem;'>
-                    No clear directional bias. Wait for breakout or use other confluence factors.
+                    No clear directional bias. Wait for breakout or use other factors.
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -1016,7 +1257,30 @@ def main():
                 <h4 style='color: #ef4444; margin-bottom: 0.5rem;'>🔴 Overbought Zone</h4>
                 <p style='color: #888888; font-size: 0.85rem;'>Signal > +5</p>
                 <p style='color: #EAEAEA; font-size: 0.85rem;'>
-                    Potential selling opportunity. Watch for bearish divergences and weakness.
+                    Potential selling opportunity. Watch for bearish divergences.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            st.markdown("""
+            <div style='background: rgba(255, 195, 0, 0.1); border: 1px solid #FFC300; border-radius: 12px; padding: 1rem;'>
+                <h4 style='color: #FFC300; margin-bottom: 0.5rem;'>MSF - Market Structure & Flow</h4>
+                <p style='color: #EAEAEA; font-size: 0.85rem;'>
+                    Internal price-based indicator combining momentum, microstructure, and flow analysis.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col_m2:
+            st.markdown("""
+            <div style='background: rgba(6, 182, 212, 0.1); border: 1px solid #06b6d4; border-radius: 12px; padding: 1rem;'>
+                <h4 style='color: #06b6d4; margin-bottom: 0.5rem;'>MMR - Macro Market Regression</h4>
+                <p style='color: #EAEAEA; font-size: 0.85rem;'>
+                    External macro correlation with bonds, currencies, and commodities.
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -1024,7 +1288,7 @@ def main():
     st.markdown("<br>", unsafe_allow_html=True)
     
     # Run screener
-    run_screener(universe, selected_index, analysis_date, length, roc_len)
+    run_screener(universe, selected_index, analysis_date, length, roc_len, regime_sensitivity, base_weight, timeframe)
     
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     st.caption(f"© {datetime.datetime.now().year} Sanket | Hemrek Capital | {VERSION}")
