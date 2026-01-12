@@ -1,261 +1,45 @@
+"""
+Sanket - Market Signal Screener | A Pragyam Product Family Member
+MSF-Based Quantitative Signal Scanner for Indian Markets
+"""
+
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import time
-from datetime import datetime, timedelta
-import pandas_ta as ta
+import datetime
 import numpy as np
-import urllib3
-from nsepython import nse_get_advances_declines
+import plotly.graph_objects as go
 import requests
 import io
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import logging
-import base64
-from io import BytesIO
-import os
-import pickle
+import urllib3
+from nsepython import nse_get_advances_declines
 
-# --- System Configuration ---
+# Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-pd.options.mode.chained_assignment = None
-pd.set_option('future.no_silent_downcasting', True)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-logger = logging.getLogger(__name__)
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE CONFIGURATION
+# ══════════════════════════════════════════════════════════════════════════════
 
-# --- Page Configuration ---
 st.set_page_config(
-    page_title="Sanket | Quantitative Signal Analytics",
-    page_icon="📊",
+    page_title="Sanket | Market Signal Screener",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- Constants ---
-VERSION = "v3.5.0" # UPDATED VERSION: Removed ROC Model, ILFO only
-SECTOR_MAP_FILE = "sector_map.pkl"
-INDEX_LIST = [
-    "NIFTY 50", "NIFTY NEXT 50", "NIFTY 100", "NIFTY 200", "NIFTY 500",
-    "NIFTY MIDCAP 50", "NIFTY MIDCAP 100", "NIFTY SMLCAP 100", "NIFTY BANK",
-    "NIFTY AUTO", "NIFTY FIN SERVICE", "NIFTY FMCG", "NIFTY IT",
-    "NIFTY MEDIA", "NIFTY METAL", "NIFTY PHARMA"
-]
-# --- FIX: Removed trailing slash from BASE_URL to prevent potential double-slash issues or misinterpretations ---
-BASE_URL = "https://www.niftyindices.com/IndexConstituent" 
-INDEX_URL_MAP = {
-    "NIFTY 50": f"{BASE_URL}/ind_nifty50list.csv",
-    "NIFTY NEXT 50": f"{BASE_URL}/ind_niftynext50list.csv",
-    "NIFTY 100": f"{BASE_URL}/ind_nifty100list.csv",
-    "NIFTY 200": f"{BASE_URL}/ind_nifty200list.csv",
-    "NIFTY 500": f"{BASE_URL}/ind_nifty500list.csv",
-    "NIFTY MIDCAP 50": f"{BASE_URL}/ind_niftymidcap50list.csv",
-    "NIFTY MIDCAP 100": f"{BASE_URL}/ind_niftymidcap100list.csv",
-    "NIFTY SMLCAP 100": f"{BASE_URL}/ind_niftysmallcap100list.csv",
-    "NIFTY BANK": f"{BASE_URL}/ind_niftybanklist.csv",
-    "NIFTY AUTO": f"{BASE_URL}/ind_niftyautolist.csv",
-    "NIFTY FIN SERVICE": f"{BASE_URL}/ind_niftyfinancelist.csv",
-    "NIFTY FMCG": f"{BASE_URL}/ind_niftyfmcglist.csv",
-    "NIFTY IT": f"{BASE_URL}/ind_niftyitlist.csv",
-    "NIFTY MEDIA": f"{BASE_URL}/ind_niftymedialist.csv",
-    "NIFTY METAL": f"{BASE_URL}/ind_niftymetallist.csv",
-    "NIFTY PHARMA": f"{BASE_URL}/ind_niftypharmalist.csv"
-}
-ANALYSIS_UNIVERSE_OPTIONS = ["F&O Stocks", "Index Constituents"]
+VERSION = "v1.0.0"
 
-# --- Backtested Optimal Ranges (Weights & Importance) ---
-OPTIMAL_RANGES = {
-    "Long": {
-        'ilfo_value': {'min': 0.362, 'max': 2.521, 'weight': 0.13, 'importance': 'critical'},
-        'normalized_liq': {'min': 1.158, 'max': 2.010, 'weight': 0.12, 'importance': 'low'},
-        'vol_surge': {'min': 60.354, 'max': 72.076, 'weight': 0.13, 'importance': 'high'},
-        'momentum_rsi': {'min': 41.230, 'max': 45.518, 'weight': 0.13, 'importance': 'high'},
-        'osc_momentum': {'min': 1.973, 'max': 4.491, 'weight': 0.13, 'importance': 'medium'},
-        'osc_accel': {'min': -0.438, 'max': 1.962, 'weight': 0.12, 'importance': 'medium'},
-        'volume_score': {'min': -0.551, 'max': -0.318, 'weight': 0.12, 'importance': 'low'},
-        'confidence_score': {'min': 7.148, 'max': 57.958, 'weight': 0.0, 'importance': 'low'}, # New
-        'body_conviction': {'min': 88.889, 'max': 100.000, 'weight': 0.12, 'importance': 'low'} # New
-    },
-    "Short": {
-        'ilfo_value': {'min': -2.600, 'max': -0.590, 'weight': 0.13, 'importance': 'critical'},
-        'normalized_liq': {'min': -1.359, 'max': 2.527, 'weight': 0.12, 'importance': 'low'},
-        'vol_surge': {'min': 60.449, 'max': 72.079, 'weight': 0.12, 'importance': 'high'},
-        'momentum_rsi': {'min': 53.625, 'max': 57.618, 'weight': 0.12, 'importance': 'high'},
-        'osc_momentum': {'min': -1.931, 'max': -0.160, 'weight': 0.13, 'importance': 'medium'},
-        'osc_accel': {'min': -4.572, 'max': -1.777, 'weight': 0.12, 'importance': 'medium'},
-        'volume_score': {'min': 0.737, 'max': 1.000, 'weight': 0.13, 'importance': 'low'},
-        'confidence_score': {'min': 8.149, 'max': 45.797, 'weight': 0.0, 'importance': 'low'}, # New
-        'body_conviction': {'min': 66.667, 'max': 88.889, 'weight': 0.13, 'importance': 'low'} # New
-    }
-}
+# ══════════════════════════════════════════════════════════════════════════════
+# PRAGYAM DESIGN SYSTEM CSS
+# ══════════════════════════════════════════════════════════════════════════════
 
-# --- NEW: Statistical Anchors for Median-Based Scoring ---
-STATISTICAL_ANCHORS = {
-    "Long": {
-        'ilfo_value': {'Success_Mean': 2.206, 'Success_Median': 2.399, 'Fail_Mean': 2.315},
-        'normalized_liq': {'Success_Mean': 1.746, 'Success_Median': 1.999, 'Fail_Mean': 1.798},
-        'vol_surge': {'Success_Mean': 73.493, 'Success_Median': 71.887, 'Fail_Mean': 74.562},
-        'momentum_rsi': {'Success_Mean': 44.888, 'Success_Median': 45.282, 'Fail_Mean': 45.023},
-        'osc_momentum': {'Success_Mean': 2.317, 'Success_Median': 1.983, 'Fail_Mean': 2.384},
-        'osc_accel': {'Success_Mean': 1.928, 'Success_Median': 1.858, 'Fail_Mean': 1.856},
-        'volume_score': {'Success_Mean': -0.449, 'Success_Median': -0.541, 'Fail_Mean': -0.455},
-        'confidence_score': {'Success_Mean': 4.917, 'Success_Median': 0.000, 'Fail_Mean': 4.231},
-        'body_conviction': {'Success_Mean': 64.343, 'Success_Median': 72.222, 'Fail_Mean': 62.500}
-    },
-    "Short": {
-        'ilfo_value': {'Success_Mean': -2.264, 'Success_Median': -2.532, 'Fail_Mean': -2.415},
-        'normalized_liq': {'Success_Mean': -1.842, 'Success_Median': -2.024, 'Fail_Mean': -1.865},
-        'vol_surge': {'Success_Mean': 74.617, 'Success_Median': 72.262, 'Fail_Mean': 73.775},
-        'momentum_rsi': {'Success_Mean': 54.560, 'Success_Median': 53.762, 'Fail_Mean': 54.208},
-        'osc_momentum': {'Success_Mean': -1.999, 'Success_Median': -1.788, 'Fail_Mean': -2.122},
-        'osc_accel': {'Success_Mean': -1.780, 'Success_Median': -1.809, 'Fail_Mean': -1.654},
-        'volume_score': {'Success_Mean': 0.526, 'Success_Median': 0.635, 'Fail_Mean': 0.507},
-        'confidence_score': {'Success_Mean': 5.117, 'Success_Median': 0.558, 'Fail_Mean': 4.855},
-        'body_conviction': {'Success_Mean': 62.891, 'Success_Median': 66.667, 'Fail_Mean': 60.488}
-    }
-}
-
-# --- UPDATED: Advanced Confidence Scoring Function ---
-def calculate_weighted_confidence_score(values_dict, signal_type):
-    """
-    Calculate sophisticated confidence score based on:
-    - Proximity to statistical Success_Median (vs. Fail_Mean)
-    - Weighted contribution of each parameter
-    - Penalties for values outside optimal range
-    - Bonus for multiple strong signals
-    
-    Returns: confidence_score (0-100), detailed_breakdown (dict)
-    """
-    if signal_type not in ["Long", "Short"]:
-        logging.warning(f"Unsupported signal type for confidence scoring: {signal_type}")
-        return 0.0, {}
-    
-    ranges = OPTIMAL_RANGES[signal_type]
-    total_score = 0.0
-    max_possible_score = 0.0
-    breakdown = {}
-    critical_hits = 0
-    high_hits = 0
-    
-    # --- Median-based logic for ILFO model ---
-    for param, config in ranges.items():
-        if param not in values_dict or pd.isna(values_dict[param]):
-            breakdown[param] = {
-                'value': None, 'status': 'missing', 'contribution': 0.0,
-                'max_contribution': config['weight'] * 100
-            }
-            max_possible_score += config['weight'] * 100
-            continue
-        
-        value = values_dict[param]
-        weight = config['weight']
-        importance = config['importance']
-        
-        if param not in STATISTICAL_ANCHORS[signal_type]:
-            # This parameter (from OPTIMAL_RANGES) doesn't have a statistical anchor.
-            # Score it as 0 but count its max possible score.
-            breakdown[param] = {
-                'value': value, 'status': 'no_stats', 'contribution': 0.0,
-                'max_contribution': config['weight'] * 100, 'importance': importance
-            }
-            max_possible_score += config['weight'] * 100
-            continue
-        
-        stats = STATISTICAL_ANCHORS[signal_type][param]
-        target_median = stats['Success_Median']
-        fail_mean = stats['Fail_Mean']
-        
-        # Calculate spread, with fallback for division by zero
-        spread = abs(target_median - fail_mean)
-        if spread < 1e-6:
-            spread = abs(target_median * 0.1) # 10% of median as a fallback
-            if spread < 1e-6: # If median is also zero
-                spread = 0.1 # Absolute fallback
-        
-        distance = abs(value - target_median)
-        
-        # Proximity score: 1.0 at median, 0.0 at/beyond fail_mean
-        proximity_score = max(0.0, 1.0 - (distance / spread))
-        
-        contribution = weight * proximity_score * 100
-        status = 'far_from_median'
-        
-        # Check for "hit" status
-        if proximity_score > 0.0: # Is it better than the fail_mean?
-            status = 'near_median'
-            # Is it more than halfway to the median?
-            if proximity_score > 0.5: 
-                 status = 'optimal_proximity'
-                 if importance == 'critical':
-                     critical_hits += 1
-                 elif importance == 'high':
-                     high_hits += 1
-
-        breakdown[param] = {
-            'value': value,
-            'target_median': target_median,
-            'fail_mean': fail_mean,
-            'status': status,
-            'proximity_score': proximity_score,
-            'contribution': contribution,
-            'max_contribution': weight * 100,
-            'importance': importance
-        }
-        
-        total_score += contribution
-        max_possible_score += weight * 100
-
-    
-    # --- COMMON LOGIC ---
-    # Apply synergy bonus if multiple critical/high criteria are met
-    synergy_bonus = 0
-    if critical_hits >= 2:
-        synergy_bonus = 5  # 5 point bonus for 2+ critical hits
-    if critical_hits >= 1 and high_hits >= 2:
-        synergy_bonus = max(synergy_bonus, 3)  # 3 point bonus for mixed strong signals
-    
-    total_score = min(total_score + synergy_bonus, 100)
-    
-    # Calculate final confidence percentage
-    confidence_score = (total_score / max_possible_score) * 100 if max_possible_score > 0 else 0
-    
-    breakdown['summary'] = {
-        'raw_score': total_score,
-        'max_possible': max_possible_score,
-        'synergy_bonus': synergy_bonus,
-        'critical_hits': critical_hits,
-        'high_hits': high_hits,
-        'confidence_percentage': confidence_score
-    }
-    
-    return confidence_score, breakdown
-
-def get_confidence_grade(score):
-    """Convert confidence score to letter grade"""
-    if score >= 90:
-        return 'A+', 'exceptional'
-    elif score >= 80:
-        return 'A', 'excellent'
-    elif score >= 70:
-        return 'B+', 'good'
-    elif score >= 60:
-        return 'B', 'acceptable'
-    elif score >= 50:
-        return 'C+', 'marginal'
-    elif score >= 40:
-        return 'C', 'weak'
-    else:
-        return 'D', 'poor'
-
-# --- Premium Professional CSS ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
     
     :root {
-        --primary-color: #FFC300;
-        --primary-rgb: 255, 195, 0;
+        --primary-color: #22d3ee;
+        --primary-rgb: 34, 211, 238;
         --background-color: #0F0F0F;
         --secondary-background-color: #1A1A1A;
         --bg-card: #1A1A1A;
@@ -265,46 +49,63 @@ st.markdown("""
         --text-muted: #888888;
         --border-color: #2A2A2A;
         --border-light: #3A3A3A;
-        
         --success-green: #10b981;
-        --success-dark: #059669;
         --danger-red: #ef4444;
-        --danger-dark: #dc2626;
         --warning-amber: #f59e0b;
         --info-cyan: #06b6d4;
-        
-        --extreme-long: #10b981;
-        --long: #34d399;
-        --div-long: #6ee7b7;
-        --extreme-short: #ef4444;
-        --short: #f87171;
-        --div-short: #fca5a5;
         --neutral: #888888;
-        
-        --grade-a-plus: #10b981;
-        --grade-a: #34d399;
-        --grade-b-plus: #6ee7b7;
-        --grade-b: #fbbf24;
-        --grade-c: #f59e0b;
-        --grade-d: #ef4444;
     }
     
-    * {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+    .main, [data-testid="stSidebar"] { background-color: var(--background-color); color: var(--text-primary); }
+    .stApp > header { background-color: transparent; }
+    #MainMenu {visibility: hidden;} footer {visibility: hidden;}
+    .block-container { padding-top: 3.5rem; max-width: 90%; padding-left: 2rem; padding-right: 2rem; }
+    
+    /* Sidebar toggle button - always visible */
+    [data-testid="collapsedControl"] {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        background-color: var(--secondary-background-color) !important;
+        border: 2px solid var(--primary-color) !important;
+        border-radius: 8px !important;
+        padding: 10px !important;
+        margin: 12px !important;
+        box-shadow: 0 0 15px rgba(var(--primary-rgb), 0.4) !important;
+        z-index: 999999 !important;
+        position: fixed !important;
+        top: 14px !important;
+        left: 14px !important;
+        width: 40px !important;
+        height: 40px !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
     
-    .main, [data-testid="stSidebar"] {
-        background-color: var(--background-color);
-        color: var(--text-primary);
+    [data-testid="collapsedControl"]:hover {
+        background-color: rgba(var(--primary-rgb), 0.2) !important;
+        box-shadow: 0 0 20px rgba(var(--primary-rgb), 0.6) !important;
+        transform: scale(1.05);
     }
     
-    .stApp > header {
-        background-color: transparent;
+    [data-testid="collapsedControl"] svg {
+        stroke: var(--primary-color) !important;
+        width: 20px !important;
+        height: 20px !important;
     }
     
-    .block-container {
-        padding-top: 1rem;
-        max-width: 1400px;
+    [data-testid="stSidebar"] button[kind="header"] {
+        background-color: transparent !important;
+        border: none !important;
+    }
+    
+    [data-testid="stSidebar"] button[kind="header"] svg {
+        stroke: var(--primary-color) !important;
+    }
+    
+    button[kind="header"] {
+        z-index: 999999 !important;
     }
     
     .premium-header {
@@ -316,36 +117,20 @@ st.markdown("""
         border: 1px solid var(--border-color);
         position: relative;
         overflow: hidden;
-        margin-top: 2.5rem;
+        margin-top: 1rem;
     }
     
     .premium-header::before {
         content: '';
         position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
+        top: 0; left: 0; right: 0; bottom: 0;
         background: radial-gradient(circle at 20% 50%, rgba(var(--primary-rgb),0.08) 0%, transparent 50%);
         pointer-events: none;
     }
     
-    .premium-header h1 {
-        margin: 0;
-        font-size: 2.50rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        letter-spacing: -0.50px;
-        position: relative;
-    }
-    
-    .premium-header .tagline {
-        color: var(--text-muted);
-        font-size: 1rem;
-        margin-top: 0.25rem;
-        font-weight: 400;
-        position: relative;
-    }
+    .premium-header h1 { margin: 0; font-size: 2rem; font-weight: 700; color: var(--text-primary); letter-spacing: -0.50px; position: relative; }
+    .premium-header .tagline { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.25rem; font-weight: 400; position: relative; }
+    .premium-header .product-badge { display: inline-block; background: rgba(var(--primary-rgb), 0.15); color: var(--primary-color); padding: 0.25rem 0.75rem; border-radius: 20px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem; }
     
     .metric-card {
         background-color: var(--bg-card);
@@ -359,195 +144,118 @@ st.markdown("""
         overflow: hidden;
     }
     
-    .metric-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 30px rgba(0,0,0,0.3);
-        border-color: var(--border-light);
-    }
-    
-    .metric-card h4 {
-        color: var(--text-muted);
-        font-size: 0.8rem;
-        margin-bottom: 0.5rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    
-    .metric-card h2 {
-        color: var(--text-primary);
-        font-size: 2rem;
-        font-weight: 700;
-        margin: 0;
-        line-height: 1;
-    }
-    
-    .metric-card .sub-metric {
-        font-size: 0.8rem;
-        color: var(--text-muted);
-        margin-top: 0.5rem;
-        font-weight: 500;
-    }
-    
+    .metric-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.3); border-color: var(--border-light); }
+    .metric-card h4 { color: var(--text-muted); font-size: 0.75rem; margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+    .metric-card h2 { color: var(--text-primary); font-size: 1.75rem; font-weight: 700; margin: 0; line-height: 1; }
+    .metric-card .sub-metric { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem; font-weight: 500; }
     .metric-card.success h2 { color: var(--success-green); }
     .metric-card.danger h2 { color: var(--danger-red); }
     .metric-card.warning h2 { color: var(--warning-amber); }
     .metric-card.info h2 { color: var(--info-cyan); }
     .metric-card.neutral h2 { color: var(--neutral); }
-    .metric-card.primary h2 { color: var(--primary-color); } /* New class for 6th color */
-    .metric-card.white h2 { color: var(--text-primary); } /* New class for white text */
+    .metric-card.primary h2 { color: var(--primary-color); }
     
-    .status-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    .info-box {
-        background: var(--secondary-background-color);
-        border: 1px solid var(--border-color);
-        border-left: 4px solid var(--primary-color);
-        padding: 1.25rem;
+    .signal-card {
+        background-color: var(--bg-card);
+        padding: 1.5rem;
         border-radius: 12px;
-        margin: 0.5rem 0;
+        border: 1px solid var(--border-color);
         box-shadow: 0 0 15px rgba(var(--primary-rgb), 0.08);
-    }
-    
-    .info-box h4 {
-        color: var(--primary-color);
-        margin: 0 0 0.5rem 0;
-        font-size: 1rem;
-        font-weight: 700;
-    }
-
-    /* --- START: Button CSS from sanket.py --- */
-    /* Buttons */
-    .stButton>button {
-        border: 2px solid var(--primary-color);
-        background: transparent;
-        color: var(--primary-color);
-        font-weight: 700;
-        border-radius: 12px;
-        padding: 0.75rem 2rem;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    .stButton>button:hover {
-        box-shadow: 0 0 25px rgba(var(--primary-rgb), 0.6);
-        background: var(--primary-color);
-        color: #1A1A1A; /* Dark text on hover for contrast */
-        transform: translateY(-2px);
-    }
-    
-    .stButton>button:active {
-        transform: translateY(0);
-    }
-
-    /* Download Links */
-    .download-link {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.75rem 1.5rem;
-        border: 2px solid var(--primary-color);
-        background: transparent;
-        color: var(--primary-color);
-        text-decoration: none;
-        border-radius: 12px;
-        font-weight: 700;
-        transition: all 0.3s ease;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    .download-link:hover {
-        box-shadow: 0 0 25px rgba(var(--primary-rgb), 0.6);
-        background: var(--primary-color);
-        color: #1A1A1A; /* Dark text on hover for contrast */
-        transform: translateY(-2px);
-    }
-    /* --- END: Button CSS from sanket.py --- */
-    
-    .stMarkdown table {
-        width: 100%;
-        border-collapse: collapse;
-        background: var(--bg-card);
-        border-radius: 16px;
+        margin-bottom: 1rem;
+        position: relative;
         overflow: hidden;
-        border: 1px solid var(--border-color);
-        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
     }
     
-    .stMarkdown table th,
-    .stMarkdown table td {
-        text-align: left !important;
-        padding: 12px 10px;
-        border-bottom: 1px solid var(--border-color);
-    }
+    .signal-card::before { content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%; }
+    .signal-card.buy::before { background: var(--success-green); }
+    .signal-card.sell::before { background: var(--danger-red); }
+    .signal-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+    .signal-card-title { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
     
-    .stMarkdown table th {
-        background-color: var(--bg-elevated);
-        font-size: 0.9rem;
-        letter-spacing: 0.5px;
-    }
+    .status-badge { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.8rem; border-radius: 20px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+    .status-badge.buy { background: rgba(16, 185, 129, 0.15); color: var(--success-green); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .status-badge.sell { background: rgba(239, 68, 68, 0.15); color: var(--danger-red); border: 1px solid rgba(239, 68, 68, 0.3); }
+    .status-badge.oversold { background: rgba(6, 182, 212, 0.15); color: var(--info-cyan); border: 1px solid rgba(6, 182, 212, 0.3); }
+    .status-badge.overbought { background: rgba(245, 158, 11, 0.15); color: var(--warning-amber); border: 1px solid rgba(245, 158, 11, 0.3); }
+    .status-badge.neutral { background: rgba(136, 136, 136, 0.15); color: var(--neutral); border: 1px solid rgba(136, 136, 136, 0.3); }
+    .status-badge.divergence { background: rgba(var(--primary-rgb), 0.15); color: var(--primary-color); border: 1px solid rgba(var(--primary-rgb), 0.3); }
     
-    .stMarkdown table tr:last-child td {
-        border-bottom: none;
-    }
+    .info-box { background: var(--secondary-background-color); border: 1px solid var(--border-color); border-left: 0px solid var(--primary-color); padding: 1.25rem; border-radius: 12px; margin: 0.5rem 0; box-shadow: 0 0 15px rgba(var(--primary-rgb), 0.08); }
+    .info-box h4 { color: var(--primary-color); margin: 0 0 0.5rem 0; font-size: 1rem; font-weight: 700; }
+    .info-box p { color: var(--text-muted); margin: 0; font-size: 0.9rem; line-height: 1.6; }
     
-    .stMarkdown table tr:hover {
-        background-color: var(--bg-elevated);
-    }
+    .stButton>button { border: 2px solid var(--primary-color); background: transparent; color: var(--primary-color); font-weight: 700; border-radius: 12px; padding: 0.75rem 2rem; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); text-transform: uppercase; letter-spacing: 0.5px; }
+    .stButton>button:hover { box-shadow: 0 0 25px rgba(var(--primary-rgb), 0.6); background: var(--primary-color); color: #1A1A1A; transform: translateY(-2px); }
+    .stButton>button:active { transform: translateY(0); }
     
-    .signal-extreme-long { color: var(--extreme-long) !important; font-weight: 700; }
-    .signal-long { color: var(--long) !important; font-weight: 600; }
-    .signal-div-long { color: var(--div-long) !important; font-weight: 600; }
-    .signal-extreme-short { color: var(--extreme-short) !important; font-weight: 700; }
-    .signal-short { color: var(--short) !important; font-weight: 600; }
-    .signal-div-short { color: var(--div-short) !important; font-weight: 600; }
-    .signal-neutral { color: var(--neutral) !important; }
-    .signal-error { color: var(--warning-amber) !important; }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; background: transparent; }
+    .stTabs [data-baseweb="tab"] { color: var(--text-muted); border-bottom: 2px solid transparent; transition: color 0.3s, border-bottom 0.3s; background: transparent; font-weight: 600; }
+    .stTabs [aria-selected="true"] { color: var(--primary-color); border-bottom: 2px solid var(--primary-color); background: transparent !important; }
     
-    .pct-positive { color: var(--success-green) !important; font-weight: 600; }
-    .pct-negative { color: var(--danger-red) !important; font-weight: 600; }
-    .pct-neutral { color: var(--neutral) !important; }
+    .stPlotlyChart { border-radius: 12px; background-color: var(--secondary-background-color); padding: 10px; border: 1px solid var(--border-color); box-shadow: 0 0 25px rgba(var(--primary-rgb), 0.1); }
+    .stDataFrame { border-radius: 12px; background-color: var(--secondary-background-color); border: 1px solid var(--border-color); }
+    .section-divider { height: 1px; background: linear-gradient(90deg, transparent 0%, var(--border-color) 50%, transparent 100%); margin: 1.5rem 0; }
     
-    .grade-a-plus { color: var(--grade-a-plus) !important; font-weight: 700; }
-    .grade-a { color: var(--grade-a) !important; font-weight: 700; }
-    .grade-b-plus { color: var(--grade-b-plus) !important; font-weight: 600; }
-    .grade-b { color: var(--grade-b) !important; font-weight: 600; }
-    .grade-c { color: var(--grade-c) !important; font-weight: 600; }
-    .grade-d { color: var(--grade-d) !important; font-weight: 600; }
+    .symbol-row { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; border-radius: 8px; background: var(--bg-elevated); margin-bottom: 0.5rem; transition: all 0.2s ease; }
+    .symbol-row:hover { background: var(--border-light); }
+    .symbol-name { font-weight: 700; color: var(--text-primary); font-size: 0.9rem; }
+    .symbol-price { color: var(--text-muted); font-size: 0.85rem; }
+    .symbol-score { font-weight: 700; font-size: 0.9rem; }
     
-    .confidence-high { background: linear-gradient(135deg, var(--success-green), var(--success-dark)); color: white; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: 700; }
-    .confidence-medium { background: var(--warning-amber); color: var(--background-color); padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: 700; }
-    .confidence-low { background: var(--danger-red); color: white; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: 700; }
+    .sidebar-title { font-size: 0.75rem; font-weight: 700; color: var(--primary-color); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.75rem; }
     
-    .section-divider {
-        height: 1px;
-        background: linear-gradient(90deg, transparent 0%, var(--border-color) 50%, transparent 100%);
-        margin: 1rem 0;
-    }
+    [data-testid="stSidebar"] { background: var(--secondary-background-color); border-right: 1px solid var(--border-color); }
+    
+    .stTextInput > div > div > input { background: var(--bg-elevated) !important; border: 1px solid var(--border-color) !important; border-radius: 8px !important; color: var(--text-primary) !important; }
+    .stTextInput > div > div > input:focus { border-color: var(--primary-color) !important; box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.2) !important; }
+    
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--background-color); }
+    ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(f"""
-<div class="premium-header">
-    <h1>Sanket | Quantitative Signal Analytics</h1>
-</div>
-""", unsafe_allow_html=True)
+# ══════════════════════════════════════════════════════════════════════════════
+# CONSTANTS & UNIVERSE DEFINITIONS
+# ══════════════════════════════════════════════════════════════════════════════
 
-# --- Stock List Functions (Keep existing) ---
-@st.cache_data(ttl=3600)
+INDEX_LIST = [
+    "NIFTY 50", "NIFTY NEXT 50", "NIFTY 100", "NIFTY 200", "NIFTY 500",
+    "NIFTY MIDCAP 50", "NIFTY MIDCAP 100", "NIFTY SMLCAP 100", "NIFTY BANK",
+    "NIFTY AUTO", "NIFTY FIN SERVICE", "NIFTY FMCG", "NIFTY IT",
+    "NIFTY MEDIA", "NIFTY METAL", "NIFTY PHARMA"
+]
+
+BASE_URL = "https://www.niftyindices.com/IndexConstituent/"
+INDEX_URL_MAP = {
+    "NIFTY 50": f"{BASE_URL}ind_nifty50list.csv",
+    "NIFTY NEXT 50": f"{BASE_URL}ind_niftynext50list.csv",
+    "NIFTY 100": f"{BASE_URL}ind_nifty100list.csv",
+    "NIFTY 200": f"{BASE_URL}ind_nifty200list.csv",
+    "NIFTY 500": f"{BASE_URL}ind_nifty500list.csv",
+    "NIFTY MIDCAP 50": f"{BASE_URL}ind_niftymidcap50list.csv",
+    "NIFTY MIDCAP 100": f"{BASE_URL}ind_niftymidcap100list.csv",
+    "NIFTY SMLCAP 100": f"{BASE_URL}ind_niftysmallcap100list.csv",
+    "NIFTY BANK": f"{BASE_URL}ind_niftybanklist.csv",
+    "NIFTY AUTO": f"{BASE_URL}ind_niftyautolist.csv",
+    "NIFTY FIN SERVICE": f"{BASE_URL}ind_niftyfinancelist.csv",
+    "NIFTY FMCG": f"{BASE_URL}ind_niftyfmcglist.csv",
+    "NIFTY IT": f"{BASE_URL}ind_niftyitlist.csv",
+    "NIFTY MEDIA": f"{BASE_URL}ind_niftymedialist.csv",
+    "NIFTY METAL": f"{BASE_URL}ind_niftymetallist.csv",
+    "NIFTY PHARMA": f"{BASE_URL}ind_niftypharmalist.csv"
+}
+
+UNIVERSE_OPTIONS = ["F&O Stocks", "Index Constituents"]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DATA FETCHING FUNCTIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_fno_stock_list():
+    """Fetch F&O stock list from NSE"""
     try:
         stock_data = nse_get_advances_declines()
         if not isinstance(stock_data, pd.DataFrame):
@@ -566,7 +274,6 @@ def get_fno_stock_list():
             elif len(stock_data.index) > 0:
                 symbols = stock_data.index.tolist()
 
-        # --- FIX: Changed invalid '===' operator to Python's 'is' for checking None ---
         if symbols is None:
              return None, f"Could not extract symbols"
             
@@ -580,8 +287,10 @@ def get_fno_stock_list():
     except Exception as e:
         return None, f"Error: {e}"
 
-@st.cache_data(ttl=3600)
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_index_stock_list(index):
+    """Fetch index constituents from NSE Indices"""
     url = INDEX_URL_MAP.get(index)
     if not url:
         return None, f"No URL for {index}"
@@ -590,8 +299,6 @@ def get_index_stock_list(index):
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-        # The URL structure is now confirmed to include the scheme (https://)
-        # and should resolve the original "No scheme supplied" error.
         response = requests.get(url, headers=headers, verify=False, timeout=10)
         response.raise_for_status()
         
@@ -608,17 +315,22 @@ def get_index_stock_list(index):
     except Exception as e:
         return None, f"Error: {e}"
 
+
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_all_data(stock_list, end_date):
-    buffer_days = 250 
-    start_date = end_date - timedelta(days=buffer_days)
-    download_end_date = end_date + timedelta(days=1)
+def fetch_batch_data(stock_list, end_date=None, days_back=100, include_live=True):
+    """Batch download for screener with optional live data for current day"""
+    if end_date is None:
+        end_date = datetime.date.today()
+    
+    # Add buffer for end date to ensure we get the requested date
+    download_end = end_date + datetime.timedelta(days=5)
+    start_date = end_date - datetime.timedelta(days=days_back + 365)
     
     try:
         all_data = yf.download(
             stock_list,
             start=start_date,
-            end=download_end_date,
+            end=download_end,
             progress=False,
             auto_adjust=True,
             group_by='ticker'
@@ -633,1007 +345,690 @@ def fetch_all_data(stock_list, end_date):
                 try:
                     ticker_df = all_data.xs(ticker, level=0, axis=1)
                     if not ticker_df.empty and not ticker_df['Close'].isnull().all():
-                        data_dict[ticker] = ticker_df
+                        data_dict[ticker] = ticker_df.copy()
                 except KeyError:
-                    logging.warning(f"No data for {ticker}")
-            return data_dict, f"✓ Downloaded {len(data_dict)} tickers"
+                    pass
 
         elif isinstance(all_data, dict):
-            valid_data = {t:df for t,df in all_data.items() if not df.empty and not df['Close'].isnull().all()}
-            return valid_data, f"✓ Downloaded {len(valid_data)} tickers"
+            data_dict = {t:df.copy() for t,df in all_data.items() if not df.empty and not df['Close'].isnull().all()}
 
         else:
              return None, "Unexpected data structure"
+        
+        # Fetch live data for today if requested and end_date is today
+        if include_live and end_date == datetime.date.today() and data_dict:
+            today_ts = pd.Timestamp(datetime.date.today())
+            
+            # Check if today's data is missing from at least one ticker
+            sample_df = list(data_dict.values())[0]
+            sample_df.index = pd.to_datetime(sample_df.index)
+            if sample_df.index.tz is not None:
+                sample_df.index = sample_df.index.tz_localize(None)
+            
+            has_today = any(idx.date() == datetime.date.today() for idx in sample_df.index)
+            
+            if not has_today:
+                # Fetch live data for all tickers
+                try:
+                    live_data = yf.download(
+                        list(data_dict.keys()),
+                        period="1d",
+                        progress=False,
+                        auto_adjust=True,
+                        group_by='ticker'
+                    )
+                    
+                    if not live_data.empty:
+                        if isinstance(live_data, pd.DataFrame) and isinstance(live_data.columns, pd.MultiIndex):
+                            for ticker in data_dict.keys():
+                                try:
+                                    live_ticker = live_data.xs(ticker, level=0, axis=1)
+                                    if not live_ticker.empty and not live_ticker['Close'].isnull().all():
+                                        # Append live data to historical
+                                        hist_df = data_dict[ticker]
+                                        hist_df.index = pd.to_datetime(hist_df.index)
+                                        if hist_df.index.tz is not None:
+                                            hist_df.index = hist_df.index.tz_localize(None)
+                                        
+                                        live_ticker.index = pd.to_datetime(live_ticker.index)
+                                        if live_ticker.index.tz is not None:
+                                            live_ticker.index = live_ticker.index.tz_localize(None)
+                                        
+                                        # Only append if not already present
+                                        new_dates = live_ticker.index.difference(hist_df.index)
+                                        if len(new_dates) > 0:
+                                            data_dict[ticker] = pd.concat([hist_df, live_ticker.loc[new_dates]]).sort_index()
+                                except KeyError:
+                                    pass
+                        
+                        return data_dict, f"✓ Downloaded {len(data_dict)} tickers (with live data)"
+                except Exception:
+                    pass  # Fall through to return historical data only
+            
+        return data_dict, f"✓ Downloaded {len(data_dict)} tickers"
 
     except Exception as e:
         return None, f"Download error: {e}"
 
-@st.cache_resource(show_spinner=False)
-def load_sector_map():
-    if os.path.exists(SECTOR_MAP_FILE):
-        logging.info(f"Loading cached sector map from {SECTOR_MAP_FILE}")
-        with open(SECTOR_MAP_FILE, 'rb') as f:
-            return pickle.load(f)
-    logging.info("No cached sector map found, starting with an empty map.")
-    return {}
+# ══════════════════════════════════════════════════════════════════════════════
+# MSF INDICATOR CALCULATION
+# ══════════════════════════════════════════════════════════════════════════════
 
-def save_sector_map(sector_map):
-    logging.info(f"Saving updated sector map ({len(sector_map)} entries) to {SECTOR_MAP_FILE}")
-    with open(SECTOR_MAP_FILE, 'wb') as f:
-        pickle.dump(sector_map, f)
+def sigmoid(x, scale=1.0):
+    return 2.0 / (1.0 + np.exp(-x / scale)) - 1.0
 
-def fetch_sectors_for_list(stock_list):
-    logging.info(f"Fetching sector info for {len(stock_list)} new tickers...")
-    new_sectors = {}
+
+def zscore_clipped(series, window, clip=3.0):
+    roll_mean = series.rolling(window=window).mean()
+    roll_std = series.rolling(window=window).std()
+    z = (series - roll_mean) / roll_std.replace(0, np.nan)
+    return z.clip(-clip, clip).fillna(0)
+
+
+def calculate_atr(df, length=14):
+    high_low = df['High'] - df['Low']
+    high_close = (df['High'] - df['Close'].shift()).abs()
+    low_close = (df['Low'] - df['Close'].shift()).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.ewm(alpha=1/length, adjust=False).mean()
+
+
+def calculate_msf(df, length=20, roc_len=14, clip=3.0):
+    """
+    Market Structure & Flow (MSF) Indicator
+    Combines momentum, microstructure, and flow analysis
+    """
+    close = df['Close']
     
-    if not stock_list:
-        return new_sectors
-        
-    tickers = yf.Tickers(stock_list)
+    # Momentum Component
+    roc_raw = close.pct_change(roc_len, fill_method=None)
+    roc_z = zscore_clipped(roc_raw, length, clip)
+    momentum_norm = sigmoid(roc_z, 1.5)
     
-    for i, ticker_symbol in enumerate(stock_list):
-        try:
-            info = tickers.tickers[ticker_symbol].info
-            sector = info.get('sector')
-            new_sectors[ticker_symbol] = sector if sector else "Other"
-            
-            if (i + 1) % 25 == 0:
-                logging.info(f"Fetched {i+1}/{len(stock_list)} new tickers")
-                
-        except Exception as e:
-            logging.warning(f"Could not fetch .info for {ticker_symbol}: {e}")
-            new_sectors[ticker_symbol] = "Other"
-            
-    logging.info("Finished fetching new sectors.")
-    return new_sectors
-
-# --- ILFO Signal Calculation (Keep existing, add confidence scoring) ---
-def compute_ilfo_signal(ticker, df, end_date):
-    """ILFO signal with enhanced confidence scoring"""
+    # Microstructure Component
+    intrabar_dir = (df['High'] + df['Low']) / 2 - df['Open']
+    vol_ma = df['Volume'].rolling(length).mean()
+    vol_ratio = (df['Volume'] / vol_ma).fillna(1.0)
     
-    adaptiveLength = 21
-    microLength = 9
-    impactWindow = 5
-    devMultiplier = 2.0
-    signalSmooth = 5
-    divLookback = 10
-    volThreshold = 1.2
+    vw_direction = (intrabar_dir * vol_ratio).rolling(length).mean()
+    price_change_imp = close.diff(5)
+    vw_impact = (price_change_imp * vol_ratio).rolling(length).mean()
     
-    EPSILON = 1e-10
-
-    def get_error_dict(signal, details, e=""):
-        logging.error(f"Error for {ticker}: {details} - {e}")
-        return {
-            "ticker": ticker, "signal": signal, "details": details, "pct_change": np.nan,
-            "confidence_score": 0.0, "confidence_grade": "D", "confidence_class": "poor",
-            "ilfo_value": np.nan, "vol_surge": np.nan, "momentum_rsi": np.nan,
-            "osc_momentum": np.nan, "osc_accel": np.nan, "volume_score": np.nan,
-            "normalized_liq": np.nan
-        }
+    micro_raw = vw_direction - vw_impact
+    micro_z = zscore_clipped(micro_raw, length, clip)
+    micro_norm = sigmoid(micro_z, 1.5)
     
-    try:
-        if df.empty or len(df) < adaptiveLength * 2:
-            return get_error_dict("Insufficient Data", "N/A")
-        
-        df = df.copy()
-        df = df.ffill().bfill()
-        
-        if df['Close'].isnull().all() or df['Volume'].isnull().all():
-            return get_error_dict("Insufficient Data", "Missing main series")
-        
-        df['Volume'] = df['Volume'].fillna(0).replace(0, 1).clip(lower=1)
-        
-        if (df['Close'] <= 0).any():
-            return get_error_dict("Invalid Data", "Non-positive prices detected")
-        
-        # [Keep all existing ILFO calculation logic - lines 29-209 from original]
-        # Market Microstructure
-        bodySize = (df['Close'] - df['Open']).abs()
-        spreadProxy = (df['High'] + df['Low']) / 2 - df['Open']
-        
-        volMa = ta.sma(df['Volume'], adaptiveLength)
-        volMa = volMa.fillna(df['Volume'].mean()).replace(0, EPSILON).clip(lower=EPSILON)
-        
-        vwapSpread = ta.sma(spreadProxy * df['Volume'] / volMa, adaptiveLength)
-        vwapSpread = vwapSpread.fillna(0)
-        
-        priceImpact = ta.sma((df['Close'] - df['Close'].shift(impactWindow)) * df['Volume'] / volMa, adaptiveLength)
-        priceImpact = priceImpact.fillna(0)
-        
-        liquidityScore = vwapSpread - priceImpact
-        liquidityScore = liquidityScore.replace([np.inf, -np.inf], 0).fillna(0)
-        
-        liqMean = ta.sma(liquidityScore, adaptiveLength).fillna(0)
-        liqStdev = ta.stdev(liquidityScore, adaptiveLength)
-        liqStdev = liqStdev.fillna(1).replace(0, 1).clip(lower=EPSILON)
-        
-        normalizedLiq = (liquidityScore - liqMean) / liqStdev
-        normalizedLiq = normalizedLiq.replace([np.inf, -np.inf], 0).fillna(0).clip(-10, 10)
+    # Composite Trend Component
+    trend_fast = close.rolling(5).mean()
+    trend_slow = close.rolling(length).mean()
+    trend_diff_z = zscore_clipped(trend_fast - trend_slow, length, clip)
+    
+    mom_accel_raw = close.diff(5).diff(5)
+    mom_accel_z = zscore_clipped(mom_accel_raw, length, clip)
+    
+    atr = calculate_atr(df, 14)
+    vol_adj_mom_raw = close.diff(5) / atr
+    vol_adj_mom_z = zscore_clipped(vol_adj_mom_raw, length, clip)
+    
+    mean_rev_z = zscore_clipped(close - trend_slow, length, clip)
+    
+    composite_trend_z = (trend_diff_z + mom_accel_z + vol_adj_mom_z + mean_rev_z) / np.sqrt(4.0)
+    composite_trend_norm = sigmoid(composite_trend_z, 1.5)
+    
+    # Flow Component
+    typical_price = (df['High'] + df['Low'] + close) / 3
+    mf = typical_price * df['Volume']
+    mf_pos = np.where(close > close.shift(1), mf, 0)
+    mf_neg = np.where(close < close.shift(1), mf, 0)
+    
+    mf_pos_smooth = pd.Series(mf_pos, index=df.index).rolling(length).mean()
+    mf_neg_smooth = pd.Series(mf_neg, index=df.index).rolling(length).mean()
+    mf_total = mf_pos_smooth + mf_neg_smooth
+    
+    accum_ratio = mf_pos_smooth / mf_total.replace(0, np.nan)
+    accum_ratio = accum_ratio.fillna(0.5)
+    accum_norm = 2.0 * (accum_ratio - 0.5)
+    
+    # Regime Component
+    pct_change = close.pct_change(fill_method=None)
+    threshold = 0.0033
+    regime_signals = np.select([pct_change > threshold, pct_change < -threshold], [1, -1], default=0)
+    regime_count = pd.Series(regime_signals, index=df.index).cumsum()
+    regime_raw = regime_count - regime_count.rolling(length).mean()
+    regime_z = zscore_clipped(regime_raw, length, clip)
+    regime_norm = sigmoid(regime_z, 1.5)
+    
+    # Combine Components
+    osc_momentum = momentum_norm
+    osc_structure = (micro_norm + composite_trend_norm) / np.sqrt(2.0)
+    osc_flow = (accum_norm + regime_norm) / np.sqrt(2.0)
+    
+    msf_raw = (osc_momentum + osc_structure + osc_flow) / np.sqrt(3.0)
+    
+    return msf_raw, micro_norm, momentum_norm, osc_flow
 
-        # Volume Flow Analysis
-        volStdev = ta.stdev(df['Volume'], microLength)
-        volStdev = volStdev.fillna(df['Volume'].std()).replace(0, EPSILON).clip(lower=EPSILON)
-        
-        volZscore = (df['Volume'] - volMa) / volStdev
-        volZscore = volZscore.replace([np.inf, -np.inf], 0).fillna(0).clip(-5, 5)
-        
-        volSurge = (50 + (volZscore * 20)).clip(0, 100).fillna(50)
-        
-        volDirection = np.where(df['Close'] > df['Open'], volSurge, -volSurge)
-        
-        typicalPrice = (df['High'] + df['Low'] + df['Close']) / 3
-        moneyFlow = typicalPrice * df['Volume']
-        moneyFlow = moneyFlow.replace([np.inf, -np.inf], 0).fillna(0)
-        
-        posFlow = ta.sma(moneyFlow * (df['Close'] > df['Close'].shift(1)), microLength)
-        negFlow = ta.sma(moneyFlow * (df['Close'] < df['Close'].shift(1)), microLength)
-        posFlow = posFlow.fillna(0)
-        negFlow = negFlow.fillna(0)
-        
-        accumFlow = (posFlow - negFlow) / (posFlow + negFlow + EPSILON)
-        accumFlow = accumFlow.replace([np.inf, -np.inf], 0).fillna(0).clip(-1, 1)
-        
-        volumeScore = (volDirection / 100) * 0.5 + accumFlow * 0.5
-        volumeScore = volumeScore.replace([np.inf, -np.inf], 0).fillna(0)
 
-        # Momentum & Conviction
-        def safe_body_conviction(x):
-            try:
-                if len(x) < 2 or pd.isna(x.iloc[-1]):
-                    return 0.0
-                return float((x.iloc[-1] > x.iloc[:-1]).mean() * 100)
-            except:
-                return 0.0
-        
-        bodyConviction = bodySize.rolling(window=microLength + 1, min_periods=2).apply(
-            safe_body_conviction, raw=False
-        ).fillna(0)
-        
-        directionConviction = np.where(df['Close'] > df['Open'], bodyConviction, -bodyConviction)
-        
-        price_change = df['Close'].diff()
-        price_base = df['Close'].shift(1).replace(0, EPSILON).clip(lower=EPSILON)
-        
-        priceVelocity = (price_change / price_base) * 10000
-        priceVelocity = priceVelocity.replace([np.inf, -np.inf], 0).fillna(0).clip(-1000, 1000)
-        
-        momentumRsi = ta.rsi(priceVelocity, microLength)
-        momentumRsi = momentumRsi.fillna(50).clip(0, 100)
+def run_msf_analysis(df, length, roc_len):
+    """Run MSF analysis on a dataframe"""
+    df['MSF'], df['Micro'], df['Momentum'], df['Flow'] = calculate_msf(df, length, roc_len)
+    
+    df['Signal_Osc'] = df['MSF'] * 10
+    
+    df['Buy_Signal'] = df['Signal_Osc'] < -5
+    df['Sell_Signal'] = df['Signal_Osc'] > 5
+    
+    osc_rising = df['Signal_Osc'] > df['Signal_Osc'].shift(1)
+    price_falling = df['Close'] < df['Close'].shift(1)
+    osc_falling = df['Signal_Osc'] < df['Signal_Osc'].shift(1)
+    price_rising = df['Close'] > df['Close'].shift(1)
 
-        # Statistical Bounds
-        priceMean = ta.sma(df['Close'], adaptiveLength).fillna(df['Close'])
-        priceStdev = ta.stdev(df['Close'], adaptiveLength)
-        priceStdev = priceStdev.fillna(df['Close'].std()).replace(0, EPSILON).clip(lower=EPSILON)
-        
-        upperBound = priceMean + devMultiplier * priceStdev
-        lowerBound = priceMean - devMultiplier * priceStdev
+    df['Bullish_Div'] = osc_rising & price_falling & (df['Signal_Osc'] < -5)
+    df['Bearish_Div'] = osc_falling & price_rising & (df['Signal_Osc'] > 5)
+    
+    conditions = []
+    for val in df['Signal_Osc']:
+        if val < -5:
+            conditions.append("Oversold")
+        elif val > 5:
+            conditions.append("Overbought")
+        else:
+            conditions.append("Neutral")
+    df['Condition'] = conditions
+    df['Agreement'] = df['MSF'] ** 2  # Self-agreement
 
-        inOverbought = df['Close'] > upperBound
-        inOversold = df['Close'] < lowerBound
+    return df
 
-        # Composite Oscillator
-        rawScore = (normalizedLiq * 0.30) + \
-                   (volumeScore * 0.25) + \
-                   (directionConviction / 100 * 0.25) + \
-                   ((momentumRsi - 50) / 50 * 0.20)
-        
-        rawScore = rawScore.replace([np.inf, -np.inf], 0).fillna(0).clip(-5, 5)
-        
-        oscillator = (rawScore * 8)
-        oscillator = oscillator.replace([np.inf, -np.inf], 0).fillna(0).clip(-10, 10)
-        
-        signal = ta.sma(oscillator, signalSmooth)
-        signal = signal.fillna(0).clip(-10, 10)
-        
-        oscMomentum = oscillator.diff(2).fillna(0).clip(-15, 15)
-        oscAccel = oscMomentum.diff().fillna(0).clip(-15, 15)
+# ══════════════════════════════════════════════════════════════════════════════
+# VISUALIZATION FUNCTIONS
+# ══════════════════════════════════════════════════════════════════════════════
 
-        # Divergence Detection
-        def safe_is_pivot_low(x):
-            try:
-                if len(x) < divLookback * 2 + 1:
-                    return 0
-                mid = divLookback
-                return 1 if x.iloc[mid] == x.min() else 0
-            except:
-                return 0
-        
-        def safe_is_pivot_high(x):
-            try:
-                if len(x) < divLookback * 2 + 1:
-                    return 0
-                mid = divLookback
-                return 1 if x.iloc[mid] == x.max() else 0
-            except:
-                return 0
-        
-        price_lows = df['Low'].rolling(window=divLookback*2+1, center=True, min_periods=divLookback+1).apply(
-            safe_is_pivot_low, raw=False
-        ).fillna(0)
-        
-        price_highs = df['High'].rolling(window=divLookback*2+1, center=True, min_periods=divLookback+1).apply(
-            safe_is_pivot_high, raw=False
-        ).fillna(0)
-        
-        pivot_lows_idx = df.index[price_lows > 0]
-        pivot_highs_idx = df.index[price_highs > 0]
-        
-        df['last_pivot_low_price'] = df.loc[pivot_lows_idx, 'Low'].reindex(df.index).ffill().fillna(df['Low'])
-        df['last_pivot_low_osc'] = oscillator.loc[pivot_lows_idx].reindex(df.index).ffill().fillna(oscillator)
-        
-        df['last_pivot_high_price'] = df.loc[pivot_highs_idx, 'High'].reindex(df.index).ffill().fillna(df['High'])
-        df['last_pivot_high_osc'] = oscillator.loc[pivot_highs_idx].reindex(df.index).ffill().fillna(oscillator)
+def create_distribution_chart(results_df):
+    """Create signal distribution histogram"""
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(
+        x=results_df['Signal'], 
+        nbinsx=20, 
+        marker=dict(color='#22d3ee', line=dict(color='#2A2A2A', width=1)), 
+        opacity=0.8
+    ))
+    fig.add_vline(x=-5, line=dict(color='#10b981', width=2, dash='dash'))
+    fig.add_vline(x=5, line=dict(color='#ef4444', width=2, dash='dash'))
+    fig.add_vline(x=0, line=dict(color='#888888', width=1))
+    fig.add_vrect(x0=-10, x1=-5, fillcolor='rgba(16,185,129,0.1)', line_width=0)
+    fig.add_vrect(x0=5, x1=10, fillcolor='rgba(239,68,68,0.1)', line_width=0)
+    fig.update_layout(
+        template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='#1A1A1A', height=200,
+        margin=dict(l=0, r=0, t=10, b=30),
+        xaxis=dict(title=dict(text='Signal Value', font=dict(size=10, color='#888888')), showgrid=True, gridcolor='rgba(42,42,42,0.5)', range=[-12, 12]),
+        yaxis=dict(title=dict(text='Count', font=dict(size=10, color='#888888')), showgrid=True, gridcolor='rgba(42,42,42,0.5)'),
+        font=dict(family='Inter', color='#EAEAEA'), bargap=0.1
+    )
+    return fig
 
-        volConfirm = df['Volume'] > volMa * 0.8
+
+def create_ranking_chart(results_df, top_n=20):
+    """Create horizontal bar chart of extreme signals"""
+    sorted_df = results_df.sort_values('Signal')
+    bottom = sorted_df.head(top_n//2)
+    top = sorted_df.tail(top_n//2)
+    combined = pd.concat([bottom, top])
+    colors = ['#10b981' if v < 0 else '#ef4444' for v in combined['Signal']]
+    
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=combined['DisplayName'], x=combined['Signal'], orientation='h',
+        marker=dict(color=colors, line=dict(color='#2A2A2A', width=1)),
+        text=[f"{v:.1f}" for v in combined['Signal']], textposition='outside', textfont=dict(size=10, color='#888888')
+    ))
+    fig.add_vline(x=0, line=dict(color='#22d3ee', width=1))
+    fig.add_vline(x=-5, line=dict(color='rgba(16,185,129,0.5)', width=1, dash='dash'))
+    fig.add_vline(x=5, line=dict(color='rgba(239,68,68,0.5)', width=1, dash='dash'))
+    fig.update_layout(
+        template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='#1A1A1A', height=400,
+        margin=dict(l=100, r=50, t=10, b=10),
+        xaxis=dict(showgrid=True, gridcolor='rgba(42,42,42,0.5)', range=[-12, 12], tickvals=[-10, -5, 0, 5, 10]),
+        yaxis=dict(showgrid=False, tickfont=dict(size=10)),
+        font=dict(family='Inter', color='#EAEAEA')
+    )
+    return fig
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UI COMPONENTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_header():
+    st.markdown("""
+    <div class="premium-header">
+        <h1>Sanket : Market Signal Screener</h1>
+        <div class="tagline">MSF-Based Quantitative Signal Scanner</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_sidebar():
+    with st.sidebar:
+        st.markdown("""
+        <div style="text-align: center; padding: 1rem 0; margin-bottom: 1rem;">
+            <div style="font-size: 1.75rem; font-weight: 800; color: #22d3ee;">Sanket</div>
+            <div style="color: #888888; font-size: 0.75rem; margin-top: 0.25rem;">Signal Scanner</div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
-        priceLL = df['Low'] < (df['last_pivot_low_price'] * 0.998)
-        oscHL = oscillator > (df['last_pivot_low_osc'] * 1.05)
-        bullishDiv = priceLL & oscHL & inOversold & volConfirm
+        # Universe Selection
+        st.markdown('<div class="sidebar-title">🎯 Universe Selection</div>', unsafe_allow_html=True)
+        universe = st.selectbox(
+            "Analysis Universe",
+            UNIVERSE_OPTIONS,
+            help="Choose between F&O stocks or specific index constituents"
+        )
         
-        priceHH = df['High'] > (df['last_pivot_high_price'] * 1.002)
-        oscLH = oscillator < (df['last_pivot_high_osc'] * 0.95)
-        bearishDiv = priceHH & oscLH & inOverbought & volConfirm
-
-        # Signal Generation
-        extremeLong = inOversold & (oscMomentum > 0) & (oscAccel > 0) & (volSurge > volThreshold * 50)
-        extremeShort = inOverbought & (oscMomentum < 0) & (oscAccel < 0) & (volSurge > volThreshold * 50)
-
-        # Extract values at target date
-        analysis_datetime = datetime.combine(end_date, datetime.max.time())
-        df.index = pd.to_datetime(df.index)
-        target_date = df.index.asof(analysis_datetime)
-        
-        if pd.isna(target_date):
-            return get_error_dict("No Data", f"No data at {end_date.date()}")
-        
-        try:
-            test_values = [
-                oscillator.loc[target_date],
-                volSurge.loc[target_date],
-                normalizedLiq.loc[target_date],
-                momentumRsi.loc[target_date],
-                oscMomentum.loc[target_date],
-                oscAccel.loc[target_date],
-                volumeScore.loc[target_date]
-            ]
-            
-            for val in test_values:
-                if pd.isna(val) or np.isinf(val):
-                    return get_error_dict("No Data", "Invalid calculation result")
-                    
-        except (KeyError, IndexError):
-            return get_error_dict("No Data", "Target date not in index")
-
-        isExtremeLong = bool(extremeLong.loc[target_date])
-        isBullishDiv = bool(bullishDiv.loc[target_date])
-        isExtremeShort = bool(extremeShort.loc[target_date])
-        isBearishDiv = bool(bearishDiv.loc[target_date])
-
-        signal_text = "Neutral"
-        if isExtremeLong and isBullishDiv:
-            signal_text = "Extreme Long"
-        elif isExtremeShort and isBearishDiv:
-            signal_text = "Extreme Short"
-        elif isExtremeLong:
-            signal_text = "Long"
-        elif isBullishDiv:
-            signal_text = "Divergence Long"
-        elif isExtremeShort:
-            signal_text = "Short"
-        elif isBearishDiv:
-            signal_text = "Divergence Short"
-
-        nl_value = float(normalizedLiq.loc[target_date])
-        ilfo_value = float(oscillator.loc[target_date])
-        vol_value = float(volSurge.loc[target_date])
-        mom_rsi_val = float(momentumRsi.loc[target_date])
-        osc_mom_val = float(oscMomentum.loc[target_date])
-        osc_accel_val = float(oscAccel.loc[target_date])
-        vol_score_val = float(volumeScore.loc[target_date])
-
-        # --- NEW: Calculate Confidence Score ---
-        # --- MODIFIED: Added 'normalized_liq' to the dictionary ---
-        values_for_scoring = {
-            'ilfo_value': ilfo_value,
-            'normalized_liq': nl_value,
-            'vol_surge': vol_value,
-            'momentum_rsi': mom_rsi_val,
-            'osc_momentum': osc_mom_val,
-            'osc_accel': osc_accel_val,
-            'volume_score': vol_score_val
-        }
-        
-        # Only calculate confidence for actionable signals
-        if "Long" in signal_text or "Short" in signal_text:
-            signal_type_for_scoring = signal_text.split()[-1] # Gets "Long" or "Short"
-            if signal_type_for_scoring not in ["Long", "Short"]:
-                signal_type_for_scoring = "Long" if "Long" in signal_text else "Short"
-                
-            confidence_score, breakdown = calculate_weighted_confidence_score(
-                values_for_scoring, 
-                signal_type_for_scoring
+        selected_index = None
+        if universe == "Index Constituents":
+            selected_index = st.selectbox(
+                "Select Index",
+                INDEX_LIST,
+                index=INDEX_LIST.index("NIFTY 500"),
+                help="Select the index for constituent analysis"
             )
-            grade, grade_class = get_confidence_grade(confidence_score)
-        else:
-            confidence_score = 0.0
-            grade = "N/A"
-            grade_class = "neutral"
-        # --- END NEW ---
-
-        # Build details string with formatted values
-        ilfo_string = f'<span class="signal-neutral">{ilfo_value:.2f}</span>'
-        vol_string = f'<span class="signal-neutral">{vol_value:.1f}</span>'
-        mom_rsi_string = f'<span class="signal-neutral">{mom_rsi_val:.2f}</span>'
-        osc_mom_string = f'<span class="signal-neutral">{osc_mom_val:.2f}</span>'
-        osc_accel_string = f'<span class="signal-neutral">{osc_accel_val:.2f}</span>'
-        vol_score_string = f'<span class="signal-neutral">{vol_score_val:.2f}</span>'
         
-        # --- FIX: Removed "NL" prefix from variable, it's already in the f-string ---
-        # Default to neutral
-        nl_string = f'<span class="signal-neutral">{nl_value:.2f}</span>'
-
-
-        # Highlight based on optimal ranges (This is now just for visual display)
-        # The actual scoring is handled by the new median-based function
-        if "Long" in signal_text:
-            ranges = OPTIMAL_RANGES["Long"]
-            if ranges['ilfo_value']['min'] <= ilfo_value <= ranges['ilfo_value']['max']:
-                ilfo_string = f'<span class="pct-positive">{ilfo_value:.2f}</span>'
-            if ranges['normalized_liq']['min'] <= nl_value <= ranges['normalized_liq']['max']:
-                 nl_string = f'<span class="pct-positive">{nl_value:.2f}</span>' # FIX
-            if ranges['vol_surge']['min'] <= vol_value <= ranges['vol_surge']['max']:
-                vol_string = f'<span class="pct-positive">{vol_value:.1f}</span>'
-            if ranges['momentum_rsi']['min'] <= mom_rsi_val <= ranges['momentum_rsi']['max']:
-                mom_rsi_string = f'<span class="pct-positive">{mom_rsi_val:.2f}</span>'
-            if ranges['osc_momentum']['min'] <= osc_mom_val <= ranges['osc_momentum']['max']:
-                osc_mom_string = f'<span class="pct-positive">{osc_mom_val:.2f}</span>'
-            if ranges['osc_accel']['min'] <= osc_accel_val <= ranges['osc_accel']['max']:
-                osc_accel_string = f'<span class="pct-positive">{osc_accel_val:.2f}</span>'
-            if ranges['volume_score']['min'] <= vol_score_val <= ranges['volume_score']['max']:
-                vol_score_string = f'<span class="pct-positive">{vol_score_val:.2f}</span>'
-                
-        elif "Short" in signal_text:
-            ranges = OPTIMAL_RANGES["Short"]
-            if ranges['ilfo_value']['min'] <= ilfo_value <= ranges['ilfo_value']['max']:
-                ilfo_string = f'<span class="pct-negative">{ilfo_value:.2f}</span>'
-            if ranges['normalized_liq']['min'] <= nl_value <= ranges['normalized_liq']['max']:
-                 nl_string = f'<span class="pct-negative">{nl_value:.2f}</span>' # FIX
-            if ranges['vol_surge']['min'] <= vol_value <= ranges['vol_surge']['max']:
-                vol_string = f'<span class="pct-negative">{vol_value:.1f}</span>'
-            if ranges['momentum_rsi']['min'] <= mom_rsi_val <= ranges['momentum_rsi']['max']:
-                mom_rsi_string = f'<span class="pct-negative">{mom_rsi_val:.2f}</span>'
-            if ranges['osc_momentum']['min'] <= osc_mom_val <= ranges['osc_momentum']['max']:
-                osc_mom_string = f'<span class="pct-negative">{osc_mom_val:.2f}</span>'
-            if ranges['osc_accel']['min'] <= osc_accel_val <= ranges['osc_accel']['max']:
-                osc_accel_string = f'<span class="pct-negative">{osc_accel_val:.2f}</span>'
-            if ranges['volume_score']['min'] <= vol_score_val <= ranges['volume_score']['max']:
-                vol_score_string = f'<span class="pct-negative">{vol_score_val:.2f}</span>'
-
-        details_text = (
-            f"ILFO: {ilfo_string} | NL: {nl_string} | VolSurge: {vol_string} | MomRSI: {mom_rsi_string}<br>"
-            f"OscMom: {osc_mom_string} | OscAcc: {osc_accel_string} | VolScore: {vol_score_string}"
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        
+        # Analysis Date
+        st.markdown('<div class="sidebar-title">📅 Analysis Date</div>', unsafe_allow_html=True)
+        analysis_date = st.date_input(
+            "Select Date",
+            datetime.date.today(),
+            max_value=datetime.date.today(),
+            help="Select the date for signal analysis (defaults to today)"
         )
         
-        try:
-            prev_close = df['Close'].shift(1).loc[target_date]
-            curr_close = df['Close'].loc[target_date]
-            if pd.notna(prev_close) and prev_close > 0:
-                pct_change_val = ((curr_close / prev_close) - 1) * 100
-            else:
-                pct_change_val = np.nan
-        except:
-            pct_change_val = np.nan
-            
-        return {
-            "ticker": ticker,
-            "signal": signal_text,
-            "details": details_text,
-            "pct_change": pct_change_val,
-            "confidence_score": confidence_score,
-            "confidence_grade": grade,
-            "confidence_class": grade_class,
-            "ilfo_value": ilfo_value,
-            "vol_surge": vol_value,
-            "momentum_rsi": mom_rsi_val,
-            "osc_momentum": osc_mom_val,
-            "osc_accel": osc_accel_val,
-            "volume_score": vol_score_val,
-            "normalized_liq": nl_value
-        }
-
-    except Exception as e:
-        return get_error_dict("Error (Calc)", str(e), e)
-
-# --- UI Functions ---
-def format_dataframe_for_display(df):
-    """Format dataframe with proper HTML for colored display"""
-    if df.empty:
-        return df
-    
-    display_df = df.copy()
-    
-    if 'Signal' in display_df.columns:
-        def format_signal(val):
-            if pd.isna(val):
-                return '<span class="signal-neutral">N/A</span>'
-            val_str = str(val)
-            
-            if val_str == "Extreme Long":
-                return f'<span class="signal-extreme-long">{val_str}</span>'
-            elif val_str == "Long":
-                return f'<span class="signal-long">{val_str}</span>'
-            elif val_str == "Divergence Long":
-                return f'<span class="signal-div-long">{val_str}</span>'
-            # --- REMOVED "Buy" ---
-            elif val_str == "Extreme Short":
-                return f'<span class="signal-extreme-short">{val_str}</span>'
-            elif val_str == "Short":
-                return f'<span class="signal-short">{val_str}</span>'
-            elif val_str == "Divergence Short":
-                return f'<span class="signal-div-short">{val_str}</span>'
-            # --- REMOVED "Sell" ---
-            elif "Error" in val_str or "Data" in val_str:
-                return f'<span class="signal-error">{val_str}</span>'
-            return f'<span class="signal-neutral">{val_str}</span>'
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
-        display_df['Signal'] = display_df['Signal'].apply(format_signal)
-    
-    if '% Change' in display_df.columns:
-        def format_pct(val):
-            if pd.isna(val):
-                return '<span class="pct-neutral">N/A</span>'
-            if val > 0:
-                return f'<span class="pct-positive">+{val:.2f}%</span>'
-            elif val < 0:
-                return f'<span class="pct-negative">{val:.2f}%</span>'
-            else:
-                return f'<span class="pct-neutral">{val:.2f}%</span>'
+        # Parameters
+        st.markdown('<div class="sidebar-title">⚙️ Parameters</div>', unsafe_allow_html=True)
+        with st.expander("MSF Settings", expanded=False):
+            length = st.slider("Lookback Period", 10, 50, 20)
+            roc_len = st.slider("ROC Length", 5, 30, 14)
         
-        display_df['% Change'] = display_df['% Change'].apply(format_pct)
-    
-    # --- NEW: Format Confidence Score ---
-    if 'Confidence' in display_df.columns:
-        def format_confidence(val):
-            if pd.isna(val) or val == 0:
-                return '<span class="pct-neutral">N/A</span>'
-            if val >= 80:
-                return f'<span class="confidence-high">{val:.1f}%</span>'
-            elif val >= 60:
-                return f'<span class="confidence-medium">{val:.1f}%</span>'
-            else:
-                return f'<span class="confidence-low">{val:.1f}%</span>'
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
-        display_df['Confidence'] = display_df['Confidence'].apply(format_confidence)
-    
-    # --- NEW: Format Grade ---
-    if 'Grade' in display_df.columns:
-        def format_grade(val):
-            if pd.isna(val) or val == "N/A":
-                return '<span class="signal-neutral">N/A</span>'
-            val_str = str(val).replace('+', '-plus')
-            class_name = f"grade-{val_str.lower()}"
-            return f'<span class="{class_name}">{val}</span>'
+        st.markdown(f"""
+        <div class='info-box'>
+            <p style='font-size: 0.8rem; margin: 0; color: var(--text-muted); line-height: 1.5;'>
+                <strong>Version:</strong> {VERSION}<br>
+                <strong>Engine:</strong> MSF Signal Analysis<br>
+                <strong>Data:</strong> Live Market Feed
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        display_df['Grade'] = display_df['Grade'].apply(format_grade)
-    # --- END NEW ---
-    
-    display_df = display_df.reset_index()
-    return display_df
+        return universe, selected_index, analysis_date, length, roc_len
 
-def create_export_link(df, filename):
-    """Create downloadable CSV link"""
-    csv = df.to_csv(index=True)
-    b64 = base64.b64encode(csv.encode()).decode()
-    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}" class="download-link">📥 Download CSV Report</a>'
-    return href
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN SCREENER FUNCTION
+# ══════════════════════════════════════════════════════════════════════════════
 
-# --- Main Analysis Function ---
-def run_analysis(analysis_universe, selected_index, analysis_date): # --- REMOVED selected_model
-    """Main analysis orchestrator with confidence scoring"""
+def run_screener(universe, selected_index, analysis_date, length, roc_len):
+    """Main screener function"""
     
-    if analysis_universe == "F&O Stocks":
-        analysis_title = "F&O Stocks"
-        logging.info(f"🔍 Analyzing {analysis_title}...")
-        stock_list, fetch_msg = get_fno_stock_list()
-    else:
-        analysis_title = selected_index
-        logging.info(f"🔍 Analyzing {analysis_title}...")
-        stock_list, fetch_msg = get_index_stock_list(selected_index)
+    # Format display
+    analysis_date_str = analysis_date.strftime("%d %b %Y")
+    is_today = analysis_date == datetime.date.today()
     
-    if not stock_list:
-        st.error(f"Failed to fetch stock list: {fetch_msg}")
-        st.stop()
-        
-    logging.info(fetch_msg)
+    universe_title = selected_index if universe == "Index Constituents" and selected_index else "F&O Stocks"
     
-    # --- HARCODED ILFO MODEL ---
-    compute_function = compute_ilfo_signal
-    signal_types = [
-        "Extreme Long", "Long", "Divergence Long",
-        "Extreme Short", "Short", "Divergence Short",
-        "Neutral", "Error"
-    ]
-    get_buy_sell_counts = lambda counts: (
-        counts["Extreme Long"] + counts["Long"] + counts["Divergence Long"],
-        counts["Extreme Short"] + counts["Short"] + counts["Divergence Short"]
-    )
-    # --- END HARCODED ---
-
-    logging.info(f"📡 Loading persistent sector map...")
-    sector_map = load_sector_map()
-    required_tickers = set(stock_list)
-    cached_tickers = set(sector_map.keys())
-    missing_tickers = list(required_tickers - cached_tickers)
-    
-    if missing_tickers:
-        logging.info(f"New tickers found. Fetching sector data for {len(missing_tickers)} stocks...")
-        new_sector_data = fetch_sectors_for_list(missing_tickers)
-        sector_map.update(new_sector_data)
-        save_sector_map(sector_map)
-        logging.info(f"✓ Sector map updated and saved.")
-    else:
-        logging.info(f"✓ All sectors found in cache.")
-
-    logging.info(f"⬇️ Downloading historical data for {len(stock_list)} stocks...")
-    all_data_dict, batch_msg = fetch_all_data(stock_list, analysis_date)
-    
-    if all_data_dict is None:
-        st.error(f"Failed to download data: {batch_msg}")
-        st.stop()
-    
-    logging.info(batch_msg)
-    
-    total_stocks = len(stock_list)
-    results = []
-    signal_counts = {sig: 0 for sig in signal_types}
-    sector_signals = {}
-    
-    valid_tickers = list(all_data_dict.keys())
-    total_to_process = len(valid_tickers)
-    
-    for i, ticker in enumerate(valid_tickers):
-        ticker_df = all_data_dict[ticker]
-        result_dict = compute_function(ticker, ticker_df, analysis_date)
-        
-        signal = result_dict["signal"]
-        sector = sector_map.get(ticker, "Other") 
-
-        if sector not in sector_signals:
-            sector_signals[sector] = {sig: 0 for sig in signal_types}
-        
-        result_dict["Sector"] = sector
-        results.append(result_dict)
-        
-        if signal in signal_counts:
-            signal_counts[signal] += 1
-            if signal not in sector_signals[sector]:
-                 sector_signals[sector][signal] = 0
-            sector_signals[sector][signal] += 1
-        elif "Error" in signal or "Data" in signal:
-            signal_counts["Error"] += 1
-            if "Error" not in sector_signals[sector]:
-                 sector_signals[sector]["Error"] = 0
-            sector_signals[sector]["Error"] += 1
-        else:
-            signal_counts["Neutral"] += 1
-            if "Neutral" not in sector_signals[sector]:
-                 sector_signals[sector]["Neutral"] = 0
-            sector_signals[sector]["Neutral"] += 1
-        
-        if (i + 1) % 50 == 0:
-            logging.info(f"Analyzing {ticker} ({i+1}/{total_to_process})...")
-        
-    download_errors = total_stocks - total_to_process
-    signal_counts["Error"] += download_errors
-
-    logging.info("✅ Analysis Complete!")
-    
-    results_df = pd.DataFrame(results)
-    
-    results_df = results_df.rename(columns={
-        "ticker": "Ticker", 
-        "signal": "Signal", 
-        "pct_change": "% Change", 
-        "details": "Details",
-        "confidence_score": "Confidence",
-        "confidence_grade": "Grade"
-    })
-    results_df = results_df.set_index("Ticker")
-    
-    # --- NEW: Sort by Confidence Score (descending) for actionable signals ---
-    actionable_mask = results_df['Signal'].str.contains('Long|Short', na=False) # --- REMOVED Buy/Sell
-    actionable_df = results_df[actionable_mask].copy()
-    if not actionable_df.empty:
-        actionable_df = actionable_df.sort_values('Confidence', ascending=False)
-    
-    neutral_df = results_df[~actionable_mask].copy()
-    results_df = pd.concat([actionable_df, neutral_df])
-    # --- END NEW ---
-    
-    display_columns = ["Signal", "% Change", "Confidence", "Grade", "Details"]
-    criteria_columns = [
-        "ilfo_value", "vol_surge", "momentum_rsi", 
-        "osc_momentum", "osc_accel", "volume_score", "normalized_liq",
-        "confidence_class"
-    ]
-    all_columns = display_columns + criteria_columns
-    
-    for col in all_columns:
-        if col not in results_df.columns:
-            results_df[col] = np.nan
-            
-    results_df = results_df[all_columns]
-    
-    total_buy_signals, total_sell_signals = get_buy_sell_counts(signal_counts)
-    total_neutral_signals = signal_counts["Neutral"]
-    total_error_stocks = signal_counts["Error"]
-
-    try:
-        ratio = total_buy_signals / total_sell_signals if total_sell_signals > 0 else float('inf')
-        ratio_text = f"{ratio:.2f}" if ratio != float('inf') else "∞"
-    except:
-        ratio = 0
-        ratio_text = "0.00"
-        
-    if ratio > 1.2: ratio_class = "success"
-    elif ratio > 0.8: ratio_class = "neutral"
-    else: ratio_class = "danger"
-
-    buy_df = results_df[results_df['Signal'].str.contains("Long", na=False)].copy() # --- REMOVED Buy
-    sell_df = results_df[results_df['Signal'].str.contains("Short", na=False)].copy() # --- REMOVED Sell
-    errors_df = results_df[results_df['Signal'].fillna('').astype(str).str.contains("Error|Data")].copy()
-
-    # --- NEW: Calculate Confidence Statistics ---
-    high_confidence_count = len(results_df[results_df['Confidence'] >= 80])
-    medium_confidence_count = len(results_df[(results_df['Confidence'] >= 60) & (results_df['Confidence'] < 80)])
-    low_confidence_count = len(results_df[(results_df['Confidence'] > 0) & (results_df['Confidence'] < 60)])
-    
-    if not buy_df.empty and buy_df['Confidence'].notna().any():
-        avg_buy_confidence = buy_df['Confidence'].mean()
-    else:
-        avg_buy_confidence = 0
-        
-    if not sell_df.empty and sell_df['Confidence'].notna().any():
-        avg_sell_confidence = sell_df['Confidence'].mean()
-    else:
-        avg_sell_confidence = 0
-    # --- END NEW ---
-
-    # --- UI DISPLAY ---
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    
-    # --- UPDATED TAB NAMES ---
-    tab_dash, tab_sector, tab_buy, tab_sell, tab_all, tab_errors = st.tabs([
-        f"📊 Dashboard", 
-        f"🏢 Sector Analysis",
-        f"⬆️ All Long ({total_buy_signals})", 
-        f"⬇️ All Short ({total_sell_signals})", 
-        "📋 All Signals", 
-        f"⚠️ Errors ({total_error_stocks})"
-    ])
-
-    with tab_dash:
-        st.markdown("### Key Metrics")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.markdown(f"<div class='metric-card success'><h4>⬆️ Total Long</h4><h2>{total_buy_signals:,}</h2><div class='sub-metric'>Avg Confidence: {avg_buy_confidence:.1f}%</div></div>", unsafe_allow_html=True)
-        with col2:
-            st.markdown(f"<div class='metric-card danger'><h4>⬇️ Total Short</h4><h2>{total_sell_signals:,}</h2><div class='sub-metric'>Avg Confidence: {avg_sell_confidence:.1f}%</div></div>", unsafe_allow_html=True)
-        with col3:
-            st.markdown(f"<div class='metric-card neutral'><h4>➖ Neutral</h4><h2>{total_neutral_signals:,}</h2><div class='sub-metric'>No Clear Signal</div></div>", unsafe_allow_html=True)
-        with col4:
-            st.markdown(f"<div class='metric-card {ratio_class}'><h4>📈 Long/Short Ratio</h4><h2>{ratio_text}</h2><div class='sub-metric'>{'Bullish' if ratio > 1.2 else 'Bearish' if ratio < 0.8 else 'Balanced'}</div></div>", unsafe_allow_html=True)
-
-        # --- NEW: Confidence Quality Metrics ---
-        st.markdown("### Confidence Quality Distribution")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown(f"<div class='metric-card success'><h4>🎯 High Confidence</h4><h2>{high_confidence_count:,}</h2><div class='sub-metric'>≥80% Quality Score</div></div>", unsafe_allow_html=True)
-        with col2:
-            st.markdown(f"<div class='metric-card warning'><h4>⚖️ Medium Confidence</h4><h2>{medium_confidence_count:,}</h2><div class='sub-metric'>60-79% Quality Score</div></div>", unsafe_allow_html=True)
-        with col3:
-            st.markdown(f"<div class='metric-card danger'><h4>⚠️ Low Confidence</h4><h2>{low_confidence_count:,}</h2><div class='sub-metric'><60% Quality Score</div></div>", unsafe_allow_html=True)
-        # --- END NEW ---
-
-        try:
-            # Try to get theme colors from Streamlit config
-            bg_color = 'rgba(15, 15, 15, 1)' # --background-color: #0F0F0F;
-            text_color = '#EAEAEA' # --text-primary: #EAEAEA;
-            grid_color = '#2A2A2A' # --border-color: #2A2A2A;
-        except Exception:
-            # Fallback colors if config fails
-            bg_color = 'rgba(0,0,0,0)'
-            text_color = '#EAEAEA'
-            grid_color = '#2A2A2A'
-
-        # --- REMOVED selected_model check ---
-        st.markdown("### Granular Signal Distribution")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown(f"<div class='metric-card' style='border-left-color: var(--extreme-long);'><h4>🔥 Extreme Long</h4><h2 style='color: var(--extreme-long);'>{signal_counts['Extreme Long']:,}</h2></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='metric-card' style='border-left-color: var(--extreme-short);'><h4>📉 Extreme Short</h4><h2 style='color: var(--extreme-short);'>{signal_counts['Extreme Short']:,}</h2></div>", unsafe_allow_html=True)
-        with col2:
-            st.markdown(f"<div class='metric-card' style='border-left-color: var(--long);'><h4>🟢 Long</h4><h2 style='color: var(--long);'>{signal_counts['Long']:,}</h2></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='metric-card' style='border-left-color: var(--short);'><h4>🔴 Short</h4><h2 style='color: var(--short);'>{signal_counts['Short']:,}</h2></div>", unsafe_allow_html=True)
-        with col3:
-            st.markdown(f"<div class='metric-card' style='border-left-color: var(--div-long);'><h4>🔎 Div. Long</h4><h2 style='color: var(--div-long);'>{signal_counts['Divergence Long']:,}</h2></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='metric-card' style='border-left-color: var(--div-short);'><h4>🔎 Div. Short</h4><h2 style='color: var(--div-short);'>{signal_counts['Divergence Short']:,}</h2></div>", unsafe_allow_html=True)
-
-    with tab_sector:
-        st.markdown("### 🏢 Sector-wise Signal Distribution")
-        
-        sector_df = pd.DataFrame(sector_signals).T
-        if "Other" in sector_df.index:
-            other_row = sector_df.loc["Other"]
-            sector_df = sector_df.drop("Other")
-            sector_df.loc["Other"] = other_row
-            
-        sector_df['Total'] = sector_df.sum(axis=1)
-        sector_df = sector_df.sort_values('Total', ascending=False)
-        
-        fig_sector = go.Figure()
-
-        # --- REMOVED selected_model check, hardcoded ILFO ---
-        sector_df['Total Long'] = sector_df["Extreme Long"] + sector_df["Long"] + sector_df["Divergence Long"]
-        sector_df['Total Short'] = sector_df["Extreme Short"] + sector_df["Short"] + sector_df["Divergence Short"]
-        
-        fig_sector.add_trace(go.Bar(
-            name='Total Long', x=sector_df.index, y=sector_df['Total Long'], marker_color='#10b981'
-        ))
-        fig_sector.add_trace(go.Bar(
-            name='Total Short', x=sector_df.index, y=sector_df['Total Short'], marker_color='#ef4444'
-        ))
-        fig_sector.add_trace(go.Bar(
-            name='Neutral', x=sector_df.index, y=sector_df['Neutral'], marker_color='#888888'
-        ))
-        display_cols = [
-            "Total Long", "Total Short", "Neutral",
-            "Extreme Long", "Long", "Divergence Long",
-            "Extreme Short", "Short", "Divergence Short",
-            "Total"
-        ]
-        # --- END REMOVAL ---
-
-        fig_sector.update_layout(
-            barmode='stack', title="Aggregate Signals by Sector", template="plotly_dark",
-            paper_bgcolor=bg_color, plot_bgcolor=bg_color,
-            height=500, font=dict(color=text_color),
-            yaxis=dict(title="Signal Count", gridcolor=grid_color), xaxis=dict(title="Sector"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-        )
-        # --- FIX: Replace use_container_width=True with width='stretch' ---
-        st.plotly_chart(fig_sector, width='stretch')
-        
-        st.markdown("### 📋 Detailed Sector Breakdown")
-        sector_display_cols = [col for col in display_cols if col in sector_df.columns]
-        sector_display = sector_df[sector_display_cols].copy()
-        # --- FIX: Replace use_container_width=True with width='stretch' ---
-        st.dataframe(sector_display, width='stretch', height=400)
-
-    def render_styled_html(df):
-        """Applies formatting and renders HTML"""
-        formatted_df = format_dataframe_for_display(df)
-        styler = formatted_df.style
-        
-        cols_to_hide = [col for col in criteria_columns if col in formatted_df.columns]
-        if cols_to_hide:
-            styler = styler.hide(cols_to_hide, axis='columns')
-            
-        styler = styler.set_table_attributes('class="stMarkdown table"').hide(axis="index")
-        return styler.to_html(escape=False)
-
-    with tab_buy:
-        st.markdown(f"### ⬆️ All Long Signals ({total_buy_signals})")
-        st.markdown(f"*Sorted by Confidence Score (Highest First)*")
-        if not buy_df.empty:
-            html_buy = render_styled_html(buy_df)
-            st.markdown(html_buy, unsafe_allow_html=True)
-            st.markdown("")
-            st.markdown(create_export_link(buy_df, f"{analysis_title}_{analysis_date}_all_long.csv"), unsafe_allow_html=True)
-        else:
-            st.info("No long signals generated for this analysis period.")
-
-    with tab_sell:
-        st.markdown(f"### ⬇️ All Short Signals ({total_sell_signals})")
-        st.markdown(f"*Sorted by Confidence Score (Highest First)*")
-        if not sell_df.empty:
-            html_sell = render_styled_html(sell_df)
-            st.markdown(html_sell, unsafe_allow_html=True)
-            st.markdown("")
-            st.markdown(create_export_link(sell_df, f"{analysis_title}_{analysis_date}_all_short.csv"), unsafe_allow_html=True)
-        else:
-            st.info("No short signals generated for this analysis period.")
-
-    with tab_all:
-        st.markdown("### 📋 Complete Signal Report")
-        st.markdown(f"*Actionable signals sorted by Confidence Score*")
-        html_all = render_styled_html(results_df)
-        st.markdown(html_all, unsafe_allow_html=True)
-        st.markdown("")
-        st.markdown(create_export_link(results_df, f"{analysis_title}_{analysis_date}_complete.csv"), unsafe_allow_html=True)
-
-    with tab_errors:
-        st.markdown(f"### ⚠️ Analysis Errors ({total_error_stocks})")
-        if not errors_df.empty:
-            html_errors = render_styled_html(errors_df)
-            st.markdown(html_errors, unsafe_allow_html=True)
-            st.warning(f"⚠️ {total_error_stocks} stocks encountered errors during analysis.")
-        else:
-            st.success("✅ No errors encountered during analysis!")
-
-# --- SIDEBAR ---
-with st.sidebar:
-    st.markdown("# ⚙️ Configuration")
-    
-    # --- REMOVED Model Selection ---
-    
-    st.markdown("### 🎯 Universe Selection")
-    analysis_universe = st.selectbox(
-        "Analysis Universe",
-        ANALYSIS_UNIVERSE_OPTIONS,
-        help="Choose between F&O stocks or specific index constituents"
-    )
-    
-    selected_index = None
-    if analysis_universe == "Index Constituents":
-        selected_index = st.selectbox(
-            "Select Index",
-            INDEX_LIST,
-            index=INDEX_LIST.index("NIFTY 500"),
-            help="Select the index for constituent analysis"
-        )
-    
-    st.markdown("### 📅 Time Period")
-    analysis_date = st.date_input(
-        "Analysis Date",
-        datetime.today().date(),
-        help="Select the date for signal analysis"
-    )
-    
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    
-    # --- FIX: Replace use_container_width=True with width='stretch' ---
-    submit_button = st.button(
-        label="Run Analysis",
-        width='stretch',
-        type="primary"
-    )
-    
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    
-    st.markdown("### ℹ️ Platform Info")
     st.markdown(f"""
     <div class='info-box'>
-        <p style='font-size: 0.85rem; margin: 0; color: var(--text-muted); line-height: 1.6;'>
-            <strong>Version:</strong> {VERSION}<br>
-            <strong>Model:</strong> ILFO (Median Scoring)<br> 
-            <strong>Data:</strong> yfinance<br>
-            <strong>Feature:</strong> Confidence Scoring
-        </p>
+        <h4>📊 Scanning {universe_title}</h4>
+        <p>MSF-based signal analysis across all securities.<br>
+        <strong>Analysis Date:</strong> {analysis_date_str} {"(Today)" if is_today else ""}</p>
     </div>
     """, unsafe_allow_html=True)
     
-    st.markdown("### 📖 Confidence System")
-    with st.expander("🎯 How It Works"):
-        st.markdown("""
-        **Advanced Weighted Scoring:**
-        - Uses a granular score based on proximity to the *statistical success median* vs. the *fail mean* for each parameter.
-        - Critical parameters are weighted more heavily.
-        - A synergy bonus is applied for multiple strong signals.
-        
-        **Grade System:**
-        - **A+ (90-100%)**: Exceptional - All criteria optimal
-        - **A (80-89%)**: Excellent - Strong alignment
-        - **B+ (70-79%)**: Good - Above average quality
-        - **B (60-69%)**: Acceptable - Moderate quality
-        - **C+ (50-59%)**: Marginal - Below average
-        - **C (40-49%)**: Weak - Poor alignment
-        - **D (<40%)**: Poor - Very weak signal
-        
-        **Sorting:**
-        Results are automatically sorted by confidence score (highest first) for easy decision-making.
-        """)
-
-# --- MAIN APP ---
-if submit_button:
-    if analysis_date > datetime.today().date():
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Validate analysis date
+    if analysis_date > datetime.date.today():
         st.error("⚠️ Analysis date cannot be in the future.")
-    else:
-        run_analysis(analysis_universe, selected_index, analysis_date) # --- REMOVED selected_model
-else:
-    st.markdown("""
-    <div class='info-box welcome'>
-        <h4>👋 Welcome to Sanket | Advanced Confidence Scoring</h4>
-        <p>
-            Experience next-generation quantitative signal analysis with sophisticated confidence scoring.
-            Our weighted proximity algorithm evaluates each signal against 10 years of backtested optimal ranges.
-        </p>
-        <ul>
-            <li><strong>Confidence Scoring:</strong> 0-100% quality score based on proximity to optimal ranges</li>
-            <li><strong>Letter Grades:</strong> A+ to D rating system for instant quality assessment</li>
-            <li><strong>Smart Sorting:</strong> Signals automatically ranked by confidence (highest first)</li>
-            <li><strong>Multi-Factor:</strong> Weighted evaluation of all critical parameters</li>
-            <li><strong>Synergy Detection:</strong> Bonus scoring for multiple strong confirmations</li>
-        </ul>
-        <p style="margin-top: 1rem; font-weight: 600; color: var(--primary-color);">
-            Configure your parameters in the sidebar and click "Run Analysis" to begin.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+        return
     
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    
-    # --- MODIFIED: Added second row of cards ---
-    # Feature highlights - Row 1 (from v.py)
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("""
-        <div class='metric-card info'>
-            <h4>🎯 PRECISION</h4>
-            <h2>Weighted</h2>
-            <div class='sub-metric'>Proximity Scoring</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class='metric-card success'>
-            <h4>📊 QUALITY</h4>
-            <h2>A+ to D</h2>
-            <div class='sub-metric'>Grade System</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown("""
-        <div class='metric-card white'>
-            <h4>🔬 VALIDATED</h4>
-            <h2>10-Year</h2>
-            <div class='sub-metric'>Backtested Ranges</div>
-        </div>
-        """, unsafe_allow_html=True)
+    if st.button("◈ RUN SCREENER", type="primary"):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         
-    # Feature highlights - Row 2 (from sanket.py)
-    col4, col5, col6 = st.columns(3)
+        # Fetch stock list based on universe selection
+        status_text.markdown(f"**⏳ Fetching {universe_title} stock list...**")
+        
+        if universe == "F&O Stocks":
+            stock_list, fetch_msg = get_fno_stock_list()
+        else:
+            stock_list, fetch_msg = get_index_stock_list(selected_index)
+        
+        if not stock_list:
+            st.error(f"Failed to fetch stock list: {fetch_msg}")
+            progress_bar.empty()
+            status_text.empty()
+            return
+        
+        st.toast(fetch_msg, icon="✅")
+        total_stocks = len(stock_list)
+        
+        # Batch download data
+        status_text.markdown(f"**⏳ Downloading data for {total_stocks} stocks...**")
+        progress_bar.progress(0.1)
+        
+        data_dict, batch_msg = fetch_batch_data(stock_list, end_date=analysis_date, days_back=100)
+        
+        if data_dict is None:
+            st.error(f"Failed to download data: {batch_msg}")
+            progress_bar.empty()
+            status_text.empty()
+            return
+        
+        st.toast(batch_msg, icon="📥")
+        
+        # Process each stock
+        results = []
+        valid_tickers = list(data_dict.keys())
+        total_valid = len(valid_tickers)
+        
+        for i, ticker in enumerate(valid_tickers):
+            status_text.markdown(f"**⏳ Analyzing {ticker.replace('.NS', '')} ({i+1}/{total_valid})**")
+            progress_bar.progress(0.1 + (0.9 * (i + 1) / total_valid))
+            
+            df = data_dict[ticker]
+            
+            if df is not None and len(df) > length + 5:
+                try:
+                    # Run MSF analysis
+                    df = run_msf_analysis(df, length, roc_len)
+                    
+                    # Find the row for the analysis date
+                    df.index = pd.to_datetime(df.index)
+                    if df.index.tz is not None:
+                        df.index = df.index.tz_localize(None)
+                    
+                    # Get the closest date on or before analysis_date
+                    analysis_datetime = pd.Timestamp(analysis_date)
+                    valid_dates = df.index[df.index <= analysis_datetime]
+                    
+                    if len(valid_dates) == 0:
+                        continue
+                    
+                    target_date = valid_dates[-1]
+                    target_idx = df.index.get_loc(target_date)
+                    
+                    if target_idx < 1:
+                        continue
+                    
+                    last_row = df.iloc[target_idx]
+                    prev_row = df.iloc[target_idx - 1]
+                    price_change = ((last_row['Close'] - prev_row['Close']) / prev_row['Close']) * 100
+                    
+                    signal_str = "BUY" if last_row['Buy_Signal'] else "SELL" if last_row['Sell_Signal'] else "-"
+                    div_str = "BULL" if last_row['Bullish_Div'] else "BEAR" if last_row['Bearish_Div'] else "-"
+                    
+                    results.append({
+                        "Symbol": ticker,
+                        "DisplayName": ticker.replace(".NS", ""),
+                        "Price": round(last_row['Close'], 2),
+                        "Change": round(price_change, 2),
+                        "Signal": round(last_row['Signal_Osc'], 2),
+                        "MSF": round(last_row['MSF'] * 10, 2),
+                        "Zone": last_row['Condition'],
+                        "Trigger": signal_str,
+                        "Divergence": div_str,
+                        "Agreement": round(last_row['Agreement'], 3)
+                    })
+                except Exception:
+                    pass
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        if results:
+            st.success(f"✅ Scan Complete! Analyzed {len(results)}/{total_stocks} stocks for {analysis_date_str}")
+            results_df = pd.DataFrame(results)
+            
+            # Calculate summary stats
+            n_oversold = len(results_df[results_df['Zone'] == 'Oversold'])
+            n_overbought = len(results_df[results_df['Zone'] == 'Overbought'])
+            n_neutral = len(results_df[results_df['Zone'] == 'Neutral'])
+            n_buys = len(results_df[results_df['Trigger'] == 'BUY'])
+            n_sells = len(results_df[results_df['Trigger'] == 'SELL'])
+            avg_signal = results_df['Signal'].mean()
+            
+            regime = "BULLISH BIAS" if avg_signal < -2 else "BEARISH BIAS" if avg_signal > 2 else "NEUTRAL"
+            regime_color = "success" if avg_signal < -2 else "danger" if avg_signal > 2 else "neutral"
+            
+            # Metrics row
+            st.markdown("<br>", unsafe_allow_html=True)
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            with c1:
+                st.markdown(f'<div class="metric-card info"><h4>Universe</h4><h2>{len(results)}</h2><div class="sub-metric">Stocks Analyzed</div></div>', unsafe_allow_html=True)
+            with c2:
+                st.markdown(f'<div class="metric-card success"><h4>Oversold</h4><h2>{n_oversold}</h2><div class="sub-metric">Buy Zone</div></div>', unsafe_allow_html=True)
+            with c3:
+                st.markdown(f'<div class="metric-card danger"><h4>Overbought</h4><h2>{n_overbought}</h2><div class="sub-metric">Sell Zone</div></div>', unsafe_allow_html=True)
+            with c4:
+                st.markdown(f'<div class="metric-card primary"><h4>Buy Signals</h4><h2>{n_buys}</h2><div class="sub-metric">Confirmed</div></div>', unsafe_allow_html=True)
+            with c5:
+                st.markdown(f'<div class="metric-card warning"><h4>Sell Signals</h4><h2>{n_sells}</h2><div class="sub-metric">Confirmed</div></div>', unsafe_allow_html=True)
+            with c6:
+                st.markdown(f'<div class="metric-card {regime_color}"><h4>Regime</h4><h2 style="font-size: 1.1rem;">{regime}</h2><div class="sub-metric">Avg: {avg_signal:.2f}</div></div>', unsafe_allow_html=True)
+            
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            
+            # Tabs for different views
+            tab1, tab2, tab3, tab4 = st.tabs(["**📊 Signal Dashboard**", "**📈 Top Signals**", "**📉 Distribution**", "**📋 Full Data**"])
+            
+            with tab1:
+                col_buy, col_sell = st.columns(2)
+                
+                with col_buy:
+                    st.markdown('<div class="signal-card buy"><div class="signal-card-header"><span class="signal-card-title">🟢 Buy Opportunities</span></div>', unsafe_allow_html=True)
+                    
+                    confirmed_buys = results_df[results_df['Trigger'] == 'BUY'].sort_values('Signal').head(15)
+                    if not confirmed_buys.empty:
+                        st.markdown('<span class="status-badge buy">CONFIRMED BUY SIGNALS</span>', unsafe_allow_html=True)
+                        for _, row in confirmed_buys.iterrows():
+                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #10b981;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+                        st.markdown("<br>", unsafe_allow_html=True)
+                    
+                    oversold = results_df[(results_df['Zone'] == 'Oversold') & (results_df['Trigger'] != 'BUY')].sort_values('Signal').head(15)
+                    if not oversold.empty:
+                        st.markdown('<span class="status-badge oversold">OVERSOLD ZONE</span>', unsafe_allow_html=True)
+                        for _, row in oversold.iterrows():
+                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #06b6d4;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+                    
+                    if confirmed_buys.empty and oversold.empty:
+                        st.markdown('<p style="color: #888888; padding: 1rem;">No buy opportunities detected</p>', unsafe_allow_html=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
+                
+                with col_sell:
+                    st.markdown('<div class="signal-card sell"><div class="signal-card-header"><span class="signal-card-title">🔴 Sell Opportunities</span></div>', unsafe_allow_html=True)
+                    
+                    confirmed_sells = results_df[results_df['Trigger'] == 'SELL'].sort_values('Signal', ascending=False).head(15)
+                    if not confirmed_sells.empty:
+                        st.markdown('<span class="status-badge sell">CONFIRMED SELL SIGNALS</span>', unsafe_allow_html=True)
+                        for _, row in confirmed_sells.iterrows():
+                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #ef4444;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+                        st.markdown("<br>", unsafe_allow_html=True)
+                    
+                    overbought = results_df[(results_df['Zone'] == 'Overbought') & (results_df['Trigger'] != 'SELL')].sort_values('Signal', ascending=False).head(15)
+                    if not overbought.empty:
+                        st.markdown('<span class="status-badge overbought">OVERBOUGHT ZONE</span>', unsafe_allow_html=True)
+                        for _, row in overbought.iterrows():
+                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #f59e0b;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+                    
+                    if confirmed_sells.empty and overbought.empty:
+                        st.markdown('<p style="color: #888888; padding: 1rem;">No sell opportunities detected</p>', unsafe_allow_html=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
+                
+                # Divergence alerts
+                st.markdown("<br>", unsafe_allow_html=True)
+                bull_divs = results_df[results_df['Divergence'] == 'BULL']
+                bear_divs = results_df[results_df['Divergence'] == 'BEAR']
+                
+                if not bull_divs.empty or not bear_divs.empty:
+                    st.markdown("##### 📊 Divergence Alerts")
+                    div_cols = st.columns(2)
+                    with div_cols[0]:
+                        if not bull_divs.empty:
+                            st.markdown('<span class="status-badge divergence">BULLISH DIVERGENCES</span>', unsafe_allow_html=True)
+                            for _, row in bull_divs.head(10).iterrows():
+                                st.markdown(f'<div class="symbol-row"><span class="symbol-name">{row["DisplayName"]}</span><span style="color: #22d3ee;">Price ▼ | Signal ▲</span></div>', unsafe_allow_html=True)
+                    with div_cols[1]:
+                        if not bear_divs.empty:
+                            st.markdown('<span class="status-badge divergence">BEARISH DIVERGENCES</span>', unsafe_allow_html=True)
+                            for _, row in bear_divs.head(10).iterrows():
+                                st.markdown(f'<div class="symbol-row"><span class="symbol-name">{row["DisplayName"]}</span><span style="color: #22d3ee;">Price ▲ | Signal ▼</span></div>', unsafe_allow_html=True)
+            
+            with tab2:
+                st.markdown("##### 🏆 Top 20 Most Oversold")
+                top_oversold = results_df.nsmallest(20, 'Signal')
+                cols_o = ['DisplayName', 'Price', 'Change', 'Signal', 'Zone', 'Trigger']
+                st.dataframe(top_oversold[cols_o].rename(columns={'DisplayName': 'Symbol', 'Change': 'Chg %'}), width="stretch", hide_index=True)
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("##### 🔻 Top 20 Most Overbought")
+                top_overbought = results_df.nlargest(20, 'Signal')
+                st.dataframe(top_overbought[cols_o].rename(columns={'DisplayName': 'Symbol', 'Change': 'Chg %'}), width="stretch", hide_index=True)
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("##### 📊 Extreme Signals Chart")
+                st.plotly_chart(create_ranking_chart(results_df, 20), width="stretch", config={'displayModeBar': False})
+            
+            with tab3:
+                col_d1, col_d2 = st.columns(2)
+                
+                with col_d1:
+                    st.markdown("##### Signal Distribution")
+                    st.plotly_chart(create_distribution_chart(results_df), width="stretch", config={'displayModeBar': False})
+                    
+                    st.markdown("##### Zone Breakdown")
+                    zone_data = {
+                        "Zone": ["Oversold (< -5)", "Neutral (-5 to +5)", "Overbought (> +5)"],
+                        "Count": [n_oversold, n_neutral, n_overbought],
+                        "Percentage": [f"{n_oversold/len(results_df)*100:.1f}%", f"{n_neutral/len(results_df)*100:.1f}%", f"{n_overbought/len(results_df)*100:.1f}%"]
+                    }
+                    st.dataframe(pd.DataFrame(zone_data), width="stretch", hide_index=True)
+                
+                with col_d2:
+                    st.markdown("##### Statistical Summary")
+                    stats_data = {
+                        "Metric": ["Total Stocks", "Mean Signal", "Median Signal", "Std Dev", "Min Signal", "Max Signal", "Buy/Sell Ratio"],
+                        "Value": [
+                            f"{len(results_df)}",
+                            f"{results_df['Signal'].mean():.2f}",
+                            f"{results_df['Signal'].median():.2f}",
+                            f"{results_df['Signal'].std():.2f}",
+                            f"{results_df['Signal'].min():.2f}",
+                            f"{results_df['Signal'].max():.2f}",
+                            f"{n_buys}:{n_sells}" if n_sells > 0 else f"{n_buys}:0"
+                        ]
+                    }
+                    st.dataframe(pd.DataFrame(stats_data), width="stretch", hide_index=True)
+                    
+                    st.markdown("##### Top Gainers Today")
+                    top_gainers = results_df.nlargest(10, 'Change')[['DisplayName', 'Price', 'Change', 'Signal']]
+                    top_gainers.columns = ['Symbol', 'Price', 'Chg %', 'Signal']
+                    st.dataframe(top_gainers, width="stretch", hide_index=True)
+                    
+                    st.markdown("##### Top Losers Today")
+                    top_losers = results_df.nsmallest(10, 'Change')[['DisplayName', 'Price', 'Change', 'Signal']]
+                    top_losers.columns = ['Symbol', 'Price', 'Chg %', 'Signal']
+                    st.dataframe(top_losers, width="stretch", hide_index=True)
+            
+            with tab4:
+                st.markdown(f"##### Complete Scan Results ({len(results_df)} stocks) - {analysis_date_str}")
+                
+                # Filter options
+                filter_col1, filter_col2, filter_col3 = st.columns(3)
+                with filter_col1:
+                    zone_filter = st.multiselect("Filter by Zone", ["Oversold", "Neutral", "Overbought"], default=["Oversold", "Neutral", "Overbought"])
+                with filter_col2:
+                    signal_filter = st.multiselect("Filter by Trigger", ["BUY", "SELL", "-"], default=["BUY", "SELL", "-"])
+                with filter_col3:
+                    sort_by = st.selectbox("Sort by", ["Signal", "Change", "Price", "DisplayName"], index=0)
+                
+                # Apply filters
+                filtered_df = results_df[
+                    (results_df['Zone'].isin(zone_filter)) & 
+                    (results_df['Trigger'].isin(signal_filter))
+                ].sort_values(sort_by, ascending=(sort_by == 'DisplayName'))
+                
+                display_cols = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'Zone', 'Trigger', 'Divergence']
+                display_df = filtered_df[display_cols].copy()
+                display_df.columns = ['Symbol', 'Price', 'Chg %', 'Signal', 'MSF', 'Zone', 'Trigger', 'Divergence']
+                
+                st.dataframe(display_df, width="stretch", hide_index=True, height=500)
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                csv_data = results_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Full Report (CSV)",
+                    data=csv_data,
+                    file_name=f"sanket_{universe_title.replace(' ', '_')}_{analysis_date.strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+        else:
+            st.warning("No data retrieved. Please check your internet connection or try a different universe.")
 
-    with col4:
-        st.markdown("""
-        <div class='metric-card danger'>
-            <h4>🎯 PRECISION</h4>
-            <h2>Multi-Factor</h2>
-            <div class='sub-metric'>Confirmation System</div>
-        </div>
-        """, unsafe_allow_html=True)
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN APPLICATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def main():
+    universe, selected_index, analysis_date, length, roc_len = render_sidebar()
+    render_header()
     
-    with col5:
-        st.markdown("""
-        <div class='metric-card neutral'>
-            <h4>⚡ SPEED</h4>
-            <h2>Real-Time</h2>
-            <div class='sub-metric'>Market Analysis</div>
-        </div>
-        """, unsafe_allow_html=True)
+    # Signal interpretation guide
+    with st.expander("📖 Signal Interpretation Guide", expanded=False):
+        col_s1, col_s2, col_s3 = st.columns(3)
+        
+        with col_s1:
+            st.markdown("""
+            <div style='background: rgba(16, 185, 129, 0.1); border: 1px solid var(--success-green); border-radius: 12px; padding: 1rem;'>
+                <h4 style='color: #10b981; margin-bottom: 0.5rem;'>🟢 Oversold Zone</h4>
+                <p style='color: #888888; font-size: 0.85rem;'>Signal < -5</p>
+                <p style='color: #EAEAEA; font-size: 0.85rem;'>
+                    Potential buying opportunity. Look for divergences and volume confirmation.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col_s2:
+            st.markdown("""
+            <div style='background: rgba(136, 136, 136, 0.1); border: 1px solid #888888; border-radius: 12px; padding: 1rem;'>
+                <h4 style='color: #888888; margin-bottom: 0.5rem;'>⚪ Neutral Zone</h4>
+                <p style='color: #888888; font-size: 0.85rem;'>Signal -5 to +5</p>
+                <p style='color: #EAEAEA; font-size: 0.85rem;'>
+                    No clear directional bias. Wait for breakout or use other confluence factors.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col_s3:
+            st.markdown("""
+            <div style='background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; border-radius: 12px; padding: 1rem;'>
+                <h4 style='color: #ef4444; margin-bottom: 0.5rem;'>🔴 Overbought Zone</h4>
+                <p style='color: #888888; font-size: 0.85rem;'>Signal > +5</p>
+                <p style='color: #EAEAEA; font-size: 0.85rem;'>
+                    Potential selling opportunity. Watch for bearish divergences and weakness.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
     
-    with col6:
-        st.markdown("""
-        <div class='metric-card primary'>
-            <h4>📊 INSIGHTS</h4>
-            <h2>Sector-Level</h2>
-            <div class='sub-metric'>Deep Analytics</div>
-        </div>
-        """, unsafe_allow_html=True)
-    # --- END MODIFICATION ---
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Run screener
+    run_screener(universe, selected_index, analysis_date, length, roc_len)
     
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    
-    # --- MODIFIED: Removed content below this line ---
-    # Confidence Scoring Explanation
-    
-    # All content below this title (Proximity, Weighting, Synergy, Example) has been removed
-    # as per the request.
-    
-st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-st.caption(f"© 2025 Sanket | @thebullishvalue | {VERSION} | Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S IST')}")
+    st.caption(f"© {datetime.datetime.now().year} Sanket | Hemrek Capital | {VERSION}")
+
+
+if __name__ == "__main__":
+    main()
