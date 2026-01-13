@@ -276,37 +276,68 @@ MACRO_SYMBOLS = {**MACRO_SYMBOLS_STOOQ, **MACRO_SYMBOLS_YF}
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_fno_stock_list():
-    """Fetch F&O stock list from NSE"""
+    """Fetch F&O stock list from NSE with multiple fallback methods"""
+    
+    # Method 1: Try NSE API directly
+    try:
+        url = "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.nseindia.com/market-data/live-equity-market?symbol=NIFTY%20FIN%20SERVICE',
+        }
+        
+        session = requests.Session()
+        # First hit the main page to get cookies
+        session.get("https://www.nseindia.com", headers=headers, timeout=10)
+        
+        response = session.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if 'data' in data:
+                symbols = [item['symbol'] for item in data['data'] if 'symbol' in item]
+                if symbols:
+                    symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
+                    return symbols_ns, f"✓ Fetched {len(symbols_ns)} F&O securities"
+    except Exception:
+        pass
+    
+    # Method 2: Try nsepython library
     try:
         stock_data = nse_get_advances_declines()
-        if not isinstance(stock_data, pd.DataFrame):
-            return None, f"API returned unexpected type: {type(stock_data)}"
-        
-        symbols = None
-        if 'SYMBOL' in stock_data.columns:
-            symbols = stock_data['SYMBOL'].tolist()
-        elif 'symbol' in stock_data.columns:
-            symbols = stock_data['symbol'].tolist()
-        elif stock_data.index.name in ['SYMBOL', 'symbol']:
-            symbols = stock_data.index.tolist()
-        else:
-            if isinstance(stock_data.index, pd.RangeIndex):
-                return None, f"Could not find SYMBOL column"
-            elif len(stock_data.index) > 0:
+        if isinstance(stock_data, pd.DataFrame):
+            symbols = None
+            if 'SYMBOL' in stock_data.columns:
+                symbols = stock_data['SYMBOL'].tolist()
+            elif 'symbol' in stock_data.columns:
+                symbols = stock_data['symbol'].tolist()
+            elif len(stock_data.index) > 0 and not isinstance(stock_data.index, pd.RangeIndex):
                 symbols = stock_data.index.tolist()
-
-        if symbols is None:
-             return None, f"Could not extract symbols"
             
-        symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
-        
-        if not symbols_ns:
-            return None, "Symbol list empty after cleaning"
-
-        return symbols_ns, f"✓ Fetched {len(symbols_ns)} F&O securities"
-            
-    except Exception as e:
-        return None, f"Error: {e}"
+            if symbols:
+                symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
+                if symbols_ns:
+                    return symbols_ns, f"✓ Fetched {len(symbols_ns)} F&O securities"
+    except Exception:
+        pass
+    
+    # Method 3: Fallback to NIFTY 500 as proxy (most F&O stocks are in NIFTY 500)
+    try:
+        url = "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, headers=headers, verify=False, timeout=10)
+        if response.status_code == 200:
+            csv_file = io.StringIO(response.text)
+            stock_df = pd.read_csv(csv_file)
+            if 'Symbol' in stock_df.columns:
+                symbols = stock_df['Symbol'].tolist()
+                symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
+                return symbols_ns, f"✓ Fetched {len(symbols_ns)} stocks (NIFTY 500 fallback)"
+    except Exception:
+        pass
+    
+    return None, "Failed to fetch F&O list from all sources"
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
