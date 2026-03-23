@@ -1,6 +1,6 @@
 """
 Sanket - Market Signal Screener | A Pragyam Product Family Member
-MSF + MMR Quantitative Signal Scanner for Indian Markets
+UMA v3 Engine (MSF + MMR + Modulators) Quantitative Signal Scanner
 """
 
 import streamlit as st
@@ -28,7 +28,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-VERSION = "v1.1.0 - MMR Engine"
+VERSION = "v3.0.0 - UMA Engine"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PRAGYAM DESIGN SYSTEM CSS
@@ -63,7 +63,6 @@ st.markdown("""
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
     .block-container { padding-top: 3.5rem; max-width: 90%; padding-left: 2rem; padding-right: 2rem; }
     
-    /* Sidebar toggle button - always visible */
     [data-testid="collapsedControl"] {
         display: flex !important;
         visibility: visible !important;
@@ -96,19 +95,6 @@ st.markdown("""
         height: 20px !important;
     }
     
-    [data-testid="stSidebar"] button[kind="header"] {
-        background-color: transparent !important;
-        border: none !important;
-    }
-    
-    [data-testid="stSidebar"] button[kind="header"] svg {
-        stroke: var(--primary-color) !important;
-    }
-    
-    button[kind="header"] {
-        z-index: 999999 !important;
-    }
-    
     .premium-header {
         background: var(--secondary-background-color);
         padding: 1.25rem 2rem;
@@ -131,7 +117,6 @@ st.markdown("""
     
     .premium-header h1 { margin: 0; font-size: 2rem; font-weight: 700; color: var(--text-primary); letter-spacing: -0.50px; position: relative; }
     .premium-header .tagline { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.25rem; font-weight: 400; position: relative; }
-    .premium-header .product-badge { display: inline-block; background: rgba(var(--primary-rgb), 0.15); color: var(--primary-color); padding: 0.25rem 0.75rem; border-radius: 20px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem; }
     
     .metric-card {
         background-color: var(--bg-card);
@@ -181,17 +166,12 @@ st.markdown("""
     .status-badge.neutral { background: rgba(136, 136, 136, 0.15); color: var(--neutral); border: 1px solid rgba(136, 136, 136, 0.3); }
     .status-badge.divergence { background: rgba(var(--primary-rgb), 0.15); color: var(--primary-color); border: 1px solid rgba(var(--primary-rgb), 0.3); }
     
-    .info-box { background: var(--secondary-background-color); border: 1px solid var(--border-color); border-left: 0px solid var(--primary-color); padding: 1.25rem; border-radius: 12px; margin: 0.5rem 0; box-shadow: 0 0 15px rgba(var(--primary-rgb), 0.08); }
+    .info-box { background: var(--secondary-background-color); border: 1px solid var(--border-color); padding: 1.25rem; border-radius: 12px; margin: 0.5rem 0; box-shadow: 0 0 15px rgba(var(--primary-rgb), 0.08); }
     .info-box h4 { color: var(--primary-color); margin: 0 0 0.5rem 0; font-size: 1rem; font-weight: 700; }
     .info-box p { color: var(--text-muted); margin: 0; font-size: 0.9rem; line-height: 1.6; }
     
     .stButton>button { border: 2px solid var(--primary-color); background: transparent; color: var(--primary-color); font-weight: 700; border-radius: 12px; padding: 0.75rem 2rem; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); text-transform: uppercase; letter-spacing: 0.5px; }
     .stButton>button:hover { box-shadow: 0 0 25px rgba(var(--primary-rgb), 0.6); background: var(--primary-color); color: #1A1A1A; transform: translateY(-2px); }
-    .stButton>button:active { transform: translateY(0); }
-    
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; background: transparent; }
-    .stTabs [data-baseweb="tab"] { color: var(--text-muted); border-bottom: 2px solid transparent; transition: color 0.3s, border-bottom 0.3s; background: transparent; font-weight: 600; }
-    .stTabs [aria-selected="true"] { color: var(--primary-color); border-bottom: 2px solid var(--primary-color); background: transparent !important; }
     
     .stPlotlyChart { border-radius: 12px; background-color: var(--secondary-background-color); padding: 10px; border: 1px solid var(--border-color); box-shadow: 0 0 25px rgba(var(--primary-rgb), 0.1); }
     .stDataFrame { border-radius: 12px; background-color: var(--secondary-background-color); border: 1px solid var(--border-color); }
@@ -202,18 +182,10 @@ st.markdown("""
     .symbol-name { font-weight: 700; color: var(--text-primary); font-size: 0.9rem; }
     .symbol-price { color: var(--text-muted); font-size: 0.85rem; }
     .symbol-score { font-weight: 700; font-size: 0.9rem; }
+    .signal-icon { font-size: 1.1rem; margin-right: 0.5rem; }
     
     .sidebar-title { font-size: 0.75rem; font-weight: 700; color: var(--primary-color); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.75rem; }
-    
     [data-testid="stSidebar"] { background: var(--secondary-background-color); border-right: 1px solid var(--border-color); }
-    
-    .stTextInput > div > div > input { background: var(--bg-elevated) !important; border: 1px solid var(--border-color) !important; border-radius: 8px !important; color: var(--text-primary) !important; }
-    .stTextInput > div > div > input:focus { border-color: var(--primary-color) !important; box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.2) !important; }
-    
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: var(--background-color); }
-    ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -276,9 +248,6 @@ MACRO_SYMBOLS = {**MACRO_SYMBOLS_STOOQ, **MACRO_SYMBOLS_YF}
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_fno_stock_list():
-    """Fetch F&O stock list from NSE with multiple fallback methods"""
-    
-    # Method 1: Try NSE API directly
     try:
         url = "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O"
         headers = {
@@ -289,7 +258,6 @@ def get_fno_stock_list():
         }
         
         session = requests.Session()
-        # First hit the main page to get cookies
         session.get("https://www.nseindia.com", headers=headers, timeout=10)
         
         response = session.get(url, headers=headers, timeout=10)
@@ -303,7 +271,6 @@ def get_fno_stock_list():
     except Exception:
         pass
     
-    # Method 2: Try nsepython library
     try:
         stock_data = nse_get_advances_declines()
         if isinstance(stock_data, pd.DataFrame):
@@ -322,7 +289,6 @@ def get_fno_stock_list():
     except Exception:
         pass
     
-    # Method 3: Fallback to NIFTY 500 as proxy (most F&O stocks are in NIFTY 500)
     try:
         url = "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
@@ -342,7 +308,6 @@ def get_fno_stock_list():
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_index_stock_list(index):
-    """Fetch index constituents from NSE Indices"""
     url = INDEX_URL_MAP.get(index)
     if not url:
         return None, f"No URL for {index}"
@@ -369,8 +334,7 @@ def get_index_stock_list(index):
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_macro_data(days_back=100):
-    """Fetch all macro data ONCE - to be reused across all stocks"""
+def fetch_macro_data(days_back=300):
     end_date = datetime.date.today()
     start_date = end_date - datetime.timedelta(days=days_back + 365)
     
@@ -422,12 +386,10 @@ def fetch_macro_data(days_back=100):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_batch_data(stock_list, end_date=None, days_back=100, include_live=True):
-    """Batch download for screener with optional live data for current day"""
+def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True):
     if end_date is None:
         end_date = datetime.date.today()
     
-    # Add buffer for end date to ensure we get the requested date
     download_end = end_date + datetime.timedelta(days=5)
     start_date = end_date - datetime.timedelta(days=days_back + 365)
     
@@ -460,9 +422,7 @@ def fetch_batch_data(stock_list, end_date=None, days_back=100, include_live=True
         else:
              return None, "Unexpected data structure"
         
-        # Fetch live data for today if requested and end_date is today
         if include_live and end_date == datetime.date.today() and data_dict:
-            # Check if today's data is missing from at least one ticker
             sample_df = list(data_dict.values())[0]
             sample_df.index = pd.to_datetime(sample_df.index)
             if sample_df.index.tz is not None:
@@ -471,7 +431,6 @@ def fetch_batch_data(stock_list, end_date=None, days_back=100, include_live=True
             has_today = any(idx.date() == datetime.date.today() for idx in sample_df.index)
             
             if not has_today:
-                # Fetch live data for all tickers
                 try:
                     live_data = yf.download(
                         list(data_dict.keys()),
@@ -487,7 +446,6 @@ def fetch_batch_data(stock_list, end_date=None, days_back=100, include_live=True
                                 try:
                                     live_ticker = live_data.xs(ticker, level=0, axis=1)
                                     if not live_ticker.empty and not live_ticker['Close'].isnull().all():
-                                        # Append live data to historical
                                         hist_df = data_dict[ticker]
                                         hist_df.index = pd.to_datetime(hist_df.index)
                                         if hist_df.index.tz is not None:
@@ -497,7 +455,6 @@ def fetch_batch_data(stock_list, end_date=None, days_back=100, include_live=True
                                         if live_ticker.index.tz is not None:
                                             live_ticker.index = live_ticker.index.tz_localize(None)
                                         
-                                        # Only append if not already present
                                         new_dates = live_ticker.index.difference(hist_df.index)
                                         if len(new_dates) > 0:
                                             data_dict[ticker] = pd.concat([hist_df, live_ticker.loc[new_dates]]).sort_index()
@@ -506,7 +463,7 @@ def fetch_batch_data(stock_list, end_date=None, days_back=100, include_live=True
                         
                         return data_dict, f"✓ Downloaded {len(data_dict)} tickers (with live data)"
                 except Exception:
-                    pass  # Fall through to return historical data only
+                    pass
             
         return data_dict, f"✓ Downloaded {len(data_dict)} tickers"
 
@@ -515,14 +472,10 @@ def fetch_batch_data(stock_list, end_date=None, days_back=100, include_live=True
 
 
 def resample_to_weekly(df):
-    """Resample daily OHLCV data to weekly candles"""
     if df is None or df.empty:
         return df
-    
     df = df.copy()
     df.index = pd.to_datetime(df.index)
-    
-    # Resample OHLCV to weekly (Week ending Friday)
     weekly = df.resample('W-FRI').agg({
         'Open': 'first',
         'High': 'max',
@@ -530,25 +483,19 @@ def resample_to_weekly(df):
         'Close': 'last',
         'Volume': 'sum'
     }).dropna()
-    
     return weekly
 
 
 def resample_macro_to_weekly(macro_df):
-    """Resample macro data to weekly (using last value of each week)"""
     if macro_df is None or macro_df.empty:
         return macro_df
-    
     macro_df = macro_df.copy()
     macro_df.index = pd.to_datetime(macro_df.index)
-    
-    # Resample to weekly using last value
     weekly = macro_df.resample('W-FRI').last().dropna(how='all')
-    
     return weekly
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MSF + MMR INDICATOR CALCULATION
+# UMA V3 ENGINE: MSF + MMR + MODULATORS CALCULATION
 # ══════════════════════════════════════════════════════════════════════════════
 
 def sigmoid(x, scale=1.0):
@@ -557,7 +504,7 @@ def sigmoid(x, scale=1.0):
 
 def zscore_clipped(series, window, clip=3.0):
     roll_mean = series.rolling(window=window).mean()
-    roll_std = series.rolling(window=window).std()
+    roll_std = series.rolling(window=window).std(ddof=1)
     z = (series - roll_mean) / roll_std.replace(0, np.nan)
     return z.clip(-clip, clip).fillna(0)
 
@@ -570,87 +517,92 @@ def calculate_atr(df, length=14):
     return tr.ewm(alpha=1/length, adjust=False).mean()
 
 
-def calculate_msf(df, length=20, roc_len=14, clip=3.0):
-    """
-    Market Structure & Flow (MSF) Indicator
-    Combines momentum, microstructure, and flow analysis
-    """
-    close = df['Close']
+def calculate_wavetrend(df, length=20, wt_channel_len=10, wt_avg_len=21):
+    ap = (df['High'] + df['Low'] + df['Close']) / 3.0
+    esa = ap.ewm(span=wt_channel_len, adjust=False).mean()
+    d = (ap - esa).abs().ewm(span=wt_channel_len, adjust=False).mean()
+    ci = (ap - esa) / (0.015 * d).replace(0, np.nan)
+    ci = ci.fillna(0)
+    wt1 = ci.ewm(span=wt_avg_len, adjust=False).mean()
+    wt2 = wt1.rolling(window=4).mean()
+    wt_z = zscore_clipped(wt1, length, 3.0)
+    wavetrend_norm = sigmoid(wt_z, 1.5)
+    return wt1, wt2, wavetrend_norm
+
+
+def calculate_entropy(df, length=20, lookback=50):
+    d1 = df['Close'].diff()
+    d_newest = d1
+    d_middle = d1.shift(1)
+    d_oldest = d1.shift(2)
+
+    pe_p1 = ((d_oldest < d_middle) & (d_middle < d_newest)).astype(float)
+    pe_p2 = ((d_oldest < d_newest) & (d_newest < d_middle)).astype(float)
+    pe_p3 = ((d_middle < d_oldest) & (d_oldest < d_newest)).astype(float)
+    pe_p4 = ((d_middle < d_newest) & (d_newest < d_oldest)).astype(float)
+    pe_p5 = ((d_newest < d_oldest) & (d_oldest < d_middle)).astype(float)
+    pe_p6 = ((d_newest < d_middle) & (d_middle < d_oldest)).astype(float)
+
+    freq_1 = pe_p1.rolling(lookback).mean().fillna(0)
+    freq_2 = pe_p2.rolling(lookback).mean().fillna(0)
+    freq_3 = pe_p3.rolling(lookback).mean().fillna(0)
+    freq_4 = pe_p4.rolling(lookback).mean().fillna(0)
+    freq_5 = pe_p5.rolling(lookback).mean().fillna(0)
+    freq_6 = pe_p6.rolling(lookback).mean().fillna(0)
+
+    def safe_xlogx(x):
+        return np.where(x > 1e-10, x * np.log(x), 0.0)
+        
+    h_raw = -(safe_xlogx(freq_1) + safe_xlogx(freq_2) + safe_xlogx(freq_3) + 
+              safe_xlogx(freq_4) + safe_xlogx(freq_5) + safe_xlogx(freq_6))
     
-    # Momentum Component
-    roc_raw = close.pct_change(roc_len, fill_method=None)
-    roc_z = zscore_clipped(roc_raw, length, clip)
-    momentum_norm = sigmoid(roc_z, 1.5)
+    h_max = np.log(6)
+    entropy_norm = pd.Series(h_raw / h_max, index=df.index)
     
-    # Microstructure Component
-    intrabar_dir = (df['High'] + df['Low']) / 2 - df['Open']
-    vol_ma = df['Volume'].rolling(length).mean()
-    vol_ratio = (df['Volume'] / vol_ma).fillna(1.0)
+    entropy_z = zscore_clipped(entropy_norm, length, 3.0)
+    entropy_sigmoid = sigmoid(entropy_z, 1.5)
+    entropy_mod = 1.0 - 0.25 * entropy_sigmoid
+    return entropy_norm, entropy_mod
+
+
+def calculate_hurst(df, short_len=10, long_len=50, sample_len=100):
+    ret_short = np.log(df['Close'] / df['Close'].shift(short_len).replace(0, np.nan))
+    ret_long = np.log(df['Close'] / df['Close'].shift(long_len).replace(0, np.nan))
     
-    vw_direction = (intrabar_dir * vol_ratio).rolling(length).mean()
-    price_change_imp = close.diff(5)
-    vw_impact = (price_change_imp * vol_ratio).rolling(length).mean()
+    std_short = ret_short.rolling(sample_len).std(ddof=1)
+    std_long = ret_long.rolling(sample_len).std(ddof=1)
     
-    micro_raw = vw_direction - vw_impact
-    micro_z = zscore_clipped(micro_raw, length, clip)
-    micro_norm = sigmoid(micro_z, 1.5)
+    log_ratio_std = np.log(std_long / std_short.replace(0, np.nan))
+    log_ratio_tau = np.log(long_len / short_len)
     
-    # Composite Trend Component
-    trend_fast = close.rolling(5).mean()
-    trend_slow = close.rolling(length).mean()
-    trend_diff_z = zscore_clipped(trend_fast - trend_slow, length, clip)
+    hurst_raw = log_ratio_std / log_ratio_tau
+    hurst_smooth = pd.Series(hurst_raw, index=df.index).ewm(span=10, adjust=False).mean()
+    hurst_clipped = hurst_smooth.clip(0.1, 0.9)
+    return hurst_clipped
+
+
+def calculate_vol_structure(df, length=20):
+    atr_s = calculate_atr(df, 5)
+    atr_l = calculate_atr(df, 20)
+    atr_ref = calculate_atr(df, 14)
     
-    mom_accel_raw = close.diff(5).diff(5)
-    mom_accel_z = zscore_clipped(mom_accel_raw, length, clip)
+    atr_ref_mean = atr_ref.rolling(length).mean()
+    atr_ref_std = atr_ref.rolling(length).std()
     
-    atr = calculate_atr(df, 14)
-    vol_adj_mom_raw = close.diff(5) / atr
-    vol_adj_mom_z = zscore_clipped(vol_adj_mom_raw, length, clip)
+    vov_raw = atr_ref_std / atr_ref_mean.replace(0, np.nan)
+    vts_raw = atr_s / atr_l.replace(0, np.nan)
     
-    mean_rev_z = zscore_clipped(close - trend_slow, length, clip)
+    vov_z = zscore_clipped(vov_raw.fillna(0), length, 3.0)
+    vts_z = zscore_clipped(vts_raw.fillna(1.0), length, 3.0)
     
-    composite_trend_z = (trend_diff_z + mom_accel_z + vol_adj_mom_z + mean_rev_z) / np.sqrt(4.0)
-    composite_trend_norm = sigmoid(composite_trend_z, 1.5)
+    vol_stress_z = (vov_z + vts_z) / np.sqrt(2.0)
+    vol_stress_sigmoid = sigmoid(vol_stress_z, 1.5)
     
-    # Flow Component
-    typical_price = (df['High'] + df['Low'] + close) / 3
-    mf = typical_price * df['Volume']
-    mf_pos = np.where(close > close.shift(1), mf, 0)
-    mf_neg = np.where(close < close.shift(1), mf, 0)
-    
-    mf_pos_smooth = pd.Series(mf_pos, index=df.index).rolling(length).mean()
-    mf_neg_smooth = pd.Series(mf_neg, index=df.index).rolling(length).mean()
-    mf_total = mf_pos_smooth + mf_neg_smooth
-    
-    accum_ratio = mf_pos_smooth / mf_total.replace(0, np.nan)
-    accum_ratio = accum_ratio.fillna(0.5)
-    accum_norm = 2.0 * (accum_ratio - 0.5)
-    
-    # Regime Component
-    pct_change = close.pct_change(fill_method=None)
-    threshold = 0.0033
-    regime_signals = np.select([pct_change > threshold, pct_change < -threshold], [1, -1], default=0)
-    regime_count = pd.Series(regime_signals, index=df.index).cumsum()
-    regime_raw = regime_count - regime_count.rolling(length).mean()
-    regime_z = zscore_clipped(regime_raw, length, clip)
-    regime_norm = sigmoid(regime_z, 1.5)
-    
-    # Combine Components
-    osc_momentum = momentum_norm
-    osc_structure = (micro_norm + composite_trend_norm) / np.sqrt(2.0)
-    osc_flow = (accum_norm + regime_norm) / np.sqrt(2.0)
-    
-    msf_raw = (osc_momentum + osc_structure + osc_flow) / np.sqrt(3.0)
-    msf_signal = sigmoid(msf_raw * np.sqrt(3.0), 1.0)
-    
-    return msf_signal, micro_norm, momentum_norm, accum_norm
+    vol_mod = 1.0 - 0.15 * np.maximum(vol_stress_sigmoid, 0.0)
+    return vol_mod, vol_stress_sigmoid
 
 
 def calculate_mmr(df, length=20, num_vars=5):
-    """
-    Macro Market Regression (MMR) Indicator
-    Correlates price with macro factors
-    """
     available_macros = [v for v in MACRO_SYMBOLS.values() if v in df.columns]
     target = df['Close']
     
@@ -699,15 +651,85 @@ def calculate_mmr(df, length=20, num_vars=5):
 
 
 def run_full_analysis(df, length, roc_len, regime_sensitivity=1.5, base_weight=0.5):
-    """Run full MSF + MMR analysis"""
-    df['MSF'], df['Micro'], df['Momentum'], df['Flow'] = calculate_msf(df, length, roc_len)
-    df['MMR'], df['MMR_Quality'] = calculate_mmr(df, length, num_vars=5)
+    """Run full UMA v3 Engine Analysis"""
+    close = df['Close']
     
-    # Adaptive weighting
-    msf_clarity = df['MSF'].abs()
-    mmr_clarity = df['MMR'].abs()
+    # 1. Base MSF Families
+    # Momentum
+    roc_raw = close.pct_change(roc_len, fill_method=None)
+    roc_z = zscore_clipped(roc_raw, length, 3.0)
+    momentum_norm = sigmoid(roc_z, 1.5)
+    
+    # Structure
+    intrabar_dir = (df['High'] + df['Low']) / 2 - df['Open']
+    vol_ma = df['Volume'].rolling(length).mean()
+    vol_ratio = (df['Volume'] / vol_ma).fillna(1.0)
+    vw_direction = (intrabar_dir * vol_ratio).rolling(length).mean()
+    price_change_imp = close - close.shift(5)
+    vw_impact = (price_change_imp * vol_ratio).rolling(length).mean()
+    micro_raw = vw_direction - vw_impact
+    micro_norm = sigmoid(zscore_clipped(micro_raw, length, 3.0), 1.5)
+    
+    trend_fast = close.rolling(5).mean()
+    trend_slow = close.rolling(length).mean()
+    trend_diff_z = zscore_clipped(trend_fast - trend_slow, length, 3.0)
+    mom_accel_z = zscore_clipped(close.diff(5).diff(5), length, 3.0)
+    atr = calculate_atr(df, 14)
+    vol_adj_mom_z = zscore_clipped(close.diff(5) / atr.replace(0, np.nan), length, 3.0)
+    mean_rev_z = zscore_clipped(close - trend_slow, length, 3.0)
+    composite_trend_norm = sigmoid((trend_diff_z + mom_accel_z + vol_adj_mom_z + mean_rev_z) / np.sqrt(4.0), 1.5)
+    
+    # Flow
+    typical_price = (df['High'] + df['Low'] + close) / 3
+    mf = typical_price * df['Volume']
+    mf_pos = pd.Series(np.where(close > close.shift(1), mf, 0), index=df.index).rolling(length).mean()
+    mf_neg = pd.Series(np.where(close < close.shift(1), mf, 0), index=df.index).rolling(length).mean()
+    mf_total = mf_pos + mf_neg
+    accum_norm = 2.0 * ((mf_pos / mf_total.replace(0, np.nan)).fillna(0.5) - 0.5)
+    
+    pct_change = close.pct_change(fill_method=None)
+    regime_signals = np.select([pct_change > 0.0033, pct_change < -0.0033], [1, -1], default=0)
+    regime_count = pd.Series(regime_signals, index=df.index).cumsum()
+    regime_raw = regime_count - regime_count.rolling(length).mean()
+    regime_norm = sigmoid(zscore_clipped(regime_raw, length, 3.0), 1.5)
+    
+    # Cycle
+    wt1, wt2, wavetrend_norm = calculate_wavetrend(df, length)
+    
+    # 2. Modulators
+    entropy_norm, entropy_mod = calculate_entropy(df, length)
+    hurst_clipped = calculate_hurst(df)
+    vol_mod, vol_stress_sigmoid = calculate_vol_structure(df, length)
+    
+    # 3. Hurst Tilting & MSF Aggregation
+    hurst_tilt = ((hurst_clipped - 0.5) * 2.5).clip(-1.0, 1.0)
+    hurst_w_momentum = 1.0 + hurst_tilt * 0.3
+    hurst_w_structure = 1.0 + hurst_tilt * 0.3
+    hurst_w_flow = 1.0 - hurst_tilt * 0.15
+    hurst_w_cycle = 1.0 - hurst_tilt * 0.3
+    hurst_w_denom = np.sqrt(hurst_w_momentum**2 + hurst_w_structure**2 + hurst_w_flow**2 + hurst_w_cycle**2)
+    
+    osc_momentum = momentum_norm
+    osc_structure = (micro_norm + composite_trend_norm) / np.sqrt(2.0)
+    osc_flow = (accum_norm + regime_norm) / np.sqrt(2.0)
+    osc_cycle = wavetrend_norm
+    
+    msf_raw_weighted = (hurst_w_momentum * osc_momentum + hurst_w_structure * osc_structure + 
+                        hurst_w_flow * osc_flow + hurst_w_cycle * osc_cycle)
+    
+    msf_raw = msf_raw_weighted / hurst_w_denom.replace(0, 1.0)
+    msf_pre_mod = sigmoid(msf_raw * 2.0, 1.0)
+    msf_signal = (msf_pre_mod * entropy_mod).clip(-1.0, 1.0)
+    
+    # 4. MMR
+    mmr_signal, mmr_quality = calculate_mmr(df, length, num_vars=5)
+    
+    # 5. Integration
+    msf_clarity = msf_signal.abs()
+    mmr_clarity = mmr_signal.abs()
+    
     msf_clarity_scaled = msf_clarity.pow(regime_sensitivity)
-    mmr_clarity_scaled = (mmr_clarity * df['MMR_Quality']).pow(regime_sensitivity)
+    mmr_clarity_scaled = (mmr_clarity * mmr_quality).pow(regime_sensitivity)
     clarity_sum = msf_clarity_scaled + mmr_clarity_scaled + 0.001
     
     msf_w_adaptive = msf_clarity_scaled / clarity_sum
@@ -716,48 +738,57 @@ def run_full_analysis(df, length, roc_len, regime_sensitivity=1.5, base_weight=0
     msf_w_final = 0.5 * base_weight + 0.5 * msf_w_adaptive
     mmr_w_final = 0.5 * (1.0 - base_weight) + 0.5 * mmr_w_adaptive
     w_sum = msf_w_final + mmr_w_final
+    
     msf_w_norm = msf_w_final / w_sum
     mmr_w_norm = mmr_w_final / w_sum
     
-    unified_signal = (msf_w_norm * df['MSF']) + (mmr_w_norm * df['MMR'])
+    unified_signal = (msf_w_norm * msf_signal) + (mmr_w_norm * mmr_signal)
     
-    # Agreement multiplier
-    agreement = df['MSF'] * df['MMR']
-    agree_strength = agreement.abs()
-    multiplier = np.where(agreement > 0, 1.0 + 0.2 * agree_strength, 1.0 - 0.1 * agree_strength)
+    signal_agreement = msf_signal * mmr_signal
+    agreement_strength = signal_agreement.abs()
     
-    df['Unified'] = (unified_signal * multiplier).clip(-1.0, 1.0)
-    df['Unified_Osc'] = df['Unified'] * 10
-    df['MSF_Osc'] = df['MSF'] * 10
-    df['MMR_Osc'] = df['MMR'] * 10
-    df['MSF_Weight'] = msf_w_norm
-    df['MMR_Weight'] = mmr_w_norm
-    df['Agreement'] = agreement
+    wt_bull_cross = (wt1 > wt2) & (wt1.shift(1) <= wt2.shift(1))
+    wt_bear_cross = (wt1 < wt2) & (wt1.shift(1) >= wt2.shift(1))
     
-    # Signals require strong agreement
-    strong_agreement = agreement > 0.3
-    df['Buy_Signal'] = strong_agreement & (df['Unified_Osc'] < -5)
-    df['Sell_Signal'] = strong_agreement & (df['Unified_Osc'] > 5)
+    cycle_confirm = np.where(wt_bull_cross, 1.0, np.where(wt_bear_cross, -1.0, 0.0))
+    cycle_alignment = cycle_confirm * np.sign(unified_signal)
     
-    # Divergences
+    base_agreement_mult = np.where(signal_agreement > 0, 1.0 + 0.2 * agreement_strength, 1.0 - 0.1 * agreement_strength)
+    cycle_boost = np.where(cycle_alignment > 0, 1.05, np.where(cycle_alignment < 0, 0.95, 1.0))
+    
+    unified_pre_vol = unified_signal * base_agreement_mult * cycle_boost
+    unified_final = (unified_pre_vol * vol_mod).clip(-1.0, 1.0)
+    
+    # Ensure scaling
+    df['Unified_Osc'] = unified_final * 10.0
+    df['MSF_Osc'] = msf_signal * 10.0
+    df['MMR_Osc'] = mmr_signal * 10.0
+    
+    # 6. Specific UMA v3 Signals Matching
+    strong_agreement = signal_agreement > 0.3
+    
     osc_rising = df['Unified_Osc'] > df['Unified_Osc'].shift(1)
-    price_falling = df['Close'] < df['Close'].shift(1)
+    price_falling = close < close.shift(1)
     osc_falling = df['Unified_Osc'] < df['Unified_Osc'].shift(1)
-    price_rising = df['Close'] > df['Close'].shift(1)
-
-    df['Bullish_Div'] = osc_rising & price_falling & (df['Unified_Osc'] < -5)
-    df['Bearish_Div'] = osc_falling & price_rising & (df['Unified_Osc'] > 5)
+    price_rising = close > close.shift(1)
     
-    # Condition labels
-    conditions = []
-    for val in df['Unified_Osc']:
-        if val < -5:
-            conditions.append("Oversold")
-        elif val > 5:
-            conditions.append("Overbought")
-        else:
-            conditions.append("Neutral")
-    df['Condition'] = conditions
+    # Triangle = Divergence Signals
+    df['Triangle_Buy'] = osc_rising & price_falling & (df['Unified_Osc'] < -5)
+    df['Triangle_Sell'] = osc_falling & price_rising & (df['Unified_Osc'] > 5)
+    
+    # Circle = Confirmed OB/OS Strong Agreement Signals
+    df['Circle_Buy'] = strong_agreement & (df['Unified_Osc'] < -5)
+    df['Circle_Sell'] = strong_agreement & (df['Unified_Osc'] > 5)
+    
+    # Diamond = WT Cross in Extreme Zones
+    df['Diamond_Buy'] = wt_bull_cross & (wt1 < -53)
+    df['Diamond_Sell'] = wt_bear_cross & (wt1 > 53)
+    
+    df['Condition'] = np.select(
+        [df['Unified_Osc'] < -5, df['Unified_Osc'] > 5],
+        ['Oversold', 'Overbought'],
+        default='Neutral'
+    )
 
     return df
 
@@ -766,7 +797,6 @@ def run_full_analysis(df, length, roc_len, regime_sensitivity=1.5, base_weight=0
 # ══════════════════════════════════════════════════════════════════════════════
 
 def create_distribution_chart(results_df):
-    """Create signal distribution histogram"""
     fig = go.Figure()
     fig.add_trace(go.Histogram(
         x=results_df['Signal'], 
@@ -790,7 +820,6 @@ def create_distribution_chart(results_df):
 
 
 def create_ranking_chart(results_df, top_n=20):
-    """Create horizontal bar chart of extreme signals"""
     sorted_df = results_df.sort_values('Signal')
     bottom = sorted_df.head(top_n//2)
     top = sorted_df.tail(top_n//2)
@@ -820,10 +849,10 @@ def create_ranking_chart(results_df, top_n=20):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def render_header():
-    st.markdown("""
+    st.markdown(f"""
     <div class="premium-header">
         <h1>Sanket : Market Signal Screener</h1>
-        <div class="tagline">MSF + MMR Quantitative Signal Scanner</div>
+        <div class="tagline">UMA v3 Quantitative Signal Scanner (MSF + MMR + Ent/Hurst/Vol)</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -838,7 +867,6 @@ def render_sidebar():
         """, unsafe_allow_html=True)
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
-        # Timeframe Selection (NEW)
         st.markdown('<div class="sidebar-title">⏱️ Timeframe</div>', unsafe_allow_html=True)
         timeframe = st.radio(
             "Select Timeframe",
@@ -849,7 +877,6 @@ def render_sidebar():
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
-        # Universe Selection
         st.markdown('<div class="sidebar-title">🎯 Universe Selection</div>', unsafe_allow_html=True)
         universe = st.selectbox(
             "Analysis Universe",
@@ -868,7 +895,6 @@ def render_sidebar():
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
-        # Analysis Date
         st.markdown('<div class="sidebar-title">📅 Analysis Date</div>', unsafe_allow_html=True)
         analysis_date = st.date_input(
             "Select Date",
@@ -879,9 +905,8 @@ def render_sidebar():
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
-        # Parameters
         st.markdown('<div class="sidebar-title">⚙️ Parameters</div>', unsafe_allow_html=True)
-        with st.expander("MSF + MMR Settings", expanded=False):
+        with st.expander("UMA Settings", expanded=False):
             length = st.slider("Lookback Period", 10, 50, 20)
             roc_len = st.slider("ROC Length", 5, 30, 14)
             regime_sensitivity = st.slider("Regime Sensitivity", 0.5, 3.0, 1.5, 0.1)
@@ -893,7 +918,7 @@ def render_sidebar():
         <div class='info-box'>
             <p style='font-size: 0.8rem; margin: 0; color: var(--text-muted); line-height: 1.5;'>
                 <strong>Version:</strong> {VERSION}<br>
-                <strong>Engine:</strong> MSF + MMR Synthesis<br>
+                <strong>Engine:</strong> UMA v3 Synthesis<br>
                 <strong>Data:</strong> Live Market Feed
             </p>
         </div>
@@ -906,9 +931,6 @@ def render_sidebar():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_screener(universe, selected_index, analysis_date, length, roc_len, regime_sensitivity, base_weight, timeframe):
-    """Main screener function with MMR and timeframe support"""
-    
-    # Format display
     analysis_date_str = analysis_date.strftime("%d %b %Y")
     is_today = analysis_date == datetime.date.today()
     
@@ -918,14 +940,13 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
     st.markdown(f"""
     <div class='info-box'>
         <h4>📊 Scanning {universe_title} ({timeframe_label})</h4>
-        <p>MSF + MMR signal analysis across all securities.<br>
+        <p>UMA v3 signal analysis across all securities.<br>
         <strong>Analysis Date:</strong> {analysis_date_str} {"(Today)" if is_today else ""} | <strong>Timeframe:</strong> {timeframe_label}</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Validate analysis date
     if analysis_date > datetime.date.today():
         st.error("⚠️ Analysis date cannot be in the future.")
         return
@@ -934,9 +955,8 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # Step 1: Fetch stock list
+        # 1. Fetch stock list
         status_text.markdown(f"**⏳ Fetching {universe_title} stock list...**")
-        
         if universe == "F&O Stocks":
             stock_list, fetch_msg = get_fno_stock_list()
         else:
@@ -952,25 +972,23 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
         total_stocks = len(stock_list)
         progress_bar.progress(0.05)
         
-        # Step 2: Fetch macro data ONCE (optimized)
+        # 2. Fetch macro data 
         status_text.markdown("**⏳ Fetching global macro data (one-time)...**")
-        days_back_macro = 200 if timeframe == "Weekly" else 100
+        days_back_macro = 400 if timeframe == "Weekly" else 300
         macro_df = fetch_macro_data(days_back=days_back_macro + (datetime.date.today() - analysis_date).days)
         
         if macro_df.empty:
-            st.warning("⚠️ Could not fetch macro data. Running with MSF-only mode.")
+            st.warning("⚠️ Could not fetch macro data. Running with internal MSF mode only.")
         else:
-            # Resample macro data if weekly
             if timeframe == "Weekly":
                 macro_df = resample_macro_to_weekly(macro_df)
             st.toast(f"✓ Loaded {len(macro_df.columns)} macro factors", icon="📊")
         
         progress_bar.progress(0.1)
         
-        # Step 3: Batch download stock data
+        # 3. Batch download stock data
         status_text.markdown(f"**⏳ Downloading data for {total_stocks} stocks...**")
-        
-        days_back = 200 if timeframe == "Weekly" else 100
+        days_back = 500 if timeframe == "Weekly" else 300
         data_dict, batch_msg = fetch_batch_data(stock_list, end_date=analysis_date, days_back=days_back)
         
         if data_dict is None:
@@ -982,7 +1000,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
         st.toast(batch_msg, icon="📥")
         progress_bar.progress(0.2)
         
-        # Step 4: Process each stock
+        # 4. Process each stock
         results = []
         valid_tickers = list(data_dict.keys())
         total_valid = len(valid_tickers)
@@ -993,36 +1011,27 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
             
             df = data_dict[ticker]
             
-            if df is None or len(df) < length + 10:
+            if df is None or len(df) < length + 100: # Need extra length for Entropy & Hurst
                 continue
                 
             try:
-                # Normalize index
                 df.index = pd.to_datetime(df.index)
                 if df.index.tz is not None:
                     df.index = df.index.tz_localize(None)
                 
-                # Resample to weekly if needed
                 if timeframe == "Weekly":
                     df = resample_to_weekly(df)
-                    if df is None or len(df) < length + 5:
+                    if df is None or len(df) < length + 50:
                         continue
                 
-                # Join with macro data (reusing the pre-fetched macro_df)
                 if not macro_df.empty:
                     df = df.join(macro_df, how='left').ffill()
                 
-                # Run full MSF + MMR analysis
+                # Execute UMA v3 Engine Analysis
                 df = run_full_analysis(df, length, roc_len, regime_sensitivity, base_weight)
                 
-                # Find the row for the analysis date
                 analysis_datetime = pd.Timestamp(analysis_date)
-                
-                if timeframe == "Weekly":
-                    # For weekly, find the week containing the analysis date
-                    valid_dates = df.index[df.index <= analysis_datetime]
-                else:
-                    valid_dates = df.index[df.index <= analysis_datetime]
+                valid_dates = df.index[df.index <= analysis_datetime]
                 
                 if len(valid_dates) == 0:
                     continue
@@ -1037,8 +1046,22 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                 prev_row = df.iloc[target_idx - 1]
                 price_change = ((last_row['Close'] - prev_row['Close']) / prev_row['Close']) * 100
                 
-                signal_str = "BUY" if last_row['Buy_Signal'] else "SELL" if last_row['Sell_Signal'] else "-"
-                div_str = "BULL" if last_row['Bullish_Div'] else "BEAR" if last_row['Bearish_Div'] else "-"
+                # Determine triggers based on UMA v3 rules (Divergence = Triangle, Confirm = Circle, Diamond = WT)
+                signals = []
+                # Diamond
+                if last_row['Diamond_Buy']: signals.append("💎 BUY")
+                if last_row['Diamond_Sell']: signals.append("🔶 SELL")
+                # Circle
+                if last_row['Circle_Buy']: signals.append("🟢 BUY")
+                if last_row['Circle_Sell']: signals.append("🔴 SELL")
+                # Triangle
+                if last_row['Triangle_Buy']: signals.append("🔺 DIV")
+                if last_row['Triangle_Sell']: signals.append("🔻 DIV")
+                
+                trigger_str = " | ".join(signals) if signals else "-"
+                
+                # Broad classification
+                broad_class = "BUY" if (last_row['Diamond_Buy'] or last_row['Circle_Buy']) else "SELL" if (last_row['Diamond_Sell'] or last_row['Circle_Sell']) else "-"
                 
                 results.append({
                     "Symbol": ticker,
@@ -1049,9 +1072,11 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                     "MSF": round(last_row['MSF_Osc'], 2),
                     "MMR": round(last_row['MMR_Osc'], 2),
                     "Zone": last_row['Condition'],
-                    "Trigger": signal_str,
-                    "Divergence": div_str,
-                    "Agreement": round(last_row['Agreement'], 3)
+                    "Detailed Trigger": trigger_str,
+                    "Trigger": broad_class,
+                    "Has Diamond": last_row['Diamond_Buy'] or last_row['Diamond_Sell'],
+                    "Has Circle": last_row['Circle_Buy'] or last_row['Circle_Sell'],
+                    "Has Triangle": last_row['Triangle_Buy'] or last_row['Triangle_Sell'],
                 })
             except Exception:
                 pass
@@ -1063,10 +1088,8 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
             st.success(f"✅ Scan Complete! Analyzed {len(results)}/{total_stocks} stocks ({timeframe_label}) for {analysis_date_str}")
             results_df = pd.DataFrame(results)
             
-            # Calculate summary stats
             n_oversold = len(results_df[results_df['Zone'] == 'Oversold'])
             n_overbought = len(results_df[results_df['Zone'] == 'Overbought'])
-            n_neutral = len(results_df[results_df['Zone'] == 'Neutral'])
             n_buys = len(results_df[results_df['Trigger'] == 'BUY'])
             n_sells = len(results_df[results_df['Trigger'] == 'SELL'])
             avg_signal = results_df['Signal'].mean()
@@ -1074,7 +1097,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
             regime = "BULLISH BIAS" if avg_signal < -2 else "BEARISH BIAS" if avg_signal > 2 else "NEUTRAL"
             regime_color = "success" if avg_signal < -2 else "danger" if avg_signal > 2 else "neutral"
             
-            # Metrics row
+            # Metrics
             st.markdown("<br>", unsafe_allow_html=True)
             c1, c2, c3, c4, c5, c6 = st.columns(6)
             with c1:
@@ -1092,7 +1115,6 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
             
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             
-            # Tabs for different views
             tab1, tab2, tab3, tab4 = st.tabs(["**📊 Signal Dashboard**", "**📈 Top Signals**", "**📉 Distribution**", "**📋 Full Data**"])
             
             with tab1:
@@ -1101,66 +1123,70 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                 with col_buy:
                     st.markdown('<div class="signal-card buy"><div class="signal-card-header"><span class="signal-card-title">🟢 Buy Opportunities</span></div>', unsafe_allow_html=True)
                     
-                    confirmed_buys = results_df[results_df['Trigger'] == 'BUY'].sort_values('Signal').head(15)
-                    if not confirmed_buys.empty:
-                        st.markdown('<span class="status-badge buy">CONFIRMED BUY SIGNALS</span>', unsafe_allow_html=True)
-                        for _, row in confirmed_buys.iterrows():
+                    # Diamond Buys
+                    diamonds_buy = results_df[results_df['Detailed Trigger'].str.contains("💎")].sort_values('Signal')
+                    if not diamonds_buy.empty:
+                        st.markdown('<span class="status-badge buy">💎 WT CYCLE CROSSED</span>', unsafe_allow_html=True)
+                        for _, row in diamonds_buy.head(10).iterrows():
                             st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #10b981;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
                         st.markdown("<br>", unsafe_allow_html=True)
-                    
-                    oversold = results_df[(results_df['Zone'] == 'Oversold') & (results_df['Trigger'] != 'BUY')].sort_values('Signal').head(15)
-                    if not oversold.empty:
-                        st.markdown('<span class="status-badge oversold">OVERSOLD ZONE</span>', unsafe_allow_html=True)
-                        for _, row in oversold.iterrows():
+
+                    # Circle Buys
+                    circles_buy = results_df[results_df['Detailed Trigger'].str.contains("🟢")].sort_values('Signal')
+                    if not circles_buy.empty:
+                        st.markdown('<span class="status-badge oversold">🟢 STRONG AGREEMENT BUY</span>', unsafe_allow_html=True)
+                        for _, row in circles_buy.head(10).iterrows():
                             st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #06b6d4;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
-                    
-                    if confirmed_buys.empty and oversold.empty:
-                        st.markdown('<p style="color: #888888; padding: 1rem;">No buy opportunities detected</p>', unsafe_allow_html=True)
+
+                    if diamonds_buy.empty and circles_buy.empty:
+                        st.markdown('<p style="color: #888888; padding: 1rem;">No confirmed buy opportunities detected</p>', unsafe_allow_html=True)
                     st.markdown("</div>", unsafe_allow_html=True)
                 
                 with col_sell:
                     st.markdown('<div class="signal-card sell"><div class="signal-card-header"><span class="signal-card-title">🔴 Sell Opportunities</span></div>', unsafe_allow_html=True)
                     
-                    confirmed_sells = results_df[results_df['Trigger'] == 'SELL'].sort_values('Signal', ascending=False).head(15)
-                    if not confirmed_sells.empty:
-                        st.markdown('<span class="status-badge sell">CONFIRMED SELL SIGNALS</span>', unsafe_allow_html=True)
-                        for _, row in confirmed_sells.iterrows():
+                    # Diamond Sells
+                    diamonds_sell = results_df[results_df['Detailed Trigger'].str.contains("🔶")].sort_values('Signal', ascending=False)
+                    if not diamonds_sell.empty:
+                        st.markdown('<span class="status-badge sell">🔶 WT CYCLE CROSSED</span>', unsafe_allow_html=True)
+                        for _, row in diamonds_sell.head(10).iterrows():
                             st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #ef4444;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
                         st.markdown("<br>", unsafe_allow_html=True)
-                    
-                    overbought = results_df[(results_df['Zone'] == 'Overbought') & (results_df['Trigger'] != 'SELL')].sort_values('Signal', ascending=False).head(15)
-                    if not overbought.empty:
-                        st.markdown('<span class="status-badge overbought">OVERBOUGHT ZONE</span>', unsafe_allow_html=True)
-                        for _, row in overbought.iterrows():
+
+                    # Circle Sells
+                    circles_sell = results_df[results_df['Detailed Trigger'].str.contains("🔴")].sort_values('Signal', ascending=False)
+                    if not circles_sell.empty:
+                        st.markdown('<span class="status-badge overbought">🔴 STRONG AGREEMENT SELL</span>', unsafe_allow_html=True)
+                        for _, row in circles_sell.head(10).iterrows():
                             st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #f59e0b;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
-                    
-                    if confirmed_sells.empty and overbought.empty:
-                        st.markdown('<p style="color: #888888; padding: 1rem;">No sell opportunities detected</p>', unsafe_allow_html=True)
+
+                    if diamonds_sell.empty and circles_sell.empty:
+                        st.markdown('<p style="color: #888888; padding: 1rem;">No confirmed sell opportunities detected</p>', unsafe_allow_html=True)
                     st.markdown("</div>", unsafe_allow_html=True)
                 
-                # Divergence alerts
+                # Divergence Alerts (Triangles)
                 st.markdown("<br>", unsafe_allow_html=True)
-                bull_divs = results_df[results_df['Divergence'] == 'BULL']
-                bear_divs = results_df[results_df['Divergence'] == 'BEAR']
+                bull_divs = results_df[results_df['Detailed Trigger'].str.contains("🔺")]
+                bear_divs = results_df[results_df['Detailed Trigger'].str.contains("🔻")]
                 
                 if not bull_divs.empty or not bear_divs.empty:
-                    st.markdown("##### 📊 Divergence Alerts")
+                    st.markdown("##### 📐 Divergence Alerts")
                     div_cols = st.columns(2)
                     with div_cols[0]:
                         if not bull_divs.empty:
-                            st.markdown('<span class="status-badge divergence">BULLISH DIVERGENCES</span>', unsafe_allow_html=True)
+                            st.markdown('<span class="status-badge divergence">🔺 BULLISH DIVERGENCES</span>', unsafe_allow_html=True)
                             for _, row in bull_divs.head(10).iterrows():
                                 st.markdown(f'<div class="symbol-row"><span class="symbol-name">{row["DisplayName"]}</span><span style="color: #FFC300;">Price ▼ | Signal ▲</span></div>', unsafe_allow_html=True)
                     with div_cols[1]:
                         if not bear_divs.empty:
-                            st.markdown('<span class="status-badge divergence">BEARISH DIVERGENCES</span>', unsafe_allow_html=True)
+                            st.markdown('<span class="status-badge divergence">🔻 BEARISH DIVERGENCES</span>', unsafe_allow_html=True)
                             for _, row in bear_divs.head(10).iterrows():
                                 st.markdown(f'<div class="symbol-row"><span class="symbol-name">{row["DisplayName"]}</span><span style="color: #FFC300;">Price ▲ | Signal ▼</span></div>', unsafe_allow_html=True)
             
             with tab2:
                 st.markdown("##### 🏆 Top 20 Most Oversold")
                 top_oversold = results_df.nsmallest(20, 'Signal')
-                cols_o = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'MMR', 'Zone', 'Trigger']
+                cols_o = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'MMR', 'Zone', 'Detailed Trigger']
                 st.dataframe(top_oversold[cols_o].rename(columns={'DisplayName': 'Symbol', 'Change': 'Chg %'}), width="stretch", hide_index=True)
                 
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -1180,6 +1206,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                     st.plotly_chart(create_distribution_chart(results_df), width="stretch", config={'displayModeBar': False})
                     
                     st.markdown("##### Zone Breakdown")
+                    n_neutral = len(results_df[results_df['Zone'] == 'Neutral'])
                     zone_data = {
                         "Zone": ["Oversold (< -5)", "Neutral (-5 to +5)", "Overbought (> +5)"],
                         "Count": [n_oversold, n_neutral, n_overbought],
@@ -1207,33 +1234,26 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                     top_gainers = results_df.nlargest(10, 'Change')[['DisplayName', 'Price', 'Change', 'Signal']]
                     top_gainers.columns = ['Symbol', 'Price', 'Chg %', 'Signal']
                     st.dataframe(top_gainers, width="stretch", hide_index=True)
-                    
-                    st.markdown("##### Top Losers")
-                    top_losers = results_df.nsmallest(10, 'Change')[['DisplayName', 'Price', 'Change', 'Signal']]
-                    top_losers.columns = ['Symbol', 'Price', 'Chg %', 'Signal']
-                    st.dataframe(top_losers, width="stretch", hide_index=True)
             
             with tab4:
                 st.markdown(f"##### Complete Scan Results ({len(results_df)} stocks) - {analysis_date_str} ({timeframe_label})")
                 
-                # Filter options
                 filter_col1, filter_col2, filter_col3 = st.columns(3)
                 with filter_col1:
                     zone_filter = st.multiselect("Filter by Zone", ["Oversold", "Neutral", "Overbought"], default=["Oversold", "Neutral", "Overbought"])
                 with filter_col2:
-                    signal_filter = st.multiselect("Filter by Trigger", ["BUY", "SELL", "-"], default=["BUY", "SELL", "-"])
+                    signal_filter = st.multiselect("Filter by Direction", ["BUY", "SELL", "-"], default=["BUY", "SELL", "-"])
                 with filter_col3:
                     sort_by = st.selectbox("Sort by", ["Signal", "Change", "Price", "DisplayName"], index=0)
                 
-                # Apply filters
                 filtered_df = results_df[
                     (results_df['Zone'].isin(zone_filter)) & 
                     (results_df['Trigger'].isin(signal_filter))
                 ].sort_values(sort_by, ascending=(sort_by == 'DisplayName'))
                 
-                display_cols = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'MMR', 'Zone', 'Trigger', 'Divergence']
+                display_cols = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'MMR', 'Zone', 'Detailed Trigger']
                 display_df = filtered_df[display_cols].copy()
-                display_df.columns = ['Symbol', 'Price', 'Chg %', 'Signal', 'MSF', 'MMR', 'Zone', 'Trigger', 'Divergence']
+                display_df.columns = ['Symbol', 'Price', 'Chg %', 'Signal', 'MSF', 'MMR', 'Zone', 'UMA Triggers']
                 
                 st.dataframe(display_df, width="stretch", hide_index=True, height=500)
                 
@@ -1248,6 +1268,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
         else:
             st.warning("No data retrieved. Please check your internet connection or try a different universe.")
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN APPLICATION
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1256,39 +1277,38 @@ def main():
     universe, selected_index, analysis_date, length, roc_len, regime_sensitivity, base_weight, timeframe = render_sidebar()
     render_header()
     
-    # Signal interpretation guide
-    with st.expander("📖 Signal Interpretation Guide", expanded=False):
+    with st.expander("📖 Signal Interpretation Guide (UMA v3)", expanded=False):
         col_s1, col_s2, col_s3 = st.columns(3)
         
         with col_s1:
             st.markdown("""
             <div style='background: rgba(16, 185, 129, 0.1); border: 1px solid var(--success-green); border-radius: 12px; padding: 1rem;'>
-                <h4 style='color: #10b981; margin-bottom: 0.5rem;'>🟢 Oversold Zone</h4>
-                <p style='color: #888888; font-size: 0.85rem;'>Signal < -5</p>
+                <h4 style='color: #10b981; margin-bottom: 0.5rem;'>💎 Diamond (Confirmed)</h4>
+                <p style='color: #888888; font-size: 0.85rem;'>WaveTrend Cross in Extremes</p>
                 <p style='color: #EAEAEA; font-size: 0.85rem;'>
-                    Potential buying opportunity. Look for MSF + MMR agreement.
+                    Marks a confirmed cycle turnaround in deep oversold or overbought territory.
                 </p>
             </div>
             """, unsafe_allow_html=True)
         
         with col_s2:
             st.markdown("""
-            <div style='background: rgba(136, 136, 136, 0.1); border: 1px solid #888888; border-radius: 12px; padding: 1rem;'>
-                <h4 style='color: #888888; margin-bottom: 0.5rem;'>⚪ Neutral Zone</h4>
-                <p style='color: #888888; font-size: 0.85rem;'>Signal -5 to +5</p>
+            <div style='background: rgba(6, 182, 212, 0.1); border: 1px solid #06b6d4; border-radius: 12px; padding: 1rem;'>
+                <h4 style='color: #06b6d4; margin-bottom: 0.5rem;'>⚪ Circle (Oversold/Bought)</h4>
+                <p style='color: #888888; font-size: 0.85rem;'>Strong Agreement | Signal > |5|</p>
                 <p style='color: #EAEAEA; font-size: 0.85rem;'>
-                    No clear directional bias. Wait for breakout or use other factors.
+                    Strong directional agreement between internal MSF conditions and Macro MMR factors.
                 </p>
             </div>
             """, unsafe_allow_html=True)
         
         with col_s3:
             st.markdown("""
-            <div style='background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; border-radius: 12px; padding: 1rem;'>
-                <h4 style='color: #ef4444; margin-bottom: 0.5rem;'>🔴 Overbought Zone</h4>
-                <p style='color: #888888; font-size: 0.85rem;'>Signal > +5</p>
+            <div style='background: rgba(255, 195, 0, 0.1); border: 1px solid #FFC300; border-radius: 12px; padding: 1rem;'>
+                <h4 style='color: #FFC300; margin-bottom: 0.5rem;'>🔺 Divergent (Triangle)</h4>
+                <p style='color: #888888; font-size: 0.85rem;'>Oscillator vs Price Action</p>
                 <p style='color: #EAEAEA; font-size: 0.85rem;'>
-                    Potential selling opportunity. Watch for bearish divergences.
+                    A reversal warning indicating momentum, macro or flow are diverging from price.
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -1298,32 +1318,32 @@ def main():
         col_m1, col_m2 = st.columns(2)
         with col_m1:
             st.markdown("""
-            <div style='background: rgba(255, 195, 0, 0.1); border: 1px solid #FFC300; border-radius: 12px; padding: 1rem;'>
-                <h4 style='color: #FFC300; margin-bottom: 0.5rem;'>MSF - Market Structure & Flow</h4>
-                <p style='color: #EAEAEA; font-size: 0.85rem;'>
-                    Internal price-based indicator combining momentum, microstructure, and flow analysis.
+            <div style='background: rgba(42, 42, 42, 0.4); border: 1px solid #3A3A3A; border-radius: 12px; padding: 1rem;'>
+                <h4 style='color: #EAEAEA; margin-bottom: 0.5rem;'>MSF Modulators (Engine)</h4>
+                <p style='color: #888888; font-size: 0.85rem;'>
+                    <b>Entropy:</b> Scales confidence via signal disorder.<br>
+                    <b>Hurst:</b> Tilts weight based on fractal memory (trend vs revert).<br>
+                    <b>Vol Struct:</b> Dampens conviction dynamically under market stress.
                 </p>
             </div>
             """, unsafe_allow_html=True)
         
         with col_m2:
             st.markdown("""
-            <div style='background: rgba(6, 182, 212, 0.1); border: 1px solid #06b6d4; border-radius: 12px; padding: 1rem;'>
-                <h4 style='color: #06b6d4; margin-bottom: 0.5rem;'>MMR - Macro Market Regression</h4>
-                <p style='color: #EAEAEA; font-size: 0.85rem;'>
-                    External macro correlation with bonds, currencies, and commodities.
+            <div style='background: rgba(42, 42, 42, 0.4); border: 1px solid #3A3A3A; border-radius: 12px; padding: 1rem;'>
+                <h4 style='color: #EAEAEA; margin-bottom: 0.5rem;'>MMR - Macro Market Regression</h4>
+                <p style='color: #888888; font-size: 0.85rem;'>
+                    External macro correlation model with global bonds, currencies, and commodities acting as external guardrails.
                 </p>
             </div>
             """, unsafe_allow_html=True)
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Run screener
     run_screener(universe, selected_index, analysis_date, length, roc_len, regime_sensitivity, base_weight, timeframe)
     
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     st.caption(f"© {datetime.datetime.now().year} Sanket | Hemrek Capital | {VERSION}")
-
 
 if __name__ == "__main__":
     main()
