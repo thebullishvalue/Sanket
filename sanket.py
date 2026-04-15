@@ -1004,7 +1004,7 @@ def render_sidebar():
                 start_date_hist = st.date_input(
                     "Start Date",
                     datetime.date.today() - datetime.timedelta(days=30),
-                    max_value=datetime.date.today() - 1,
+                    max_value=datetime.date.today() - datetime.timedelta(days=1),
                     help="Start date for time series analysis"
                 )
             with col_date2:
@@ -1752,9 +1752,7 @@ def main():
             """, unsafe_allow_html=True)
     
     st.markdown("<br>", unsafe_allow_html=True)
-    
-    run_screener(universe, selected_index, analysis_date, length, roc_len, regime_sensitivity, base_weight, timeframe)
-    
+
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     st.caption(f"© {datetime.datetime.now().year} Sanket | Hemrek Capital | {VERSION}")
 
