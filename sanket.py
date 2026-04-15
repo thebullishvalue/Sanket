@@ -1161,7 +1161,9 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
     
     # If button was clicked, run analysis
     if st.session_state.run_btn_clicked:
-            
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
             # 1. Fetch stock list
             status_text.markdown(f"**⏳ Fetching {universe_title} stock list...**")
             if universe == "F&O Stocks":
