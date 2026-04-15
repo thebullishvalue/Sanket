@@ -5,7 +5,7 @@ UMA v3 Engine (MSF + MMR + Modulators) Quantitative Signal Scanner
 
 import streamlit as st
 import pandas as pd
-import pandas_datareader.data as web
+# pandas_datareader removed - using yfinance instead
 import yfinance as yf
 import datetime
 import numpy as np
@@ -224,14 +224,11 @@ UNIVERSE_OPTIONS = ["F&O Stocks", "Index Constituents"]
 TIMEFRAME_OPTIONS = ["Daily", "Weekly"]
 
 # Macro symbols for MMR calculation
-MACRO_SYMBOLS_STOOQ = {
-    "India 10Y": "10YINY.B", "India 02Y": "2YINY.B",
-    "US 30Y": "30YUSY.B", "US 10Y": "10YUSY.B", "US 05Y": "5YUSY.B", "US 02Y": "2YUSY.B",
-    "UK 30Y": "30YUKY.B", "UK 10Y": "10YUKY.B", "UK 05Y": "5YUKY.B", "UK 02Y": "2YUKY.B",
-    "EU (DE) 30Y": "30YDEY.B", "EU (DE) 10Y": "10YDEY.B", "EU (DE) 05Y": "5YDEY.B", "EU (DE) 02Y": "2YDEY.B",
-    "China 10Y": "10YCNY.B", "China 02Y": "2YCNY.B",
-    "Japan 30Y": "30YJPY.B", "Japan 10Y": "10YJPY.B", "Japan 02Y": "2YJPY.B",
-    "Singapore 10Y": "10YSGY.B",
+MACRO_SYMBOLS_YF_BONDS = {
+    "India 10Y": "^INE10Y", "India 02Y": "^INE02Y",
+    "US 30Y": "^TNX", "US 10Y": "^TNX", "US 05Y": "^FVX", "US 02Y": "^TVX",
+    "UK 10Y": "^GXTG", "EU (DE) 10Y": "^DE10Y",
+    "China 10Y": "^CN10Y", "Japan 10Y": "^JP10Y",
 }
 
 MACRO_SYMBOLS_YF = {
@@ -240,7 +237,7 @@ MACRO_SYMBOLS_YF = {
     "SGD/INR": "SGDINR=X", "JPY/INR": "JPYINR=X", "Gold": "GC=F", "Silver": "SI=F"
 }
 
-MACRO_SYMBOLS = {**MACRO_SYMBOLS_STOOQ, **MACRO_SYMBOLS_YF}
+MACRO_SYMBOLS = {**MACRO_SYMBOLS_YF_BONDS, **MACRO_SYMBOLS_YF}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA FETCHING FUNCTIONS
@@ -340,16 +337,15 @@ def fetch_macro_data(days_back=300):
     
     stooq_df = pd.DataFrame()
     try:
-        stooq_tickers = list(MACRO_SYMBOLS_STOOQ.values())
-        stooq_raw = web.DataReader(stooq_tickers, "stooq", start=start_date, end=end_date)
-        if isinstance(stooq_raw.columns, pd.MultiIndex):
-            if 'Close' in stooq_raw.columns.get_level_values(0):
-                stooq_df = stooq_raw['Close']
-            elif 'Value' in stooq_raw.columns.get_level_values(0):
-                stooq_df = stooq_raw['Value']
-        else:
-            stooq_df = stooq_raw
-        stooq_df = stooq_df.sort_index()
+        stooq_tickers = list(MACRO_SYMBOLS_YF_BONDS.values())
+        stooq_raw = yf.download(stooq_tickers, start=start_date, end=end_date, progress=False)
+        if not stooq_raw.empty:
+            if isinstance(stooq_raw.columns, pd.MultiIndex):
+                if 'Close' in stooq_raw.columns.get_level_values(0):
+                    stooq_df = stooq_raw['Close']
+            else:
+                stooq_df = stooq_raw
+            stooq_df = stooq_df.sort_index()
     except Exception:
         pass
 
