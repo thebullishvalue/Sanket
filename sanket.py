@@ -1063,21 +1063,16 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
     if analysis_date is not None and analysis_date > datetime.date.today():
         st.error("⚠️ Analysis date cannot be in the future.")
         return
+
+    if 'run_btn_clicked' not in st.session_state:
+        st.session_state.run_btn_clicked = False
     
-    # Initialize session state for run tracking
-    if 'analysis_completed' not in st.session_state:
-        st.session_state.analysis_completed = True
-        st.session_state.analysis_key = 0
+    # Show run button
+    if st.button("◈ RUN SCREENER", type="primary", key="run_screener_btn"):
+        st.session_state.run_btn_clicked = True
     
-    # Show run button only when analysis is completed
-    if st.session_state.analysis_completed:
-        new_key = f"run_btn_{st.session_state.analysis_key}"
-        if st.button("◈ RUN SCREENER", type="primary", key=new_key):
-            st.session_state.analysis_completed = False
-            st.rerun()
-    
-    # If not completed, run analysis
-    if not st.session_state.analysis_completed:
+    # If button was clicked, run analysis
+    if st.session_state.run_btn_clicked:
             
             # 1. Fetch stock list
             status_text.markdown(f"**⏳ Fetching {universe_title} stock list...**")
@@ -1090,7 +1085,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                 st.error(f"Failed to fetch stock list: {fetch_msg}")
                 progress_bar.empty()
                 status_text.empty()
-                st.session_state.analysis_completed = True
+                st.session_state.run_btn_clicked = False
                 return
             
             st.toast(fetch_msg, icon="✅")
@@ -1120,7 +1115,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                 st.error(f"Failed to download data: {batch_msg}")
                 progress_bar.empty()
                 status_text.empty()
-                st.session_state.analysis_completed = True
+                st.session_state.run_btn_clicked = False
                 return
             
             st.toast(batch_msg, icon="📥")
@@ -1216,7 +1211,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
             status_text.empty()
             
             if results:
-                st.session_state.analysis_completed = True
+                st.session_state.run_btn_clicked = False
                 st.session_state.screener_run = False
                 st.session_state.screener_counter += 1
                 st.success(f"✅ Scan Complete! Analyzed {len(results)}/{total_stocks} stocks ({timeframe_label}) for {analysis_date_str}")
