@@ -13,10 +13,18 @@ import plotly.graph_objects as go
 import requests
 import io
 import urllib3
+import warnings
+import logging
 from nsepython import nse_get_advances_declines
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Silence noisy warnings (yfinance delisted prints, numpy log(0), pandas concat sort)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+np.seterr(divide="ignore", invalid="ignore")
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIGURATION
@@ -232,17 +240,15 @@ UNIVERSE_OPTIONS = ["F&O Stocks", "Index Constituents"]
 TIMEFRAME_OPTIONS = ["Daily", "Weekly"]
 
 # Macro symbols for MMR calculation
+# Only Yahoo-supported tickers; delisted/unsupported sovereign yields removed.
 MACRO_SYMBOLS_YF_BONDS = {
-    "India 10Y": "^INE10Y", "India 02Y": "^INE02Y",
-    "US 30Y": "^TNX", "US 10Y": "^TNX", "US 05Y": "^FVX", "US 02Y": "^TVX",
-    "UK 10Y": "^GXTG", "EU (DE) 10Y": "^DE10Y",
-    "China 10Y": "^CN10Y", "Japan 10Y": "^JP10Y",
+    "US 30Y": "^TYX", "US 10Y": "^TNX", "US 05Y": "^FVX",
 }
 
 MACRO_SYMBOLS_YF = {
     "Dollar Index": "DX-Y.NYB", "Crude Oil": "CL=F", "Brent Crude": "BZ=F",
     "USD/INR": "INR=X", "GBP/INR": "GBPINR=X", "EUR/INR": "EURINR=X",
-    "SGD/INR": "SGDINR=X", "JPY/INR": "JPYINR=X", "Gold": "GC=F", "Silver": "SI=F"
+    "Gold": "GC=F", "Silver": "SI=F"
 }
 
 MACRO_SYMBOLS = {**MACRO_SYMBOLS_YF_BONDS, **MACRO_SYMBOLS_YF}
@@ -426,7 +432,7 @@ def fetch_macro_data(days_back=300):
         pass
 
     if not stooq_df.empty and not yf_df.empty:
-        combined_macro = pd.concat([stooq_df, yf_df], axis=1).sort_index()
+        combined_macro = pd.concat([stooq_df, yf_df], axis=1, sort=False).sort_index()
     elif not stooq_df.empty:
         combined_macro = stooq_df
     elif not yf_df.empty:
@@ -451,7 +457,8 @@ def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True
             end=download_end,
             progress=False,
             auto_adjust=True,
-            group_by='ticker'
+            group_by='ticker',
+            threads=True,
         )
         
         if all_data.empty:
@@ -472,6 +479,32 @@ def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True
 
         else:
              return None, "Unexpected data structure"
+
+        missing = [t for t in stock_list if t not in data_dict]
+        if missing:
+            try:
+                retry_data = yf.download(
+                    missing,
+                    start=start_date,
+                    end=download_end,
+                    progress=False,
+                    auto_adjust=True,
+                    group_by='ticker',
+                    threads=True,
+                )
+                if not retry_data.empty:
+                    if isinstance(retry_data.columns, pd.MultiIndex):
+                        for ticker in missing:
+                            try:
+                                tdf = retry_data.xs(ticker, level=0, axis=1)
+                                if not tdf.empty and not tdf['Close'].isnull().all():
+                                    data_dict[ticker] = tdf.copy()
+                            except KeyError:
+                                pass
+                    elif len(missing) == 1 and not retry_data['Close'].isnull().all():
+                        data_dict[missing[0]] = retry_data.copy()
+            except Exception:
+                pass
         
         if include_live and end_date == datetime.date.today() and data_dict:
             sample_df = list(data_dict.values())[0]
