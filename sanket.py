@@ -311,9 +311,23 @@ def get_index_stock_list(index):
         
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
         }
-        response = requests.get(url, headers=headers, verify=False, timeout=10)
+        
+        session = requests.Session()
+        session.get("https://www.niftyindices.com", headers=headers, verify=False, timeout=10)
+        
+        response = session.get(url, headers=headers, verify=False, timeout=15)
         response.raise_for_status()
         
         csv_file = io.StringIO(response.text)
