@@ -1386,15 +1386,13 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                     
                     st.dataframe(display_df, use_container_width=True)
                     
-csv_data = display_df.to_csv(index=False).encode('utf-8')
+                    csv_data = display_df.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="📥 Download Full Report (CSV)",
                         data=csv_data,
                         file_name=f"sanket_{universe_title.replace(' ', '_')}_{timeframe_label}_{analysis_date.strftime('%Y%m%d')}.csv",
                         mime="text/csv"
                     )
-            else:
-                st.warning("No data retrieved. Please check your internet connection or try a different universe.")
 
 
 def run_timeseries_analysis(universe, selected_index, start_date, end_date, length, roc_len, regime_sensitivity, base_weight, timeframe):
