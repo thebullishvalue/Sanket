@@ -1690,7 +1690,6 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, leng
                         x=daily_agg.index,
                         y=daily_agg[zone_col],
                         name=zone_col,
-                        stack='stack'
                     ))
             
             fig_zones.update_layout(
