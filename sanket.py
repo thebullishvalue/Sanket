@@ -513,6 +513,15 @@ def calculate_atr(df, length=14):
     return tr.ewm(alpha=1/length, adjust=False).mean()
 
 
+def calculate_rsi(series, length=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).ewm(alpha=1/length, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/length, adjust=False).mean()
+    rs = gain / loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50)
+
+
 def calculate_wavetrend(df, length=20, wt_channel_len=10, wt_avg_len=21):
     ap = (df['High'] + df['Low'] + df['Close']) / 3.0
     esa = ap.ewm(span=wt_channel_len, adjust=False).mean()
@@ -562,13 +571,17 @@ def calculate_entropy(df, length=20, lookback=50):
 
 
 def calculate_hurst(df, short_len=10, long_len=50, sample_len=100):
-    ret_short = np.log(df['Close'] / df['Close'].shift(short_len).replace(0, np.nan))
-    ret_long = np.log(df['Close'] / df['Close'].shift(long_len).replace(0, np.nan))
+    close = df['Close'].replace(0, np.nan)
+    ret_short = np.log(close / close.shift(short_len))
+    ret_long = np.log(close / close.shift(long_len))
     
-    std_short = ret_short.rolling(sample_len).std(ddof=1)
-    std_long = ret_long.rolling(sample_len).std(ddof=1)
+    std_short = ret_short.rolling(sample_len).std(ddof=1).replace(0, np.nan)
+    std_long = ret_long.rolling(sample_len).std(ddof=1).replace(0, np.nan)
     
-    log_ratio_std = np.log(std_long / std_short.replace(0, np.nan))
+    with np.errstate(divide='ignore', invalid='ignore'):
+        log_ratio_std = np.log(std_long / std_short)
+        log_ratio_std = np.where(np.isfinite(log_ratio_std), log_ratio_std, np.nan)
+    
     log_ratio_tau = np.log(long_len / short_len)
     
     hurst_raw = log_ratio_std / log_ratio_tau
@@ -586,7 +599,7 @@ def calculate_vol_structure(df, length=20):
     atr_ref_std = atr_ref.rolling(length).std()
     
     vov_raw = atr_ref_std / atr_ref_mean.replace(0, np.nan)
-    vts_raw = atr_s / atr_l.replace(0, np.nan)
+    vts_raw = (atr_s / atr_l.replace(0, np.nan)).fillna(1.0)
     
     vov_z = zscore_clipped(vov_raw.fillna(0), length, 3.0)
     vts_z = zscore_clipped(vts_raw.fillna(1.0), length, 3.0)
@@ -595,7 +608,7 @@ def calculate_vol_structure(df, length=20):
     vol_stress_sigmoid = sigmoid(vol_stress_z, 1.5)
     
     vol_mod = 1.0 - 0.15 * np.maximum(vol_stress_sigmoid, 0.0)
-    return vol_mod, vol_stress_sigmoid
+    return vol_mod, vol_stress_sigmoid, vts_raw
 
 
 def calculate_mmr(df, length=20, num_vars=5):
@@ -618,8 +631,14 @@ def calculate_mmr(df, length=20, num_vars=5):
         x = df[ticker]
         x_mean = x.rolling(length).mean()
         x_std = x.rolling(length).std()
-        roll_corr = x.rolling(length).corr(target)
-        slope = roll_corr * (y_std / x_std)
+        x_std = x_std.replace(0, np.nan)
+        y_std_safe = y_std.replace(0, np.nan)
+        
+        with np.errstate(divide='ignore', invalid='ignore'):
+            roll_corr = x.rolling(length).corr(target)
+            slope = roll_corr * (y_std_safe / x_std)
+            slope = slope.where(np.isfinite(slope), np.nan)
+        
         intercept = y_mean - (slope * x_mean)
         
         pred = (slope * x) + intercept
@@ -692,10 +711,24 @@ def run_full_analysis(df, length, roc_len, regime_sensitivity=1.5, base_weight=0
     # Cycle
     wt1, wt2, wavetrend_norm = calculate_wavetrend(df, length)
     
+    # RSI Component (add to structure)
+    rsi_val = calculate_rsi(close, 14)
+    rsi_norm = (rsi_val - 50) / 50
+    
+    # Price Position in Confidence Bands
+    price_mean = close.rolling(length).mean()
+    price_stdev = close.rolling(length).std(ddof=1)
+    conf_mult = 1.96  # 95% confidence
+    upper_bound = price_mean + conf_mult * price_stdev
+    lower_bound = price_mean - conf_mult * price_stdev
+    band_width = upper_bound - lower_bound
+    price_position = np.where(band_width > 0, (close - lower_bound) / band_width * 2 - 1, 0.0)
+    price_position_clipped = price_position.clip(-1.5, 1.5)
+    
     # 2. Modulators
     entropy_norm, entropy_mod = calculate_entropy(df, length)
     hurst_clipped = calculate_hurst(df)
-    vol_mod, vol_stress_sigmoid = calculate_vol_structure(df, length)
+    vol_mod, vol_stress_sigmoid, vts_raw = calculate_vol_structure(df, length)
     
     # 3. Hurst Tilting & MSF Aggregation
     hurst_tilt = ((hurst_clipped - 0.5) * 2.5).clip(-1.0, 1.0)
@@ -760,13 +793,52 @@ def run_full_analysis(df, length, roc_len, regime_sensitivity=1.5, base_weight=0
     df['MSF_Osc'] = msf_signal * 10.0
     df['MMR_Osc'] = mmr_signal * 10.0
     
-    # 6. Specific UMA v3 Signals Matching
+    # 6. Bollinger Bands & RSI on oscillator
+    bb_length = 20
+    bb_mult = 2.0
+    bb_basis = df['Unified_Osc'].rolling(bb_length).mean()
+    bb_std = df['Unified_Osc'].rolling(bb_length).std()
+    bb_upper = bb_basis + bb_mult * bb_std
+    bb_lower = bb_basis - bb_mult * bb_std
+    
+    rsi_osc = calculate_rsi(df['Unified_Osc'], 14)
+    rsi_lower = 40
+    rsi_upper = 70
+    
+    # 7. Specific UMA v3 Signals Matching
     strong_agreement = signal_agreement > 0.3
     
     osc_rising = df['Unified_Osc'] > df['Unified_Osc'].shift(1)
     price_falling = close < close.shift(1)
     osc_falling = df['Unified_Osc'] < df['Unified_Osc'].shift(1)
     price_rising = close > close.shift(1)
+    
+    # Basic OB/OS conditions
+    is_oversold = (df['Unified_Osc'] < bb_lower) & (rsi_osc < rsi_lower)
+    is_overbought = (df['Unified_Osc'] > bb_upper) & (rsi_osc > rsi_upper)
+    
+    # Deep OB/OS with WaveTrend confirmation
+    wt_at_oversold = wt1 < -53
+    wt_at_overbought = wt1 > 53
+    is_deep_oversold = is_oversold & wt_at_oversold
+    is_deep_overbought = is_overbought & wt_at_overbought
+    
+    # Tier 3: Maximum conviction signals
+    entropy_avg = entropy_norm.rolling(length).mean()
+    entropy_favorable = entropy_norm < entropy_avg
+    vol_calm = vol_stress_sigmoid < 0
+    hurst_mean_revert = hurst_clipped < 0.48
+    hurst_trending = hurst_clipped > 0.52
+    
+    is_tier3_buy = is_deep_oversold & entropy_favorable & vol_calm & hurst_mean_revert
+    is_tier3_sell = is_deep_overbought & entropy_favorable & vol_calm & hurst_trending
+    
+    # VTS Regime (using vts_raw from vol_structure)
+    vts_regime = np.select(
+        [vts_raw > 1.15, vts_raw > 1.0, vts_raw < 0.85, vts_raw < 1.0],
+        [2, 1, -2, -1],
+        default=0
+    )
     
     # Triangle = Divergence Signals
     df['Triangle_Buy'] = osc_rising & price_falling & (df['Unified_Osc'] < -5)
@@ -780,9 +852,26 @@ def run_full_analysis(df, length, roc_len, regime_sensitivity=1.5, base_weight=0
     df['Diamond_Buy'] = wt_bull_cross & (wt1 < -53)
     df['Diamond_Sell'] = wt_bear_cross & (wt1 > 53)
     
+    # Star = Tier 3 signals
+    df['Star_Buy'] = is_tier3_buy
+    df['Star_Sell'] = is_tier3_sell
+    
+    # Store additional metrics
+    df['RSI_Osc'] = rsi_osc
+    df['BB_Upper'] = bb_upper
+    df['BB_Lower'] = bb_lower
+    df['Price_Position'] = price_position_clipped
+    df['Entropy_Norm'] = entropy_norm
+    df['Hurst'] = hurst_clipped
+    df['Vol_Stress'] = vol_stress_sigmoid
+    df['VTS_Regime'] = vts_regime
+    df['WT1'] = wt1
+    df['WT2'] = wt2
+    df['RSI'] = rsi_val
+    
     df['Condition'] = np.select(
-        [df['Unified_Osc'] < -5, df['Unified_Osc'] > 5],
-        ['Oversold', 'Overbought'],
+        [is_tier3_buy, is_deep_oversold, is_oversold, is_tier3_sell, is_deep_overbought, is_overbought],
+        ['Tier3 Buy', 'Deep Oversold', 'Oversold', 'Tier3 Sell', 'Deep Overbought', 'Overbought'],
         default='Neutral'
     )
 
@@ -1042,22 +1131,34 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                 prev_row = df.iloc[target_idx - 1]
                 price_change = ((last_row['Close'] - prev_row['Close']) / prev_row['Close']) * 100
                 
-                # Determine triggers based on UMA v3 rules (Divergence = Triangle, Confirm = Circle, Diamond = WT)
+                # Determine triggers based on UMA v3 rules
                 signals = []
-                # Diamond
+                # Star (Tier 3 - Maximum conviction)
+                if last_row.get('Star_Buy', False): signals.append("⭐ T3 BUY")
+                if last_row.get('Star_Sell', False): signals.append("⭐ T3 SELL")
+                # Diamond (WT Cross)
                 if last_row['Diamond_Buy']: signals.append("💎 BUY")
                 if last_row['Diamond_Sell']: signals.append("🔶 SELL")
-                # Circle
+                # Circle (Confirmed OB/OS with strong agreement)
                 if last_row['Circle_Buy']: signals.append("🟢 BUY")
                 if last_row['Circle_Sell']: signals.append("🔴 SELL")
-                # Triangle
+                # Triangle (Divergence)
                 if last_row['Triangle_Buy']: signals.append("🔺 DIV")
                 if last_row['Triangle_Sell']: signals.append("🔻 DIV")
                 
                 trigger_str = " | ".join(signals) if signals else "-"
                 
-                # Broad classification
-                broad_class = "BUY" if (last_row['Diamond_Buy'] or last_row['Circle_Buy']) else "SELL" if (last_row['Diamond_Sell'] or last_row['Circle_Sell']) else "-"
+                # Broad classification - priority: Star > Diamond > Circle > Triangle
+                if last_row.get('Star_Buy', False) or last_row.get('Star_Sell', False):
+                    broad_class = "T3 BUY" if last_row.get('Star_Buy', False) else "T3 SELL"
+                elif last_row['Diamond_Buy'] or last_row['Diamond_Sell']:
+                    broad_class = "BUY" if last_row['Diamond_Buy'] else "SELL"
+                elif last_row['Circle_Buy'] or last_row['Circle_Sell']:
+                    broad_class = "BUY" if last_row['Circle_Buy'] else "SELL"
+                elif last_row['Triangle_Buy'] or last_row['Triangle_Sell']:
+                    broad_class = "BUY" if last_row['Triangle_Buy'] else "SELL"
+                else:
+                    broad_class = "-"
                 
                 results.append({
                     "Symbol": ticker,
@@ -1084,10 +1185,19 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
             st.success(f"✅ Scan Complete! Analyzed {len(results)}/{total_stocks} stocks ({timeframe_label}) for {analysis_date_str}")
             results_df = pd.DataFrame(results)
             
+            # Count by zone (Condition column)
+            n_tier3_buy = len(results_df[results_df['Zone'] == 'Tier3 Buy'])
+            n_tier3_sell = len(results_df[results_df['Zone'] == 'Tier3 Sell'])
+            n_deep_oversold = len(results_df[results_df['Zone'] == 'Deep Oversold'])
+            n_deep_overbought = len(results_df[results_df['Zone'] == 'Deep Overbought'])
             n_oversold = len(results_df[results_df['Zone'] == 'Oversold'])
             n_overbought = len(results_df[results_df['Zone'] == 'Overbought'])
-            n_buys = len(results_df[results_df['Trigger'] == 'BUY'])
-            n_sells = len(results_df[results_df['Trigger'] == 'SELL'])
+            
+            # Count by trigger (broad classification)
+            n_buys = len(results_df[results_df['Trigger'].str.contains('BUY', na=False)])
+            n_sells = len(results_df[results_df['Trigger'].str.contains('SELL', na=False)])
+            n_tier3 = n_tier3_buy + n_tier3_sell
+            
             avg_signal = results_df['Signal'].mean()
             
             regime = "BULLISH BIAS" if avg_signal < -2 else "BEARISH BIAS" if avg_signal > 2 else "NEUTRAL"
@@ -1099,15 +1209,15 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
             with c1:
                 st.markdown(f'<div class="metric-card info"><h4>Universe</h4><h2>{len(results)}</h2><div class="sub-metric">Stocks Analyzed</div></div>', unsafe_allow_html=True)
             with c2:
-                st.markdown(f'<div class="metric-card success"><h4>Oversold</h4><h2>{n_oversold}</h2><div class="sub-metric">Buy Zone</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card" style="border-color: #fbbf24;"><h4>Tier 3</h4><h2>{n_tier3}</h2><div class="sub-metric">Max Conviction</div></div>', unsafe_allow_html=True)
             with c3:
-                st.markdown(f'<div class="metric-card danger"><h4>Overbought</h4><h2>{n_overbought}</h2><div class="sub-metric">Sell Zone</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card success"><h4>Oversold</h4><h2>{n_oversold + n_deep_oversold}</h2><div class="sub-metric">Buy Zone</div></div>', unsafe_allow_html=True)
             with c4:
-                st.markdown(f'<div class="metric-card primary"><h4>Buy Signals</h4><h2>{n_buys}</h2><div class="sub-metric">Confirmed</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card danger"><h4>Overbought</h4><h2>{n_overbought + n_deep_overbought}</h2><div class="sub-metric">Sell Zone</div></div>', unsafe_allow_html=True)
             with c5:
-                st.markdown(f'<div class="metric-card warning"><h4>Sell Signals</h4><h2>{n_sells}</h2><div class="sub-metric">Confirmed</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card primary"><h4>Buy Signals</h4><h2>{n_buys}</h2><div class="sub-metric">Confirmed</div></div>', unsafe_allow_html=True)
             with c6:
-                st.markdown(f'<div class="metric-card {regime_color}"><h4>Regime</h4><h2 style="font-size: 1.1rem;">{regime}</h2><div class="sub-metric">Avg: {avg_signal:.2f}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card warning"><h4>Sell Signals</h4><h2>{n_sells}</h2><div class="sub-metric">Confirmed</div></div>', unsafe_allow_html=True)
             
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             
@@ -1118,6 +1228,14 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                 
                 with col_buy:
                     st.markdown('<div class="signal-card buy"><div class="signal-card-header"><span class="signal-card-title">🟢 Buy Opportunities</span></div>', unsafe_allow_html=True)
+                    
+                    # Star (Tier 3) Buys - Maximum Conviction
+                    stars_buy = results_df[results_df['Detailed Trigger'].str.contains("⭐")].sort_values('Signal')
+                    if not stars_buy.empty:
+                        st.markdown('<span class="status-badge buy" style="background: #fbbf24; color: #000;">⭐ TIER 3 - MAXIMUM CONVICTION</span>', unsafe_allow_html=True)
+                        for _, row in stars_buy.head(10).iterrows():
+                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #fbbf24;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+                        st.markdown("<br>", unsafe_allow_html=True)
                     
                     # Diamond Buys
                     diamonds_buy = results_df[results_df['Detailed Trigger'].str.contains("💎")].sort_values('Signal')
@@ -1134,12 +1252,20 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                         for _, row in circles_buy.head(10).iterrows():
                             st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #06b6d4;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
 
-                    if diamonds_buy.empty and circles_buy.empty:
-                        st.markdown('<p style="color: #888888; padding: 1rem;">No confirmed buy opportunities detected</p>', unsafe_allow_html=True)
+                    if stars_buy.empty and diamonds_buy.empty and circles_buy.empty:
+                        st.markdown('<p style="color: #888888; padding: 1rem;">No buy opportunities detected</p>', unsafe_allow_html=True)
                     st.markdown("</div>", unsafe_allow_html=True)
                 
                 with col_sell:
                     st.markdown('<div class="signal-card sell"><div class="signal-card-header"><span class="signal-card-title">🔴 Sell Opportunities</span></div>', unsafe_allow_html=True)
+                    
+                    # Star (Tier 3) Sells - Maximum Conviction
+                    stars_sell = results_df[results_df['Detailed Trigger'].str.contains("⭐")].sort_values('Signal', ascending=False)
+                    if not stars_sell.empty:
+                        st.markdown('<span class="status-badge sell" style="background: #fbbf24; color: #000;">⭐ TIER 3 - MAXIMUM CONVICTION</span>', unsafe_allow_html=True)
+                        for _, row in stars_sell.head(10).iterrows():
+                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #fbbf24;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+                        st.markdown("<br>", unsafe_allow_html=True)
                     
                     # Diamond Sells
                     diamonds_sell = results_df[results_df['Detailed Trigger'].str.contains("🔶")].sort_values('Signal', ascending=False)
@@ -1156,8 +1282,8 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
                         for _, row in circles_sell.head(10).iterrows():
                             st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #f59e0b;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
 
-                    if diamonds_sell.empty and circles_sell.empty:
-                        st.markdown('<p style="color: #888888; padding: 1rem;">No confirmed sell opportunities detected</p>', unsafe_allow_html=True)
+                    if stars_sell.empty and diamonds_sell.empty and circles_sell.empty:
+                        st.markdown('<p style="color: #888888; padding: 1rem;">No sell opportunities detected</p>', unsafe_allow_html=True)
                     st.markdown("</div>", unsafe_allow_html=True)
                 
                 # Divergence Alerts (Triangles)
