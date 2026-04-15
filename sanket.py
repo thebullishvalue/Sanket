@@ -1060,11 +1060,12 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    if analysis_date > datetime.date.today():
+    if analysis_date is not None and analysis_date > datetime.date.today():
         st.error("⚠️ Analysis date cannot be in the future.")
         return
     
-    if st.button("◈ RUN SCREENER", type="primary"):
+    # Only run the button check when in single date mode
+    if analysis_date is not None and st.button("◈ RUN SCREENER", type="primary", key="run_screener_btn"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
@@ -1449,7 +1450,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, leng
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    if st.button("◈ RUN TIME SERIES ANALYSIS", type="primary"):
+    if st.button("◈ RUN TIME SERIES ANALYSIS", type="primary", key="run_timeseries_btn"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
