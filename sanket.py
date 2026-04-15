@@ -1064,365 +1064,338 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
         st.error("⚠️ Analysis date cannot be in the future.")
         return
     
-    # Only run the button check when in single date mode
-    if analysis_date is not None and st.button("◈ RUN SCREENER", type="primary", key="run_screener_btn"):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        # 1. Fetch stock list
-        status_text.markdown(f"**⏳ Fetching {universe_title} stock list...**")
-        if universe == "F&O Stocks":
-            stock_list, fetch_msg = get_fno_stock_list()
-        else:
-            stock_list, fetch_msg = get_index_stock_list(selected_index)
-        
-        if not stock_list:
-            st.error(f"Failed to fetch stock list: {fetch_msg}")
-            progress_bar.empty()
-            status_text.empty()
-            return
-        
-        st.toast(fetch_msg, icon="✅")
-        total_stocks = len(stock_list)
-        progress_bar.progress(0.05)
-        
-        # 2. Fetch macro data 
-        status_text.markdown("**⏳ Fetching global macro data (one-time)...**")
-        days_back_macro = 400 if timeframe == "Weekly" else 300
-        macro_df = fetch_macro_data(days_back=days_back_macro + (datetime.date.today() - analysis_date).days)
-        
-        if macro_df.empty:
-            st.warning("⚠️ Could not fetch macro data. Running with internal MSF mode only.")
-        else:
-            if timeframe == "Weekly":
-                macro_df = resample_macro_to_weekly(macro_df)
-            st.toast(f"✓ Loaded {len(macro_df.columns)} macro factors", icon="📊")
-        
-        progress_bar.progress(0.1)
-        
-        # 3. Batch download stock data
-        status_text.markdown(f"**⏳ Downloading data for {total_stocks} stocks...**")
-        days_back = 500 if timeframe == "Weekly" else 300
-        data_dict, batch_msg = fetch_batch_data(stock_list, end_date=analysis_date, days_back=days_back)
-        
-        if data_dict is None:
-            st.error(f"Failed to download data: {batch_msg}")
-            progress_bar.empty()
-            status_text.empty()
-            return
-        
-        st.toast(batch_msg, icon="📥")
-        progress_bar.progress(0.2)
-        
-        # 4. Process each stock
-        results = []
-        valid_tickers = list(data_dict.keys())
-        total_valid = len(valid_tickers)
-        
-        for i, ticker in enumerate(valid_tickers):
-            status_text.markdown(f"**⏳ Analyzing {ticker.replace('.NS', '')} ({i+1}/{total_valid})**")
-            progress_bar.progress(0.2 + (0.8 * (i + 1) / total_valid))
+    if analysis_date is not None:
+        if st.button("◈ RUN SCREENER", type="primary", key=f"run_screener_{id(analysis_date)}"):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             
-            df = data_dict[ticker]
+            # 1. Fetch stock list
+            status_text.markdown(f"**⏳ Fetching {universe_title} stock list...**")
+            if universe == "F&O Stocks":
+                stock_list, fetch_msg = get_fno_stock_list()
+            else:
+                stock_list, fetch_msg = get_index_stock_list(selected_index)
             
-            if df is None or len(df) < length + 100: # Need extra length for Entropy & Hurst
-                continue
-                
-            try:
-                df.index = pd.to_datetime(df.index)
-                if df.index.tz is not None:
-                    df.index = df.index.tz_localize(None)
-                
+            if not stock_list:
+                st.error(f"Failed to fetch stock list: {fetch_msg}")
+                progress_bar.empty()
+                status_text.empty()
+                return
+            
+            st.toast(fetch_msg, icon="✅")
+            total_stocks = len(stock_list)
+            progress_bar.progress(0.05)
+            
+            # 2. Fetch macro data 
+            status_text.markdown("**⏳ Fetching global macro data (one-time)...**")
+            days_back_macro = 400 if timeframe == "Weekly" else 300
+            macro_df = fetch_macro_data(days_back=days_back_macro + (datetime.date.today() - analysis_date).days)
+            
+            if macro_df.empty:
+                st.warning("⚠️ Could not fetch macro data. Running with internal MSF mode only.")
+            else:
                 if timeframe == "Weekly":
-                    df = resample_to_weekly(df)
-                    if df is None or len(df) < length + 50:
+                    macro_df = resample_macro_to_weekly(macro_df)
+                st.toast(f"✓ Loaded {len(macro_df.columns)} macro factors", icon="📊")
+            
+            progress_bar.progress(0.1)
+            
+            # 3. Batch download stock data
+            status_text.markdown(f"**⏳ Downloading data for {total_stocks} stocks...**")
+            days_back = 500 if timeframe == "Weekly" else 300
+            data_dict, batch_msg = fetch_batch_data(stock_list, end_date=analysis_date, days_back=days_back)
+            
+            if data_dict is None:
+                st.error(f"Failed to download data: {batch_msg}")
+                progress_bar.empty()
+                status_text.empty()
+                return
+            
+            st.toast(batch_msg, icon="📥")
+            progress_bar.progress(0.2)
+            
+            # 4. Process each stock
+            results = []
+            valid_tickers = list(data_dict.keys())
+            total_valid = len(valid_tickers)
+            
+            for i, ticker in enumerate(valid_tickers):
+                status_text.markdown(f"**⏳ Analyzing {ticker.replace('.NS', '')} ({i+1}/{total_valid})**")
+                progress_bar.progress(0.2 + (0.8 * (i + 1) / total_valid))
+                
+                df = data_dict[ticker]
+                
+                if df is None or len(df) < length + 100:
+                    continue
+                    
+                try:
+                    df.index = pd.to_datetime(df.index)
+                    if df.index.tz is not None:
+                        df.index = df.index.tz_localize(None)
+                    
+                    if timeframe == "Weekly":
+                        df = resample_to_weekly(df)
+                        if df is None or len(df) < length + 50:
+                            continue
+                    
+                    if not macro_df.empty:
+                        df = df.join(macro_df, how='left').ffill()
+                    
+                    df = run_full_analysis(df, length, roc_len, regime_sensitivity, base_weight)
+                    
+                    analysis_datetime = pd.Timestamp(analysis_date)
+                    valid_dates = df.index[df.index <= analysis_datetime]
+                    
+                    if len(valid_dates) == 0:
                         continue
-                
-                if not macro_df.empty:
-                    df = df.join(macro_df, how='left').ffill()
-                
-                # Execute UMA v3 Engine Analysis
-                df = run_full_analysis(df, length, roc_len, regime_sensitivity, base_weight)
-                
-                analysis_datetime = pd.Timestamp(analysis_date)
-                valid_dates = df.index[df.index <= analysis_datetime]
-                
-                if len(valid_dates) == 0:
-                    continue
-                
-                target_date = valid_dates[-1]
-                target_idx = df.index.get_loc(target_date)
-                
-                if target_idx < 1:
-                    continue
-                
-                last_row = df.iloc[target_idx]
-                prev_row = df.iloc[target_idx - 1]
-                price_change = ((last_row['Close'] - prev_row['Close']) / prev_row['Close']) * 100
-                
-                # Determine triggers based on UMA v3 rules
-                signals = []
-                # Star (Tier 3 - Maximum conviction)
-                if last_row.get('Star_Buy', False): signals.append("⭐ T3 BUY")
-                if last_row.get('Star_Sell', False): signals.append("⭐ T3 SELL")
-                # Diamond (WT Cross)
-                if last_row['Diamond_Buy']: signals.append("💎 BUY")
-                if last_row['Diamond_Sell']: signals.append("🔶 SELL")
-                # Circle (Confirmed OB/OS with strong agreement)
-                if last_row['Circle_Buy']: signals.append("🟢 BUY")
-                if last_row['Circle_Sell']: signals.append("🔴 SELL")
-                # Triangle (Divergence)
-                if last_row['Triangle_Buy']: signals.append("🔺 DIV")
-                if last_row['Triangle_Sell']: signals.append("🔻 DIV")
-                
-                trigger_str = " | ".join(signals) if signals else "-"
-                
-                # Broad classification - priority: Star > Diamond > Circle > Triangle
-                if last_row.get('Star_Buy', False) or last_row.get('Star_Sell', False):
-                    broad_class = "T3 BUY" if last_row.get('Star_Buy', False) else "T3 SELL"
-                elif last_row['Diamond_Buy'] or last_row['Diamond_Sell']:
-                    broad_class = "BUY" if last_row['Diamond_Buy'] else "SELL"
-                elif last_row['Circle_Buy'] or last_row['Circle_Sell']:
-                    broad_class = "BUY" if last_row['Circle_Buy'] else "SELL"
-                elif last_row['Triangle_Buy'] or last_row['Triangle_Sell']:
-                    broad_class = "BUY" if last_row['Triangle_Buy'] else "SELL"
-                else:
-                    broad_class = "-"
-                
-                results.append({
-                    "Symbol": ticker,
-                    "DisplayName": ticker.replace(".NS", ""),
-                    "Price": round(last_row['Close'], 2),
-                    "Change": round(price_change, 2),
-                    "Signal": round(last_row['Unified_Osc'], 2),
-                    "MSF": round(last_row['MSF_Osc'], 2),
-                    "MMR": round(last_row['MMR_Osc'], 2),
-                    "Zone": last_row['Condition'],
-                    "Detailed Trigger": trigger_str,
-                    "Trigger": broad_class,
-                    "Has Diamond": last_row['Diamond_Buy'] or last_row['Diamond_Sell'],
-                    "Has Circle": last_row['Circle_Buy'] or last_row['Circle_Sell'],
-                    "Has Triangle": last_row['Triangle_Buy'] or last_row['Triangle_Sell'],
-                })
-            except Exception:
-                pass
-        
-        progress_bar.empty()
-        status_text.empty()
-        
-        if results:
-            st.success(f"✅ Scan Complete! Analyzed {len(results)}/{total_stocks} stocks ({timeframe_label}) for {analysis_date_str}")
-            results_df = pd.DataFrame(results)
-            
-            # Count by zone (Condition column)
-            n_tier3_buy = len(results_df[results_df['Zone'] == 'Tier3 Buy'])
-            n_tier3_sell = len(results_df[results_df['Zone'] == 'Tier3 Sell'])
-            n_deep_oversold = len(results_df[results_df['Zone'] == 'Deep Oversold'])
-            n_deep_overbought = len(results_df[results_df['Zone'] == 'Deep Overbought'])
-            n_oversold = len(results_df[results_df['Zone'] == 'Oversold'])
-            n_overbought = len(results_df[results_df['Zone'] == 'Overbought'])
-            
-            # Count by trigger (broad classification)
-            n_buys = len(results_df[results_df['Trigger'].str.contains('BUY', na=False)])
-            n_sells = len(results_df[results_df['Trigger'].str.contains('SELL', na=False)])
-            n_tier3 = n_tier3_buy + n_tier3_sell
-            
-            avg_signal = results_df['Signal'].mean()
-            
-            regime = "BULLISH BIAS" if avg_signal < -2 else "BEARISH BIAS" if avg_signal > 2 else "NEUTRAL"
-            regime_color = "success" if avg_signal < -2 else "danger" if avg_signal > 2 else "neutral"
-            
-            # Metrics
-            st.markdown("<br>", unsafe_allow_html=True)
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
-            with c1:
-                st.markdown(f'<div class="metric-card info"><h4>Universe</h4><h2>{len(results)}</h2><div class="sub-metric">Stocks Analyzed</div></div>', unsafe_allow_html=True)
-            with c2:
-                st.markdown(f'<div class="metric-card" style="border-color: #fbbf24;"><h4>Tier 3</h4><h2>{n_tier3}</h2><div class="sub-metric">Max Conviction</div></div>', unsafe_allow_html=True)
-            with c3:
-                st.markdown(f'<div class="metric-card success"><h4>Oversold</h4><h2>{n_oversold + n_deep_oversold}</h2><div class="sub-metric">Buy Zone</div></div>', unsafe_allow_html=True)
-            with c4:
-                st.markdown(f'<div class="metric-card danger"><h4>Overbought</h4><h2>{n_overbought + n_deep_overbought}</h2><div class="sub-metric">Sell Zone</div></div>', unsafe_allow_html=True)
-            with c5:
-                st.markdown(f'<div class="metric-card primary"><h4>Buy Signals</h4><h2>{n_buys}</h2><div class="sub-metric">Confirmed</div></div>', unsafe_allow_html=True)
-            with c6:
-                st.markdown(f'<div class="metric-card warning"><h4>Sell Signals</h4><h2>{n_sells}</h2><div class="sub-metric">Confirmed</div></div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-            
-            tab1, tab2, tab3, tab4 = st.tabs(["**📊 Signal Dashboard**", "**📈 Top Signals**", "**📉 Distribution**", "**📋 Full Data**"])
-            
-            with tab1:
-                col_buy, col_sell = st.columns(2)
-                
-                with col_buy:
-                    st.markdown('<div class="signal-card buy"><div class="signal-card-header"><span class="signal-card-title">🟢 Buy Opportunities</span></div>', unsafe_allow_html=True)
                     
-                    # Star (Tier 3) Buys - Maximum Conviction
-                    stars_buy = results_df[results_df['Detailed Trigger'].str.contains("⭐")].sort_values('Signal')
-                    if not stars_buy.empty:
-                        st.markdown('<span class="status-badge buy" style="background: #fbbf24; color: #000;">⭐ TIER 3 - MAXIMUM CONVICTION</span>', unsafe_allow_html=True)
-                        for _, row in stars_buy.head(10).iterrows():
-                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #fbbf24;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
-                        st.markdown("<br>", unsafe_allow_html=True)
+                    target_date = valid_dates[-1]
+                    target_idx = df.index.get_loc(target_date)
                     
-                    # Diamond Buys
-                    diamonds_buy = results_df[results_df['Detailed Trigger'].str.contains("💎")].sort_values('Signal')
-                    if not diamonds_buy.empty:
-                        st.markdown('<span class="status-badge buy">💎 WT CYCLE CROSSED</span>', unsafe_allow_html=True)
-                        for _, row in diamonds_buy.head(10).iterrows():
-                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #10b981;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
-                        st.markdown("<br>", unsafe_allow_html=True)
-
-                    # Circle Buys
-                    circles_buy = results_df[results_df['Detailed Trigger'].str.contains("🟢")].sort_values('Signal')
-                    if not circles_buy.empty:
-                        st.markdown('<span class="status-badge oversold">🟢 STRONG AGREEMENT BUY</span>', unsafe_allow_html=True)
-                        for _, row in circles_buy.head(10).iterrows():
-                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #06b6d4;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
-
-                    if stars_buy.empty and diamonds_buy.empty and circles_buy.empty:
-                        st.markdown('<p style="color: #888888; padding: 1rem;">No buy opportunities detected</p>', unsafe_allow_html=True)
-                    st.markdown("</div>", unsafe_allow_html=True)
+                    if target_idx < 1:
+                        continue
+                    
+                    last_row = df.iloc[target_idx]
+                    prev_row = df.iloc[target_idx - 1]
+                    price_change = ((last_row['Close'] - prev_row['Close']) / prev_row['Close']) * 100
+                    
+                    signals = []
+                    if last_row.get('Star_Buy', False): signals.append("⭐ T3 BUY")
+                    if last_row.get('Star_Sell', False): signals.append("⭐ T3 SELL")
+                    if last_row['Diamond_Buy']: signals.append("💎 BUY")
+                    if last_row['Diamond_Sell']: signals.append("🔶 SELL")
+                    if last_row['Circle_Buy']: signals.append("🟢 BUY")
+                    if last_row['Circle_Sell']: signals.append("🔴 SELL")
+                    if last_row['Triangle_Buy']: signals.append("🔺 DIV")
+                    if last_row['Triangle_Sell']: signals.append("🔻 DIV")
+                    
+                    trigger_str = " | ".join(signals) if signals else "-"
+                    
+                    if last_row.get('Star_Buy', False) or last_row.get('Star_Sell', False):
+                        broad_class = "T3 BUY" if last_row.get('Star_Buy', False) else "T3 SELL"
+                    elif last_row['Diamond_Buy'] or last_row['Diamond_Sell']:
+                        broad_class = "BUY" if last_row['Diamond_Buy'] else "SELL"
+                    elif last_row['Circle_Buy'] or last_row['Circle_Sell']:
+                        broad_class = "BUY" if last_row['Circle_Buy'] else "SELL"
+                    elif last_row['Triangle_Buy'] or last_row['Triangle_Sell']:
+                        broad_class = "BUY" if last_row['Triangle_Buy'] else "SELL"
+                    else:
+                        broad_class = "-"
+                    
+                    results.append({
+                        "Symbol": ticker,
+                        "DisplayName": ticker.replace(".NS", ""),
+                        "Price": round(last_row['Close'], 2),
+                        "Change": round(price_change, 2),
+                        "Signal": round(last_row['Unified_Osc'], 2),
+                        "MSF": round(last_row['MSF_Osc'], 2),
+                        "MMR": round(last_row['MMR_Osc'], 2),
+                        "Zone": last_row['Condition'],
+                        "Detailed Trigger": trigger_str,
+                        "Trigger": broad_class,
+                        "Has Diamond": last_row['Diamond_Buy'] or last_row['Diamond_Sell'],
+                        "Has Circle": last_row['Circle_Buy'] or last_row['Circle_Sell'],
+                        "Has Triangle": last_row['Triangle_Buy'] or last_row['Triangle_Sell'],
+                    })
+                except Exception:
+                    pass
+            
+            progress_bar.empty()
+            status_text.empty()
+            
+            if results:
+                st.success(f"✅ Scan Complete! Analyzed {len(results)}/{total_stocks} stocks ({timeframe_label}) for {analysis_date_str}")
+                results_df = pd.DataFrame(results)
                 
-                with col_sell:
-                    st.markdown('<div class="signal-card sell"><div class="signal-card-header"><span class="signal-card-title">🔴 Sell Opportunities</span></div>', unsafe_allow_html=True)
-                    
-                    # Star (Tier 3) Sells - Maximum Conviction
-                    stars_sell = results_df[results_df['Detailed Trigger'].str.contains("⭐")].sort_values('Signal', ascending=False)
-                    if not stars_sell.empty:
-                        st.markdown('<span class="status-badge sell" style="background: #fbbf24; color: #000;">⭐ TIER 3 - MAXIMUM CONVICTION</span>', unsafe_allow_html=True)
-                        for _, row in stars_sell.head(10).iterrows():
-                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #fbbf24;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
-                        st.markdown("<br>", unsafe_allow_html=True)
-                    
-                    # Diamond Sells
-                    diamonds_sell = results_df[results_df['Detailed Trigger'].str.contains("🔶")].sort_values('Signal', ascending=False)
-                    if not diamonds_sell.empty:
-                        st.markdown('<span class="status-badge sell">🔶 WT CYCLE CROSSED</span>', unsafe_allow_html=True)
-                        for _, row in diamonds_sell.head(10).iterrows():
-                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #ef4444;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
-                        st.markdown("<br>", unsafe_allow_html=True)
-
-                    # Circle Sells
-                    circles_sell = results_df[results_df['Detailed Trigger'].str.contains("🔴")].sort_values('Signal', ascending=False)
-                    if not circles_sell.empty:
-                        st.markdown('<span class="status-badge overbought">🔴 STRONG AGREEMENT SELL</span>', unsafe_allow_html=True)
-                        for _, row in circles_sell.head(10).iterrows():
-                            st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #f59e0b;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
-
-                    if stars_sell.empty and diamonds_sell.empty and circles_sell.empty:
-                        st.markdown('<p style="color: #888888; padding: 1rem;">No sell opportunities detected</p>', unsafe_allow_html=True)
-                    st.markdown("</div>", unsafe_allow_html=True)
+                n_tier3_buy = len(results_df[results_df['Zone'] == 'Tier3 Buy'])
+                n_tier3_sell = len(results_df[results_df['Zone'] == 'Tier3 Sell'])
+                n_deep_oversold = len(results_df[results_df['Zone'] == 'Deep Oversold'])
+                n_deep_overbought = len(results_df[results_df['Zone'] == 'Deep Overbought'])
+                n_oversold = len(results_df[results_df['Zone'] == 'Oversold'])
+                n_overbought = len(results_df[results_df['Zone'] == 'Overbought'])
+                n_buys = len(results_df[results_df['Trigger'].str.contains('BUY', na=False)])
+                n_sells = len(results_df[results_df['Trigger'].str.contains('SELL', na=False)])
+                n_tier3 = n_tier3_buy + n_tier3_sell
                 
-                # Divergence Alerts (Triangles)
+                avg_signal = results_df['Signal'].mean()
+                regime = "BULLISH BIAS" if avg_signal < -2 else "BEARISH BIAS" if avg_signal > 2 else "NEUTRAL"
+                regime_color = "success" if avg_signal < -2 else "danger" if avg_signal > 2 else "neutral"
+                
                 st.markdown("<br>", unsafe_allow_html=True)
-                bull_divs = results_df[results_df['Detailed Trigger'].str.contains("🔺")]
-                bear_divs = results_df[results_df['Detailed Trigger'].str.contains("🔻")]
+                c1, c2, c3, c4, c5, c6 = st.columns(6)
+                with c1:
+                    st.markdown(f'<div class="metric-card info"><h4>Universe</h4><h2>{len(results)}</h2><div class="sub-metric">Stocks Analyzed</div></div>', unsafe_allow_html=True)
+                with c2:
+                    st.markdown(f'<div class="metric-card" style="border-color: #fbbf24;"><h4>Tier 3</h4><h2>{n_tier3}</h2><div class="sub-metric">Max Conviction</div></div>', unsafe_allow_html=True)
+                with c3:
+                    st.markdown(f'<div class="metric-card success"><h4>Oversold</h4><h2>{n_oversold + n_deep_oversold}</h2><div class="sub-metric">Buy Zone</div></div>', unsafe_allow_html=True)
+                with c4:
+                    st.markdown(f'<div class="metric-card danger"><h4>Overbought</h4><h2>{n_overbought + n_deep_overbought}</h2><div class="sub-metric">Sell Zone</div></div>', unsafe_allow_html=True)
+                with c5:
+                    st.markdown(f'<div class="metric-card primary"><h4>Buy Signals</h4><h2>{n_buys}</h2><div class="sub-metric">Confirmed</div></div>', unsafe_allow_html=True)
+                with c6:
+                    st.markdown(f'<div class="metric-card warning"><h4>Sell Signals</h4><h2>{n_sells}</h2><div class="sub-metric">Confirmed</div></div>', unsafe_allow_html=True)
                 
-                if not bull_divs.empty or not bear_divs.empty:
-                    st.markdown("##### 📐 Divergence Alerts")
+                st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+                
+                tab1, tab2, tab3, tab4 = st.tabs(["**📊 Signal Dashboard**", "**📈 Top Signals**", "**📉 Distribution**", "**📋 Full Data**"])
+                
+                with tab1:
+                    col_buy, col_sell = st.columns(2)
+                    
+                    with col_buy:
+                        st.markdown('<div class="signal-card buy"><div class="signal-card-header"><span class="signal-card-title">🟢 Buy Opportunities</span></div>', unsafe_allow_html=True)
+                        
+                        stars_buy = results_df[results_df['Detailed Trigger'].str.contains("⭐")].sort_values('Signal')
+                        if not stars_buy.empty:
+                            st.markdown('<span class="status-badge buy" style="background: #fbbf24; color: #000;">⭐ TIER 3 - MAXIMUM CONVICTION</span>', unsafe_allow_html=True)
+                            for _, row in stars_buy.head(10).iterrows():
+                                st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #fbbf24;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+                            st.markdown("<br>", unsafe_allow_html=True)
+                        
+                        diamonds_buy = results_df[results_df['Detailed Trigger'].str.contains("💎")].sort_values('Signal')
+                        if not diamonds_buy.empty:
+                            st.markdown('<span class="status-badge buy">💎 WT CYCLE CROSSED</span>', unsafe_allow_html=True)
+                            for _, row in diamonds_buy.head(10).iterrows():
+                                st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #10b981;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+                            st.markdown("<br>", unsafe_allow_html=True)
+
+                        circles_buy = results_df[results_df['Detailed Trigger'].str.contains("🟢")].sort_values('Signal')
+                        if not circles_buy.empty:
+                            st.markdown('<span class="status-badge oversold">🟢 STRONG AGREEMENT BUY</span>', unsafe_allow_html=True)
+                            for _, row in circles_buy.head(10).iterrows():
+                                st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #06b6d4;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+
+                        if stars_buy.empty and diamonds_buy.empty and circles_buy.empty:
+                            st.markdown('<p style="color: #888888; padding: 1rem;">No buy opportunities detected</p>', unsafe_allow_html=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    
+                    with col_sell:
+                        st.markdown('<div class="signal-card sell"><div class="signal-card-header"><span class="signal-card-title">🔴 Sell Opportunities</span></div>', unsafe_allow_html=True)
+                        
+                        stars_sell = results_df[results_df['Detailed Trigger'].str.contains("⭐")].sort_values('Signal', ascending=False)
+                        if not stars_sell.empty:
+                            st.markdown('<span class="status-badge sell" style="background: #fbbf24; color: #000;">⭐ TIER 3 - MAXIMUM CONVICTION</span>', unsafe_allow_html=True)
+                            for _, row in stars_sell.head(10).iterrows():
+                                st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #fbbf24;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+                            st.markdown("<br>", unsafe_allow_html=True)
+                        
+                        diamonds_sell = results_df[results_df['Detailed Trigger'].str.contains("🔶")].sort_values('Signal', ascending=False)
+                        if not diamonds_sell.empty:
+                            st.markdown('<span class="status-badge sell">🔶 WT CYCLE CROSSED</span>', unsafe_allow_html=True)
+                            for _, row in diamonds_sell.head(10).iterrows():
+                                st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #ef4444;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+                            st.markdown("<br>", unsafe_allow_html=True)
+
+                        circles_sell = results_df[results_df['Detailed Trigger'].str.contains("🔴")].sort_values('Signal', ascending=False)
+                        if not circles_sell.empty:
+                            st.markdown('<span class="status-badge overbought">🔴 STRONG AGREEMENT SELL</span>', unsafe_allow_html=True)
+                            for _, row in circles_sell.head(10).iterrows():
+                                st.markdown(f'<div class="symbol-row"><div><span class="symbol-name">{row["DisplayName"]}</span><span class="symbol-price"> • ₹{row["Price"]:,.2f}</span></div><span class="symbol-score" style="color: #f59e0b;">{row["Signal"]:.1f}</span></div>', unsafe_allow_html=True)
+
+                        if stars_sell.empty and diamonds_sell.empty and circles_sell.empty:
+                            st.markdown('<p style="color: #888888; padding: 1rem;">No sell opportunities detected</p>', unsafe_allow_html=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    
+                    # Divergence Alerts
                     div_cols = st.columns(2)
                     with div_cols[0]:
+                        bull_divs = results_df[results_df['Detailed Trigger'].str.contains("🔺")]
                         if not bull_divs.empty:
                             st.markdown('<span class="status-badge divergence">🔺 BULLISH DIVERGENCES</span>', unsafe_allow_html=True)
                             for _, row in bull_divs.head(10).iterrows():
                                 st.markdown(f'<div class="symbol-row"><span class="symbol-name">{row["DisplayName"]}</span><span style="color: #FFC300;">Price ▼ | Signal ▲</span></div>', unsafe_allow_html=True)
                     with div_cols[1]:
+                        bear_divs = results_df[results_df['Detailed Trigger'].str.contains("🔻")]
                         if not bear_divs.empty:
                             st.markdown('<span class="status-badge divergence">🔻 BEARISH DIVERGENCES</span>', unsafe_allow_html=True)
                             for _, row in bear_divs.head(10).iterrows():
                                 st.markdown(f'<div class="symbol-row"><span class="symbol-name">{row["DisplayName"]}</span><span style="color: #FFC300;">Price ▲ | Signal ▼</span></div>', unsafe_allow_html=True)
-            
-            with tab2:
-                st.markdown("##### 🏆 Top 20 Most Oversold")
-                top_oversold = results_df.nsmallest(20, 'Signal')
-                cols_o = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'MMR', 'Zone', 'Detailed Trigger']
-                st.dataframe(top_oversold[cols_o].rename(columns={'DisplayName': 'Symbol', 'Change': 'Chg %'}), width="stretch", hide_index=True)
                 
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown("##### 🔻 Top 20 Most Overbought")
-                top_overbought = results_df.nlargest(20, 'Signal')
-                st.dataframe(top_overbought[cols_o].rename(columns={'DisplayName': 'Symbol', 'Change': 'Chg %'}), width="stretch", hide_index=True)
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown("##### 📊 Extreme Signals Chart")
-                st.plotly_chart(create_ranking_chart(results_df, 20), width="stretch", config={'displayModeBar': False})
-            
-            with tab3:
-                col_d1, col_d2 = st.columns(2)
-                
-                with col_d1:
-                    st.markdown("##### Signal Distribution")
-                    st.plotly_chart(create_distribution_chart(results_df), width="stretch", config={'displayModeBar': False})
+                with tab2:
+                    st.markdown("##### 🏆 Top 20 Most Oversold")
+                    top_oversold = results_df.nsmallest(20, 'Signal')
+                    cols_o = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'MMR', 'Zone', 'Detailed Trigger']
+                    st.dataframe(top_oversold[cols_o].rename(columns={'DisplayName': 'Symbol', 'Change': 'Chg %'}), width="stretch", hide_index=True)
                     
-                    st.markdown("##### Zone Breakdown")
-                    n_neutral = len(results_df[results_df['Zone'] == 'Neutral'])
-                    zone_data = {
-                        "Zone": ["Oversold (< -5)", "Neutral (-5 to +5)", "Overbought (> +5)"],
-                        "Count": [n_oversold, n_neutral, n_overbought],
-                        "Percentage": [f"{n_oversold/len(results_df)*100:.1f}%", f"{n_neutral/len(results_df)*100:.1f}%", f"{n_overbought/len(results_df)*100:.1f}%"]
-                    }
-                    st.dataframe(pd.DataFrame(zone_data), width="stretch", hide_index=True)
-                
-                with col_d2:
-                    st.markdown("##### Statistical Summary")
-                    stats_data = {
-                        "Metric": ["Total Stocks", "Mean Signal", "Median Signal", "Std Dev", "Min Signal", "Max Signal", "Buy/Sell Ratio"],
-                        "Value": [
-                            f"{len(results_df)}",
-                            f"{results_df['Signal'].mean():.2f}",
-                            f"{results_df['Signal'].median():.2f}",
-                            f"{results_df['Signal'].std():.2f}",
-                            f"{results_df['Signal'].min():.2f}",
-                            f"{results_df['Signal'].max():.2f}",
-                            f"{n_buys}:{n_sells}" if n_sells > 0 else f"{n_buys}:0"
-                        ]
-                    }
-                    st.dataframe(pd.DataFrame(stats_data), width="stretch", hide_index=True)
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("##### 🔻 Top 20 Most Overbought")
+                    top_overbought = results_df.nlargest(20, 'Signal')
+                    st.dataframe(top_overbought[cols_o].rename(columns={'DisplayName': 'Symbol', 'Change': 'Chg %'}), width="stretch", hide_index=True)
                     
-                    st.markdown("##### Top Gainers")
-                    top_gainers = results_df.nlargest(10, 'Change')[['DisplayName', 'Price', 'Change', 'Signal']]
-                    top_gainers.columns = ['Symbol', 'Price', 'Chg %', 'Signal']
-                    st.dataframe(top_gainers, width="stretch", hide_index=True)
-            
-            with tab4:
-                st.markdown(f"##### Complete Scan Results ({len(results_df)} stocks) - {analysis_date_str} ({timeframe_label})")
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("##### 📊 Extreme Signals Chart")
+                    st.plotly_chart(create_ranking_chart(results_df, 20), width="stretch", config={'displayModeBar': False})
                 
-                filter_col1, filter_col2, filter_col3 = st.columns(3)
-                with filter_col1:
-                    zone_filter = st.multiselect("Filter by Zone", ["Oversold", "Neutral", "Overbought"], default=["Oversold", "Neutral", "Overbought"])
-                with filter_col2:
-                    signal_filter = st.multiselect("Filter by Direction", ["BUY", "SELL", "-"], default=["BUY", "SELL", "-"])
-                with filter_col3:
-                    sort_by = st.selectbox("Sort by", ["Signal", "Change", "Price", "DisplayName"], index=0)
+                with tab3:
+                    col_d1, col_d2 = st.columns(2)
+                    
+                    with col_d1:
+                        st.markdown("##### Signal Distribution")
+                        st.plotly_chart(create_distribution_chart(results_df), width="stretch", config={'displayModeBar': False})
+                        
+                        st.markdown("##### Zone Breakdown")
+                        n_neutral = len(results_df[results_df['Zone'] == 'Neutral'])
+                        zone_data = {
+                            "Zone": ["Oversold (< -5)", "Neutral (-5 to +5)", "Overbought (> +5)"],
+                            "Count": [n_oversold, n_neutral, n_overbought],
+                            "Percentage": [f"{n_oversold/len(results_df)*100:.1f}%", f"{n_neutral/len(results_df)*100:.1f}%", f"{n_overbought/len(results_df)*100:.1f}%"]
+                        }
+                        st.dataframe(pd.DataFrame(zone_data), width="stretch", hide_index=True)
+                    
+                    with col_d2:
+                        st.markdown("##### Statistical Summary")
+                        stats_data = {
+                            "Metric": ["Total Stocks", "Mean Signal", "Median Signal", "Std Dev", "Min Signal", "Max Signal", "Buy/Sell Ratio"],
+                            "Value": [
+                                f"{len(results_df)}",
+                                f"{results_df['Signal'].mean():.2f}",
+                                f"{results_df['Signal'].median():.2f}",
+                                f"{results_df['Signal'].std():.2f}",
+                                f"{results_df['Signal'].min():.2f}",
+                                f"{results_df['Signal'].max():.2f}",
+                                f"{n_buys}:{n_sells}" if n_sells > 0 else f"{n_buys}:0"
+                            ]
+                        }
+                        st.dataframe(pd.DataFrame(stats_data), width="stretch", hide_index=True)
+                        
+                        st.markdown("##### Top Gainers")
+                        top_gainers = results_df.nlargest(10, 'Change')[['DisplayName', 'Price', 'Change', 'Signal']]
+                        top_gainers.columns = ['Symbol', 'Price', 'Chg %', 'Signal']
+                        st.dataframe(top_gainers, width="stretch", hide_index=True)
                 
-                filtered_df = results_df[
-                    (results_df['Zone'].isin(zone_filter)) & 
-                    (results_df['Trigger'].isin(signal_filter))
-                ].sort_values(sort_by, ascending=(sort_by == 'DisplayName'))
-                
-                display_cols = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'MMR', 'Zone', 'Detailed Trigger']
-                display_df = filtered_df[display_cols].copy()
-                display_df.columns = ['Symbol', 'Price', 'Chg %', 'Signal', 'MSF', 'MMR', 'Zone', 'UMA Triggers']
-                
-                st.dataframe(display_df, width="stretch", hide_index=True, height=500)
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                csv_data = results_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 Download Full Report (CSV)",
-                    data=csv_data,
-                    file_name=f"sanket_{universe_title.replace(' ', '_')}_{timeframe_label}_{analysis_date.strftime('%Y%m%d')}.csv",
-                    mime="text/csv"
-                )
-        else:
-            st.warning("No data retrieved. Please check your internet connection or try a different universe.")
+                with tab4:
+                    st.markdown(f"##### Complete Scan Results ({len(results_df)} stocks) - {analysis_date_str} ({timeframe_label})")
+                    
+                    filter_col1, filter_col2, filter_col3 = st.columns(3)
+                    with filter_col1:
+                        zone_filter = st.multiselect("Filter by Zone", ["Oversold", "Neutral", "Overbought"], default=["Oversold", "Neutral", "Overbought"])
+                    with filter_col2:
+                        signal_filter = st.multiselect("Filter by Direction", ["BUY", "SELL", "-"], default=["BUY", "SELL", "-"])
+                    with filter_col3:
+                        sort_by = st.selectbox("Sort by", ["Signal", "Change", "Price", "DisplayName"], index=0)
+                    
+                    filtered_df = results_df[
+                        (results_df['Zone'].isin(zone_filter)) & 
+                        (results_df['Trigger'].isin(signal_filter))
+                    ].sort_values(sort_by, ascending=(sort_by == 'DisplayName'))
+                    
+                    display_cols = ['DisplayName', 'Price', 'Change', 'Signal', 'MSF', 'MMR', 'Zone', 'Detailed Trigger']
+                    display_df = filtered_df[display_cols].copy()
+                    display_df.columns = ['Symbol', 'Price', 'Chg %', 'Signal', 'MSF', 'MMR', 'Zone', 'UMA Triggers']
+                    
+                    st.dataframe(display_df, use_container_width=True)
+                    
+csv_data = display_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download Full Report (CSV)",
+                        data=csv_data,
+                        file_name=f"sanket_{universe_title.replace(' ', '_')}_{timeframe_label}_{analysis_date.strftime('%Y%m%d')}.csv",
+                        mime="text/csv"
+                    )
+            else:
+                st.warning("No data retrieved. Please check your internet connection or try a different universe.")
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN APPLICATION
-# ══════════════════════════════════════════════════════════════════════════════
 
 def run_timeseries_analysis(universe, selected_index, start_date, end_date, length, roc_len, regime_sensitivity, base_weight, timeframe):
     """Run time series analysis across a date range"""
