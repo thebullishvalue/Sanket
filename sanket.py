@@ -200,7 +200,7 @@ INDEX_LIST = [
     "NIFTY MEDIA", "NIFTY METAL", "NIFTY PHARMA"
 ]
 
-BASE_URL = "https://www.niftyindices.com/IndexConstituent/"
+BASE_URL = "https://archives.nseindia.com/content/indices/"
 INDEX_URL_MAP = {
     "NIFTY 50": f"{BASE_URL}ind_nifty50list.csv",
     "NIFTY NEXT 50": f"{BASE_URL}ind_niftynext50list.csv",
@@ -287,7 +287,7 @@ def get_fno_stock_list():
         pass
     
     try:
-        url = "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv"
+        url = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, verify=False, timeout=10)
         if response.status_code == 200:
@@ -325,7 +325,7 @@ def get_index_stock_list(index):
         }
         
         session = requests.Session()
-        session.get("https://www.niftyindices.com", headers=headers, verify=False, timeout=10)
+        session.get("https://archives.nseindia.com", headers=headers, verify=False, timeout=10)
         
         response = session.get(url, headers=headers, verify=False, timeout=15)
         response.raise_for_status()
