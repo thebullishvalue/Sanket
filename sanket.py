@@ -1065,9 +1065,12 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
         return
     
     if analysis_date is not None:
-        if st.button("◈ RUN SCREENER", type="primary", key="run_screener_btn"):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+        button_key = f"run_screener_{st.session_state.get('screener_click_count', 0)}"
+        if st.button("◈ RUN SCREENER", type="primary", key=button_key):
+            st.session_state.screener_click_count = st.session_state.get('screener_click_count', 0) + 1
+            st.session_state.screener_run = True
+        
+        if st.session_state.get('screener_run', False):
             
             # 1. Fetch stock list
             status_text.markdown(f"**⏳ Fetching {universe_title} stock list...**")
@@ -1669,6 +1672,9 @@ def main():
      regime_sensitivity, base_weight, timeframe, analysis_mode, 
      start_date_hist, end_date_hist) = render_sidebar()
     render_header()
+    
+    if 'screener_run' not in st.session_state:
+        st.session_state.screener_run = False
     
     if analysis_mode == "Date Range (Time Series)":
         run_timeseries_analysis(universe, selected_index, start_date_hist, end_date_hist, 
