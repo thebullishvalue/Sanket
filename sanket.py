@@ -981,12 +981,40 @@ def render_sidebar():
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
         st.markdown('<div class="sidebar-title">📅 Analysis Date</div>', unsafe_allow_html=True)
-        analysis_date = st.date_input(
-            "Select Date",
-            datetime.date.today(),
-            max_value=datetime.date.today(),
-            help="Select the date for signal analysis (defaults to today)"
+        analysis_mode = st.radio(
+            "Analysis Mode",
+            ["Single Date", "Date Range (Time Series)"],
+            horizontal=True,
+            help="Single Date: Analyze one day | Date Range: Analyze historical period for time series"
         )
+        
+        if analysis_mode == "Single Date":
+            analysis_date = st.date_input(
+                "Select Date",
+                datetime.date.today(),
+                max_value=datetime.date.today(),
+                help="Select the date for signal analysis"
+            )
+            start_date_hist = None
+            end_date_hist = None
+        else:
+            analysis_date = None  # Not used in range mode
+            col_date1, col_date2 = st.columns(2)
+            with col_date1:
+                start_date_hist = st.date_input(
+                    "Start Date",
+                    datetime.date.today() - datetime.timedelta(days=30),
+                    max_value=datetime.date.today() - 1,
+                    help="Start date for time series analysis"
+                )
+            with col_date2:
+                end_date_hist = st.date_input(
+                    "End Date",
+                    datetime.date.today(),
+                    max_value=datetime.date.today(),
+                    help="End date for time series analysis"
+                )
+            analysis_date = end_date_hist  # For single analysis fallback
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         
@@ -1009,7 +1037,7 @@ def render_sidebar():
         </div>
         """, unsafe_allow_html=True)
         
-        return universe, selected_index, analysis_date, length, roc_len, regime_sensitivity, base_weight, timeframe
+        return universe, selected_index, analysis_date, length, roc_len, regime_sensitivity, base_weight, timeframe, analysis_mode, start_date_hist, end_date_hist
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN SCREENER FUNCTION
@@ -1395,9 +1423,287 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
 # MAIN APPLICATION
 # ══════════════════════════════════════════════════════════════════════════════
 
+def run_timeseries_analysis(universe, selected_index, start_date, end_date, length, roc_len, regime_sensitivity, base_weight, timeframe):
+    """Run time series analysis across a date range"""
+    
+    universe_title = selected_index if universe == "Index Constituents" and selected_index else "F&O Stocks"
+    timeframe_label = "Weekly" if timeframe == "Weekly" else "Daily"
+    
+    # Generate date range
+    if timeframe == "Weekly":
+        date_range = pd.bdate_range(start=start_date, end=end_date, freq='W-FRI')
+    else:
+        date_range = pd.bdate_range(start=start_date, end=end_date)
+    
+    if len(date_range) == 0:
+        st.error("No valid trading dates in the selected range.")
+        return
+    
+    st.markdown(f"""
+    <div class='info-box'>
+        <h4>📈 Time Series Analysis ({universe_title})</h4>
+        <p>UMA v3 signal analysis across {len(date_range)} {timeframe_label.lower()} periods.<br>
+        <strong>Date Range:</strong> {start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    if st.button("◈ RUN TIME SERIES ANALYSIS", type="primary"):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Get stock list
+        status_text.markdown(f"**⏳ Fetching {universe_title} stock list...**")
+        if universe == "F&O Stocks":
+            stock_list, fetch_msg = get_fno_stock_list()
+        else:
+            stock_list, fetch_msg = get_index_stock_list(selected_index)
+        
+        if not stock_list:
+            st.error(f"Failed to fetch stock list: {fetch_msg}")
+            return
+        
+        # Limit for performance (use top 100 by default for time series)
+        stock_list = stock_list[:100]
+        total_stocks = len(stock_list)
+        
+        # Fetch macro data once for the entire range
+        days_back_macro = 400 if timeframe == "Weekly" else 300
+        macro_df = fetch_macro_data(days_back=days_back_macro + (end_date - start_date).days)
+        if timeframe == "Weekly":
+            macro_df = macro_df.resample('W-FRI').last().dropna(how='all')
+        
+        # Initialize results storage
+        all_daily_results = []
+        
+        # Process each date
+        for date_idx, analysis_date in enumerate(date_range):
+            progress = (date_idx + 1) / len(date_range)
+            progress_bar.progress(progress)
+            status_text.markdown(f"**⏳ Processing {analysis_date.strftime('%d %b %Y')}... ({date_idx+1}/{len(date_range)})**")
+            
+            # Fetch data for this date
+            days_back = 500 if timeframe == "Weekly" else 300
+            data_dict, batch_msg = fetch_batch_data(stock_list, end_date=analysis_date, days_back=days_back)
+            
+            if not data_dict:
+                continue
+            
+            # Process each stock
+            date_results = []
+            for ticker in data_dict:
+                try:
+                    df = data_dict[ticker].copy()
+                    df.index = pd.to_datetime(df.index).tz_localize(None)
+                    
+                    # Get target date index
+                    analysis_datetime = pd.Timestamp(analysis_date)
+                    valid_dates = df.index[df.index <= analysis_datetime]
+                    
+                    if len(valid_dates) < 50:
+                        continue
+                    
+                    target_idx = len(valid_dates) - 1
+                    if target_idx < 0:
+                        continue
+                    
+                    df = df.iloc[:target_idx+1]
+                    
+                    # Run analysis
+                    df = run_full_analysis(df, length, roc_len, regime_sensitivity, base_weight)
+                    
+                    # Get metrics for this date
+                    last_row = df.iloc[-1]
+                    
+                    # Count signals
+                    signals = []
+                    has_tier3 = last_row.get('Star_Buy', False) or last_row.get('Star_Sell', False)
+                    has_diamond = last_row['Diamond_Buy'] or last_row['Diamond_Sell']
+                    has_circle = last_row['Circle_Buy'] or last_row['Circle_Sell']
+                    has_triangle = last_row['Triangle_Buy'] or last_row['Triangle_Sell']
+                    
+                    zone = last_row['Condition']
+                    
+                    date_results.append({
+                        'Date': analysis_date,
+                        'Zone': zone,
+                        'Tier3': has_tier3,
+                        'Diamond': has_diamond,
+                        'Circle': has_circle,
+                        'Triangle': has_triangle,
+                        'Signal': last_row['Unified_Osc'],
+                        'MSF': last_row['MSF_Osc'],
+                        'MMR': last_row['MMR_Osc'],
+                        'Stock': ticker
+                    })
+                except:
+                    pass
+            
+            if date_results:
+                all_daily_results.extend(date_results)
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        if not all_daily_results:
+            st.warning("No data retrieved. Please check your internet connection or try a different date range.")
+            return
+        
+        # Create time series DataFrame
+        ts_df = pd.DataFrame(all_daily_results)
+        
+        # Aggregate by date
+        daily_agg = ts_df.groupby('Date').agg({
+            'Signal': 'mean',
+            'MSF': 'mean',
+            'MMR': 'mean',
+            'Tier3': 'sum',
+            'Diamond': 'sum',
+            'Circle': 'sum',
+            'Triangle': 'sum',
+            'Stock': 'count'
+        }).rename(columns={'Stock': 'Total'})
+        
+        # Count zones
+        zone_counts = ts_df.groupby(['Date', 'Zone']).size().unstack(fill_value=0)
+        daily_agg = daily_agg.join(zone_counts)
+        
+        # Display results
+        st.success(f"✅ Time Series Analysis Complete! Analyzed {len(daily_agg)} {timeframe_label.lower()} periods")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # ===== Time Series Charts =====
+        st.markdown("### 📊 Signal Count Time Series")
+        
+        # Signal counts by zone
+        if 'Zone' in ts_df.columns:
+            fig_zones = go.Figure()
+            
+            # Stacked bar for zones
+            zone_cols = [col for col in daily_agg.columns if col in ['Tier3 Buy', 'Tier3 Sell', 'Deep Oversold', 'Deep Overbought', 'Oversold', 'Overbought', 'Neutral']]
+            
+            for zone_col in zone_cols:
+                if zone_col in daily_agg.columns:
+                    fig_zones.add_trace(go.Bar(
+                        x=daily_agg.index,
+                        y=daily_agg[zone_col],
+                        name=zone_col,
+                        stack='stack'
+                    ))
+            
+            fig_zones.update_layout(
+                barmode='stack',
+                title="Signal Counts by Zone Over Time",
+                xaxis_title="Date",
+                yaxis_title="Count",
+                template='plotly_dark',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='#1A1A1A',
+                height=400,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_zones, use_container_width=True)
+        
+        # Signal types over time
+        fig_types = go.Figure()
+        fig_types.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Tier3'], name='Tier 3', line=dict(color='#fbbf24', width=2), fill='tozeroy', fillcolor='rgba(251, 191, 36, 0.2)'))
+        fig_types.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Diamond'], name='Diamond', line=dict(color='#10b981', width=2)))
+        fig_types.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Circle'], name='Circle', line=dict(color='#06b6d4', width=2)))
+        fig_types.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Triangle'], name='Triangle', line=dict(color='#f59e0b', width=2)))
+        
+        fig_types.update_layout(
+            title="Signal Types Over Time",
+            xaxis_title="Date",
+            yaxis_title="Count",
+            template='plotly_dark',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='#1A1A1A',
+            height=350,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_types, use_container_width=True)
+        
+        # Average signal over time
+        fig_avg = go.Figure()
+        fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Signal'], name='Unified Signal', line=dict(color='#FFC300', width=3), fill='tozeroy', fillcolor='rgba(255, 195, 0, 0.1)'))
+        fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['MSF'], name='MSF', line=dict(color='#06b6d4', width=2), opacity=0.7))
+        fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['MMR'], name='MMR', line=dict(color='#a78bfa', width=2), opacity=0.7))
+        
+        fig_avg.add_hline(y=0, line=dict(color='gray', width=1, dash='dash'))
+        fig_avg.add_hline(y=-5, line=dict(color='green', width=1, dash='dash'))
+        fig_avg.add_hline(y=5, line=dict(color='red', width=1, dash='dash'))
+        
+        fig_avg.update_layout(
+            title="Average Signal Strength Over Time",
+            xaxis_title="Date",
+            yaxis_title="Signal",
+            template='plotly_dark',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='#1A1A1A',
+            height=350,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_avg, use_container_width=True)
+        
+        # Heatmap of zones
+        if 'Zone' in ts_df.columns:
+            zone_pivot = ts_df.pivot_table(index='Date', columns='Zone', values='Stock', aggfunc='count', fill_value=0)
+            
+            fig_heat = go.Figure(data=go.Heatmap(
+                z=zone_pivot.values,
+                x=zone_pivot.columns,
+                y=zone_pivot.index,
+                colorscale='RdYlGn_r',
+                showscale=True
+            ))
+            fig_heat.update_layout(
+                title="Zone Distribution Heatmap",
+                xaxis_title="Zone",
+                yaxis_title="Date",
+                template='plotly_dark',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='#1A1A1A',
+                height=400
+            )
+            st.plotly_chart(fig_heat, use_container_width=True)
+        
+        # Summary stats
+        st.markdown("### 📋 Time Series Summary")
+        
+        summary_data = {
+            "Metric": ["Total Periods", "Avg Signals/Day", "Peak Tier3", "Peak Diamond", "Peak Circle", "Avg Unified Signal", "Best Day (Buy)", "Worst Day (Sell)"],
+            "Value": [
+                f"{len(daily_agg)}",
+                f"{(daily_agg['Tier3'] + daily_agg['Diamond'] + daily_agg['Circle']).mean():.1f}",
+                f"{daily_agg['Tier3'].max()} ({daily_agg['Tier3'].idxmax().strftime('%d %b %Y')})",
+                f"{daily_agg['Diamond'].max()} ({daily_agg['Diamond'].idxmax().strftime('%d %b %Y')})",
+                f"{daily_agg['Circle'].max()} ({daily_agg['Circle'].idxmax().strftime('%d %b %Y')})",
+                f"{daily_agg['Signal'].mean():.2f}",
+                f"{daily_agg['Signal'].min():.2f} ({daily_agg['Signal'].idxmin().strftime('%d %b %Y')})",
+                f"{daily_agg['Signal'].max():.2f} ({daily_agg['Signal'].idxmax().strftime('%d %b %Y')})"
+            ]
+        }
+        st.dataframe(pd.DataFrame(summary_data), hide_index=True, use_container_width=True)
+        
+        # Data table
+        st.markdown("### 📅 Daily Signal Data")
+        st.dataframe(daily_agg.round(2), use_container_width=True)
+
+
 def main():
-    universe, selected_index, analysis_date, length, roc_len, regime_sensitivity, base_weight, timeframe = render_sidebar()
+    (universe, selected_index, analysis_date, length, roc_len, 
+     regime_sensitivity, base_weight, timeframe, analysis_mode, 
+     start_date_hist, end_date_hist) = render_sidebar()
     render_header()
+    
+    if analysis_mode == "Date Range (Time Series)":
+        run_timeseries_analysis(universe, selected_index, start_date_hist, end_date_hist, 
+                                 length, roc_len, regime_sensitivity, base_weight, timeframe)
+    else:
+        run_screener(universe, selected_index, analysis_date, length, roc_len, 
+                     regime_sensitivity, base_weight, timeframe)
     
     with st.expander("📖 Signal Interpretation Guide (UMA v3)", expanded=False):
         col_s1, col_s2, col_s3 = st.columns(3)
