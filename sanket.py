@@ -1065,9 +1065,15 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
         return
     
     if analysis_date is not None:
-        # Button to start analysis
-        if st.button("◈ RUN SCREENER", type="primary", key="run_screener_btn"):
-            st.session_state.screener_run = True
+        # Get the click counter from session state
+        if 'screener_counter' not in st.session_state:
+            st.session_state.screener_counter = 0
+        
+        # Only show button if not currently running
+        if not st.session_state.get('screener_run', False):
+            if st.button("◈ RUN SCREENER", type="primary", key=f"run_screener_{st.session_state.screener_counter}"):
+                st.session_state.screener_run = True
+                st.rerun()
         
         # Run analysis if flag is set
         if st.session_state.get('screener_run', False):
@@ -1208,6 +1214,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
             
             if results:
                 st.session_state.screener_run = False
+                st.session_state.screener_counter += 1
                 st.success(f"✅ Scan Complete! Analyzed {len(results)}/{total_stocks} stocks ({timeframe_label}) for {analysis_date_str}")
                 results_df = pd.DataFrame(results)
                 
