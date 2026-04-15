@@ -220,6 +220,14 @@ INDEX_URL_MAP = {
     "NIFTY PHARMA": f"{BASE_URL}ind_niftypharmalist.csv"
 }
 
+WIKI_URL_MAP = {
+    "NIFTY 50": "https://en.wikipedia.org/wiki/NIFTY_50",
+    "NIFTY NEXT 50": "https://en.wikipedia.org/wiki/NIFTY_Next_50",
+    "NIFTY BANK": "https://en.wikipedia.org/wiki/NIFTY_Bank",
+    "NIFTY IT": "https://en.wikipedia.org/wiki/NIFTY_IT",
+    "NIFTY FIN SERVICE": "https://en.wikipedia.org/wiki/Nifty_Financial_Services_Index",
+}
+
 UNIVERSE_OPTIONS = ["F&O Stocks", "Index Constituents"]
 TIMEFRAME_OPTIONS = ["Daily", "Weekly"]
 
@@ -341,7 +349,40 @@ def get_index_stock_list(index):
             return None, f"No Symbol column found"
             
     except Exception as e:
+        wiki_result = _fetch_index_from_wikipedia(index)
+        if wiki_result[0]:
+            return wiki_result
         return None, f"Error: {e}"
+
+
+def _fetch_index_from_wikipedia(index):
+    wiki_url = WIKI_URL_MAP.get(index)
+    if not wiki_url:
+        return None, f"No Wikipedia fallback for {index}"
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(wiki_url, headers=headers, timeout=15)
+        response.raise_for_status()
+        tables = pd.read_html(io.StringIO(response.text))
+        for table in tables:
+            cols_lower = [str(c).lower() for c in table.columns]
+            symbol_col = None
+            for candidate in ('symbol', 'ticker', 'nse code', 'code'):
+                for i, c in enumerate(cols_lower):
+                    if candidate in c:
+                        symbol_col = table.columns[i]
+                        break
+                if symbol_col is not None:
+                    break
+            if symbol_col is None:
+                continue
+            symbols = [str(s).strip() for s in table[symbol_col].dropna().tolist()]
+            symbols_ns = [s + ".NS" for s in symbols if s and s.lower() != 'nan']
+            if symbols_ns:
+                return symbols_ns, f"✓ Fetched {len(symbols_ns)} constituents (Wikipedia fallback)"
+        return None, "No symbol table found on Wikipedia page"
+    except Exception as e:
+        return None, f"Wikipedia fallback error: {e}"
 
 
 @st.cache_data(ttl=900, show_spinner=False)
