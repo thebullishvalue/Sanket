@@ -1065,7 +1065,7 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
         return
     
     if analysis_date is not None:
-        if st.button("◈ RUN SCREENER", type="primary", key=f"run_screener_{id(analysis_date)}"):
+        if st.button("◈ RUN SCREENER", type="primary", key="run_screener_btn"):
             progress_bar = st.progress(0)
             status_text = st.empty()
             
