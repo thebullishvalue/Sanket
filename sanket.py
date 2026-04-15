@@ -1154,6 +1154,8 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
 
     if 'run_btn_clicked' not in st.session_state:
         st.session_state.run_btn_clicked = False
+    if 'screener_counter' not in st.session_state:
+        st.session_state.screener_counter = 0
     
     # Show run button
     if st.button("◈ RUN SCREENER", type="primary", key="run_screener_btn"):
@@ -1496,21 +1498,29 @@ def run_screener(universe, selected_index, analysis_date, length, roc_len, regim
 
 
 def run_timeseries_analysis(universe, selected_index, start_date, end_date, length, roc_len, regime_sensitivity, base_weight, timeframe):
-    """Run time series analysis across a date range"""
-    
+    """Run time series analysis across a date range.
+
+    Fast path: fetch each stock's history ONCE (covering the full range plus
+    a warmup buffer), run the UMA analysis ONCE per stock, then sample the
+    precomputed signal columns at every date in the range.
+    """
+
     universe_title = selected_index if universe == "Index Constituents" and selected_index else "F&O Stocks"
     timeframe_label = "Weekly" if timeframe == "Weekly" else "Daily"
-    
-    # Generate date range
+
+    if start_date >= end_date:
+        st.error("Start date must be before end date.")
+        return
+
     if timeframe == "Weekly":
         date_range = pd.bdate_range(start=start_date, end=end_date, freq='W-FRI')
     else:
         date_range = pd.bdate_range(start=start_date, end=end_date)
-    
+
     if len(date_range) == 0:
         st.error("No valid trading dates in the selected range.")
         return
-    
+
     st.markdown(f"""
     <div class='info-box'>
         <h4>📈 Time Series Analysis ({universe_title})</h4>
@@ -1518,103 +1528,121 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, leng
         <strong>Date Range:</strong> {start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}</p>
     </div>
     """, unsafe_allow_html=True)
-    
+
     st.markdown("<br>", unsafe_allow_html=True)
-    
+
+    if 'ts_run_clicked' not in st.session_state:
+        st.session_state.ts_run_clicked = False
     if st.button("◈ RUN TIME SERIES ANALYSIS", type="primary", key="run_timeseries_btn"):
+        st.session_state.ts_run_clicked = True
+
+    if st.session_state.ts_run_clicked:
         progress_bar = st.progress(0)
         status_text = st.empty()
-        
-        # Get stock list
+
+        # 1. Stock list
         status_text.markdown(f"**⏳ Fetching {universe_title} stock list...**")
         if universe == "F&O Stocks":
             stock_list, fetch_msg = get_fno_stock_list()
         else:
             stock_list, fetch_msg = get_index_stock_list(selected_index)
-        
+
         if not stock_list:
             st.error(f"Failed to fetch stock list: {fetch_msg}")
+            progress_bar.empty()
+            status_text.empty()
+            st.session_state.ts_run_clicked = False
             return
-        
-        # Limit for performance (use top 100 by default for time series)
-        stock_list = stock_list[:100]
-        total_stocks = len(stock_list)
-        
-        # Fetch macro data once for the entire range
-        days_back_macro = 400 if timeframe == "Weekly" else 300
-        macro_df = fetch_macro_data(days_back=days_back_macro + (end_date - start_date).days)
-        if timeframe == "Weekly":
-            macro_df = macro_df.resample('W-FRI').last().dropna(how='all')
-        
-        # Initialize results storage
+
+        st.toast(fetch_msg, icon="✅")
+
+        # 2. Macro data (single fetch covering history + range)
+        range_days = (end_date - start_date).days
+        warmup_days = 500 if timeframe == "Weekly" else 300
+        status_text.markdown("**⏳ Fetching macro factors...**")
+        macro_df = fetch_macro_data(days_back=warmup_days + range_days)
+        if timeframe == "Weekly" and not macro_df.empty:
+            macro_df = resample_macro_to_weekly(macro_df)
+
+        # 3. Bulk download all stock OHLC ONCE for the whole range
+        status_text.markdown(f"**⏳ Downloading {len(stock_list)} stocks (single batch)...**")
+        progress_bar.progress(0.15)
+        data_dict, batch_msg = fetch_batch_data(
+            stock_list,
+            end_date=end_date,
+            days_back=warmup_days + range_days,
+            include_live=False,
+        )
+
+        if not data_dict:
+            st.error(f"Failed to fetch market data: {batch_msg}")
+            progress_bar.empty()
+            status_text.empty()
+            st.session_state.ts_run_clicked = False
+            return
+
+        # 4. Run UMA once per stock, then sample at every date in date_range
         all_daily_results = []
-        
-        # Process each date
-        for date_idx, analysis_date in enumerate(date_range):
-            progress = (date_idx + 1) / len(date_range)
-            progress_bar.progress(progress)
-            status_text.markdown(f"**⏳ Processing {analysis_date.strftime('%d %b %Y')}... ({date_idx+1}/{len(date_range)})**")
-            
-            # Fetch data for this date
-            days_back = 500 if timeframe == "Weekly" else 300
-            data_dict, batch_msg = fetch_batch_data(stock_list, end_date=analysis_date, days_back=days_back)
-            
-            if not data_dict:
-                continue
-            
-            # Process each stock
-            date_results = []
-            for ticker in data_dict:
-                try:
-                    df = data_dict[ticker].copy()
-                    df.index = pd.to_datetime(df.index).tz_localize(None)
-                    
-                    # Get target date index
-                    analysis_datetime = pd.Timestamp(analysis_date)
-                    valid_dates = df.index[df.index <= analysis_datetime]
-                    
-                    if len(valid_dates) < 50:
+        n_stocks = len(data_dict)
+        date_index = pd.DatetimeIndex(date_range).normalize()
+        min_required = length + 50
+
+        for i, (ticker, raw_df) in enumerate(data_dict.items()):
+            if i % 5 == 0:
+                progress_bar.progress(0.15 + 0.8 * (i / max(n_stocks, 1)))
+                status_text.markdown(
+                    f"**⏳ Analyzing {ticker.replace('.NS','')} ({i+1}/{n_stocks})...**"
+                )
+            try:
+                df = raw_df.copy()
+                df.index = pd.to_datetime(df.index)
+                if df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+
+                if timeframe == "Weekly":
+                    df = resample_to_weekly(df)
+                    if df is None or len(df) < min_required:
                         continue
-                    
-                    target_idx = len(valid_dates) - 1
-                    if target_idx < 0:
-                        continue
-                    
-                    df = df.iloc[:target_idx+1]
-                    
-                    # Run analysis
-                    df = run_full_analysis(df, length, roc_len, regime_sensitivity, base_weight)
-                    
-                    # Get metrics for this date
-                    last_row = df.iloc[-1]
-                    
-                    # Count signals
-                    signals = []
-                    has_tier3 = last_row.get('Star_Buy', False) or last_row.get('Star_Sell', False)
-                    has_diamond = last_row['Diamond_Buy'] or last_row['Diamond_Sell']
-                    has_circle = last_row['Circle_Buy'] or last_row['Circle_Sell']
-                    has_triangle = last_row['Triangle_Buy'] or last_row['Triangle_Sell']
-                    
-                    zone = last_row['Condition']
-                    
-                    date_results.append({
-                        'Date': analysis_date,
-                        'Zone': zone,
+
+                if not macro_df.empty:
+                    df = df.join(macro_df, how='left').ffill()
+
+                df = run_full_analysis(df, length, roc_len, regime_sensitivity, base_weight)
+
+                # Reindex once: as-of sample at every requested date
+                df_idx = df.index.normalize()
+                df_aligned = df.copy()
+                df_aligned.index = df_idx
+                df_aligned = df_aligned[~df_aligned.index.duplicated(keep='last')]
+                sampled = df_aligned.reindex(date_index, method='ffill')
+
+                valid_mask = sampled['Close'].notna()
+                if not valid_mask.any():
+                    continue
+                sampled = sampled[valid_mask]
+
+                for ts, row in sampled.iterrows():
+                    has_tier3 = bool(row.get('Star_Buy', False) or row.get('Star_Sell', False))
+                    has_diamond = bool(row.get('Diamond_Buy', False) or row.get('Diamond_Sell', False))
+                    has_circle = bool(row.get('Circle_Buy', False) or row.get('Circle_Sell', False))
+                    has_triangle = bool(row.get('Triangle_Buy', False) or row.get('Triangle_Sell', False))
+
+                    all_daily_results.append({
+                        'Date': ts,
+                        'Stock': ticker,
+                        'Zone': row.get('Condition', 'Neutral'),
                         'Tier3': has_tier3,
                         'Diamond': has_diamond,
                         'Circle': has_circle,
                         'Triangle': has_triangle,
-                        'Signal': last_row['Unified_Osc'],
-                        'MSF': last_row['MSF_Osc'],
-                        'MMR': last_row['MMR_Osc'],
-                        'Stock': ticker
+                        'Signal': float(row.get('Unified_Osc', 0.0)) if pd.notna(row.get('Unified_Osc', np.nan)) else 0.0,
+                        'MSF': float(row.get('MSF_Osc', 0.0)) if pd.notna(row.get('MSF_Osc', np.nan)) else 0.0,
+                        'MMR': float(row.get('MMR_Osc', 0.0)) if pd.notna(row.get('MMR_Osc', np.nan)) else 0.0,
                     })
-                except:
-                    pass
-            
-            if date_results:
-                all_daily_results.extend(date_results)
-        
+            except Exception:
+                continue
+
+        progress_bar.progress(1.0)
         progress_bar.empty()
         status_text.empty()
         
