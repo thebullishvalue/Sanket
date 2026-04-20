@@ -779,8 +779,12 @@ def render_sidebar():
         reg_len, wt_n1, wt_n2 = 20, 10, 21
         obLevel1, obLevel2, osLevel1, osLevel2 = 80, 40, -80, -40
 
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
         # Run Button
         run_clicked = st.button("◈ RUN SCREENER", type="primary", width='stretch', use_container_width=True)
+
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
         # System Spec Card
         try:
