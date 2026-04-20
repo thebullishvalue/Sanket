@@ -1015,7 +1015,9 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     if not results:
         st.warning("No stocks met the analysis criteria.")
-        return None
+        # Return empty DataFrame with expected columns to prevent downstream KeyErrors
+        expected_cols = ["Symbol", "DisplayName", "SimpleName", "Signal", "Trend", "Wave", "Zone", "SignalType", "Price", "L_Today", "L_1d", "L_2d", "L_3d", "L_5d", "S_Today", "S_1d", "S_2d", "S_3d", "S_5d", "Osc_Value", "MA_Alignment", "ZScore_Value"]
+        return pd.DataFrame(columns=expected_cols)
 
     results_df = pd.DataFrame(results)
     return results_df
@@ -1575,6 +1577,10 @@ def main():
         # Display single-date results (skip if time-series already rendered)
         if st.session_state["results_df"] is not None and not st.session_state.get("timeseries_done"):
             results_df = st.session_state["results_df"]
+            
+            # Safety: Ensure required columns exist (handles stale session state)
+            if 'SimpleName' not in results_df.columns and not results_df.empty:
+                results_df['SimpleName'] = results_df['Symbol'].str.replace(".NS", "", regex=False).str.lstrip("^")
 
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
