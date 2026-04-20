@@ -216,6 +216,9 @@ CRYPTO_MAP = {
 }
 CRYPTO_LIST = list(CRYPTO_MAP.keys())
 
+# Asset Name Lookup for friendly display (Reverse map tickers to names)
+ASSET_NAME_LOOKUP = {v: k for k, v in {**COMMODITY_MAP, **CURRENCY_MAP, **CRYPTO_MAP}.items()}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA FETCHING FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -953,7 +956,11 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 signal_type = last_row['Condition']
 
             # Clean display name based on universe
-            display_name = ticker.replace(".NS", "").lstrip("^")
+            friendly_name = ASSET_NAME_LOOKUP.get(ticker)
+            if friendly_name:
+                display_name = f"{ticker} ({friendly_name})"
+            else:
+                display_name = ticker.replace(".NS", "").lstrip("^")
 
             results.append({
                 "Symbol": ticker,
