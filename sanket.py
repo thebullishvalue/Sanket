@@ -82,6 +82,7 @@ ui.render_theme_toggle()
 # ══════════════════════════════════════════════════════════════════════════════
 
 INDEX_LIST = [
+    "F&O Stocks",
     "NIFTY 50", "NIFTY NEXT 50", "NIFTY 100", "NIFTY 200", "NIFTY 500",
     "NIFTY MIDCAP 50", "NIFTY MIDCAP 100", "NIFTY SMLCAP 100", "NIFTY BANK",
     "NIFTY AUTO", "NIFTY FIN SERVICE", "NIFTY FMCG", "NIFTY IT",
@@ -211,7 +212,9 @@ CRYPTO_LIST = list(CRYPTO_MAP.keys())
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_fno_stock_list():
+    """Fetch F&O eligible stocks from NSE with multiple fallback sources."""
     try:
         url = "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O"
         headers = {
@@ -220,10 +223,10 @@ def get_fno_stock_list():
             'Accept-Language': 'en-US,en;q=0.9',
             'Referer': 'https://www.nseindia.com/market-data/live-equity-market?symbol=NIFTY%20FIN%20SERVICE',
         }
-        
+
         session = requests.Session()
         session.get("https://www.nseindia.com", headers=headers, timeout=10)
-        
+
         response = session.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
@@ -234,7 +237,7 @@ def get_fno_stock_list():
                     return symbols_ns, f"✓ Fetched {len(symbols_ns)} F&O securities"
     except Exception:
         pass
-    
+
     try:
         stock_data = nse_get_advances_declines()
         if isinstance(stock_data, pd.DataFrame):
@@ -245,14 +248,14 @@ def get_fno_stock_list():
                 symbols = stock_data['symbol'].tolist()
             elif len(stock_data.index) > 0 and not isinstance(stock_data.index, pd.RangeIndex):
                 symbols = stock_data.index.tolist()
-            
+
             if symbols:
                 symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
                 if symbols_ns:
                     return symbols_ns, f"✓ Fetched {len(symbols_ns)} F&O securities"
     except Exception:
         pass
-    
+
     try:
         url = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
@@ -266,12 +269,14 @@ def get_fno_stock_list():
                 return symbols_ns, f"✓ Fetched {len(symbols_ns)} stocks (NIFTY 500 fallback)"
     except Exception:
         pass
-    
+
     return None, "Failed to fetch F&O list from all sources"
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def get_index_stock_list(index):
+    if index == "F&O Stocks":
+        return get_fno_stock_list()
+
     url = INDEX_URL_MAP.get(index)
     if not url:
         return None, f"No URL for {index}"
@@ -569,11 +574,11 @@ def render_landing_page():
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                 SIGNAL ENGINE
             </h3>
-            <p>Wave Trend Composite Index (WRCI) detects momentum reversals and trend confirmations across your universe in real-time.</p>
+            <p>Wave Trend Composite Index (WRCI) identifies momentum signals and trend strength across your universe with daily updates.</p>
             <div class='spec'>
-                <span>Detection:</span> Long/Short crossovers<br>
-                <span>Indicators:</span> Wave Trend + Regime<br>
-                <span>Output:</span> Strength + Zone<br>
+                <span>Detection:</span> Wave Trend signals (bullish/bearish)<br>
+                <span>Scoring:</span> Signal magnitude + trend direction<br>
+                <span>Output:</span> Signal strength, zone, trend value<br>
                 <span>Refresh:</span> Daily updates
             </div>
         </div>
@@ -586,12 +591,12 @@ def render_landing_page():
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
                 SIGNAL TYPES
             </h3>
-            <p>Identify momentum shifts (Long/Short), trend confirmations, and overbought/oversold zones without technical jargon.</p>
+            <p>Rank momentum signals by strength, identify overbought/oversold zones, and track trend direction for each symbol.</p>
             <div class='spec'>
-                <span>Long:</span> Bullish momentum<br>
-                <span>Short:</span> Bearish momentum<br>
-                <span>OB/OS:</span> Extreme zones<br>
-                <span>Trend:</span> Strength meter
+                <span>Long:</span> Bullish signal (positive Wave Trend)<br>
+                <span>Short:</span> Bearish signal (negative Wave Trend)<br>
+                <span>OB/OS:</span> Overbought/Oversold zones<br>
+                <span>Trend:</span> Direction + strength value
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -623,14 +628,13 @@ def render_landing_page():
         </h4>
         <p>Configure via the <strong>Sidebar</strong>: select <strong>Universe</strong>, <strong>Timeframe</strong>, <strong>Date Range</strong>, and <strong>Engine Settings</strong>.<br>
            Click <strong>RUN SCREENER</strong> to analyze and discover today's signals.<br>
-           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will compute Wave Trend oscillations · Score signal strength · Rank by conviction</span></p>
+           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will compute Wave Trend oscillations · Calculate signal magnitude · Rank by strength</span></p>
     </div>
     """, unsafe_allow_html=True)
 
 
 def get_conviction_score(row):
-    """Calculate conviction score based on technical confirmations."""
-    # Based on RSI, Oscillator, Z-Score, MA alignment
+    """Calculate strength score from signal magnitude with diminishing returns above 50."""
     base_score = abs(row.get('Signal', 0))
     if base_score > 50:
         base_score = 50 + (base_score - 50) * 0.5
@@ -750,7 +754,7 @@ def render_sidebar():
         selected_index = None
 
         if universe == "India Indexes":
-            selected_index = st.selectbox("Index", INDEX_LIST, index=INDEX_LIST.index("NIFTY 50"), label_visibility="collapsed")
+            selected_index = st.selectbox("Index", INDEX_LIST, index=0, label_visibility="collapsed")
         elif universe == "US Indexes":
             selected_index = st.selectbox("Index", US_INDEX_LIST, index=US_INDEX_LIST.index("DOW JONES"), label_visibility="collapsed")
         elif universe == "Commodities":
@@ -1529,7 +1533,7 @@ def main():
             with tab_signals:
                 ui.render_section_header(
                     "Today's Signals",
-                    "Actionable momentum reversals ranked by conviction",
+                    "Momentum signals ranked by strength across bullish and bearish sides",
                     icon="zap",
                     accent="amber"
                 )
@@ -1574,30 +1578,58 @@ def main():
 
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-                    # Long signals — Organized table with age grouping
-                    if not longs_df.empty:
-                        st.markdown(f"""
-                        <div style="font-family: var(--display); font-size: 0.95rem; font-weight: 700; color: var(--emerald); margin: 1.5rem 0 1rem 0; text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 0.5rem;">
-                            {SVGS['LONG'].replace('currentColor', 'var(--emerald)')} Bullish Signals by Timing
-                        </div>
-                        """, unsafe_allow_html=True)
-                        _, long_stats, _, _ = _bucket_signals_by_age(longs_df, side='long')
-                        long_table_html = _build_signal_table_html(long_stats, side='long')
-                        st.components.v1.html(long_table_html, height=max(250, 200 + sum(stats['count'] for stats in long_stats.values()) * 35))
+                    # Inject SVG icons into nested sub-tab labels via CSS ::before pseudo-elements
+                    st.markdown("""
+                    <style>
+                    [data-testid="stTabs"] [data-testid="stTabs"] button[role="tab"]:nth-of-type(1) [data-testid="stMarkdownContainer"] p::before {
+                        content: '';
+                        display: inline-block;
+                        width: 14px;
+                        height: 14px;
+                        margin-right: 8px;
+                        vertical-align: -2px;
+                        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2334D399' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='m5 12 7-7 7 7'/><path d='M12 19V5'/></svg>");
+                        background-repeat: no-repeat;
+                        background-size: contain;
+                    }
+                    [data-testid="stTabs"] [data-testid="stTabs"] button[role="tab"]:nth-of-type(2) [data-testid="stMarkdownContainer"] p::before {
+                        content: '';
+                        display: inline-block;
+                        width: 14px;
+                        height: 14px;
+                        margin-right: 8px;
+                        vertical-align: -2px;
+                        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23FB7185' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='m19 12-7 7-7-7'/></svg>");
+                        background-repeat: no-repeat;
+                        background-size: contain;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
 
-                    if not longs_df.empty and not shorts_df.empty:
-                        st.markdown('<div style="margin: 1.5rem 0;"></div>', unsafe_allow_html=True)
+                    # Sub-tabs for Bullish and Bearish signals (side-by-side navigation instead of vertical stacking)
+                    bull_tab, bear_tab = st.tabs(["Bullish Signals by Timing", "Bearish Signals by Timing"])
 
-                    # Short signals — Organized table with age grouping
-                    if not shorts_df.empty:
-                        st.markdown(f"""
-                        <div style="font-family: var(--display); font-size: 0.95rem; font-weight: 700; color: var(--rose); margin: 1.5rem 0 1rem 0; text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 0.5rem;">
-                            {SVGS['SHORT'].replace('currentColor', 'var(--rose)')} Bearish Signals by Timing
-                        </div>
-                        """, unsafe_allow_html=True)
-                        _, short_stats, _, _ = _bucket_signals_by_age(shorts_df, side='short')
-                        short_table_html = _build_signal_table_html(short_stats, side='short')
-                        st.components.v1.html(short_table_html, height=max(250, 200 + sum(stats['count'] for stats in short_stats.values()) * 35))
+                    _age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
+
+                    with bull_tab:
+                        if not longs_df.empty:
+                            _, long_stats, _, _ = _bucket_signals_by_age(longs_df, side='long')
+                            long_table_html = _build_signal_table_html(long_stats, side='long')
+                            _groups = sum(1 for a in _age_order if long_stats[a]['count'] > 0)
+                            _rows = sum(long_stats[a]['count'] for a in _age_order)
+                            st.components.v1.html(long_table_html, height=94 + _groups * 42 + _rows * 40)
+                        else:
+                            st.info("No bullish signals detected.")
+
+                    with bear_tab:
+                        if not shorts_df.empty:
+                            _, short_stats, _, _ = _bucket_signals_by_age(shorts_df, side='short')
+                            short_table_html = _build_signal_table_html(short_stats, side='short')
+                            _groups = sum(1 for a in _age_order if short_stats[a]['count'] > 0)
+                            _rows = sum(short_stats[a]['count'] for a in _age_order)
+                            st.components.v1.html(short_table_html, height=94 + _groups * 42 + _rows * 40)
+                        else:
+                            st.info("No bearish signals detected.")
                 else:
                     st.info("No signals detected in the specified universe and timeframe.")
 
@@ -1605,8 +1637,8 @@ def main():
             # ════ TAB 3: SIGNAL STRENGTH ANALYSIS ════════════════════════════════════════
             with tab_strength:
                 ui.render_section_header(
-                    "Conviction Analysis",
-                    "Why each signal matters — technical confirmations and trend alignment",
+                    "Signal Strength Analysis",
+                    "Top momentum signals ranked by magnitude, with zone and trend context",
                     icon="target",
                     accent="emerald"
                 )
@@ -1618,11 +1650,11 @@ def main():
 
                 col_s1, col_s2, col_s3 = st.columns(3)
                 with col_s1:
-                    ui.render_metric_card("Avg Signal Strength", f"{avg_signal_str:.1f}", "Across all symbols", "neutral")
+                    ui.render_metric_card("Avg Signal Magnitude", f"{avg_signal_str:.1f}", "Average across all symbols", "neutral")
                 with col_s2:
-                    ui.render_metric_card("Avg Trend Strength", f"{avg_trend_str:.1f}", "Regime confirmation", "neutral")
+                    ui.render_metric_card("Avg Trend Value", f"{avg_trend_str:.1f}", "Directional strength", "neutral")
                 with col_s3:
-                    ui.render_metric_card("Strong Trends", str(strong_trend_count), f"{strong_trend_count/len(results_df)*100:.0f}% confidence", "info")
+                    ui.render_metric_card("Strong Trends", str(strong_trend_count), f"{strong_trend_count/len(results_df)*100:.0f}% of universe", "info")
 
                 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
@@ -1635,26 +1667,26 @@ def main():
                 with col_l:
                     st.markdown(f"""
                     <h4 style="font-family: var(--display); font-size: 0.9rem; color: var(--emerald); margin: 1.5rem 0 1rem 0; text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 0.5rem;">
-                        {SVGS['LONG'].replace('currentColor', 'var(--emerald)')} Top Long Conviction
+                        {SVGS['LONG'].replace('currentColor', 'var(--emerald)')} Strongest Bullish Signals
                     </h4>
                     """, unsafe_allow_html=True)
                     if not top_longs.empty:
                         long_conviction_html = _build_conviction_table_html(top_longs, side='long')
-                        st.components.v1.html(long_conviction_html, height=max(200, 160 + len(top_longs) * 42))
+                        st.components.v1.html(long_conviction_html, height=94 + len(top_longs) * 40)
                     else:
-                        st.info("No long signals with conviction")
+                        st.info("No bullish signals detected in this period.")
 
                 with col_s:
                     st.markdown(f"""
                     <h4 style="font-family: var(--display); font-size: 0.9rem; color: var(--rose); margin: 1.5rem 0 1rem 0; text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 0.5rem;">
-                        {SVGS['SHORT'].replace('currentColor', 'var(--rose)')} Top Short Conviction
+                        {SVGS['SHORT'].replace('currentColor', 'var(--rose)')} Strongest Bearish Signals
                     </h4>
                     """, unsafe_allow_html=True)
                     if not top_shorts.empty:
                         short_conviction_html = _build_conviction_table_html(top_shorts, side='short')
-                        st.components.v1.html(short_conviction_html, height=max(200, 160 + len(top_shorts) * 42))
+                        st.components.v1.html(short_conviction_html, height=94 + len(top_shorts) * 40)
                     else:
-                        st.info("No short signals with conviction")
+                        st.info("No bearish signals detected in this period.")
 
             # ════ TAB 4: SYSTEM DATA ════════════════════════════════════════════════════
             with tab_raw:
