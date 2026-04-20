@@ -955,16 +955,18 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             elif last_row['Condition'] != 'Neutral':
                 signal_type = last_row['Condition']
 
-            # Clean display name based on universe
+            # Clean display names
+            simple_name = ticker.replace(".NS", "").lstrip("^")
             friendly_name = ASSET_NAME_LOOKUP.get(ticker)
             if friendly_name:
                 display_name = f"{ticker} ({friendly_name})"
             else:
-                display_name = ticker.replace(".NS", "").lstrip("^")
+                display_name = simple_name
 
             results.append({
                 "Symbol": ticker,
                 "DisplayName": display_name,
+                "SimpleName": simple_name,
                 "Signal": round(last_row['Unified_Osc'], 2),
                 "Trend": round(last_row['Norm_Trend'], 2),
                 "Wave": round(last_row['WT1'], 2),
@@ -1620,7 +1622,7 @@ def main():
                         strongest_long = longs_df.iloc[0] if not longs_df.empty else None
                         ui.render_metric_card(
                             "Strongest Long",
-                            strongest_long['DisplayName'] if strongest_long is not None else "—",
+                            strongest_long['SimpleName'] if strongest_long is not None else "—",
                             f"Signal: {strongest_long['Signal']:.1f}" if strongest_long is not None else "No signals",
                             "info"
                         )
@@ -1628,7 +1630,7 @@ def main():
                         strongest_short = shorts_df.iloc[0] if not shorts_df.empty else None
                         ui.render_metric_card(
                             "Weakest Short",
-                            strongest_short['DisplayName'] if strongest_short is not None else "—",
+                            strongest_short['SimpleName'] if strongest_short is not None else "—",
                             f"Signal: {strongest_short['Signal']:.1f}" if strongest_short is not None else "No signals",
                             "info"
                         )
