@@ -1,7 +1,6 @@
 """
 Sanket - Market Signal Screener | A Pragyam Product Family Member
 WRCI Engine (Wave-Regime Composite Index) Quantitative Signal Scanner
-Built by Antigravity
 """
 
 import html
@@ -117,8 +116,18 @@ WIKI_URL_MAP = {
     "NIFTY FIN SERVICE": "https://en.wikipedia.org/wiki/Nifty_Financial_Services_Index",
 }
 
-UNIVERSE_OPTIONS = ["India Indexes", "US Indexes", "Commodities", "Currency", "Crypto"]
+UNIVERSE_OPTIONS = ["India Indexes", "US Indexes", "ETF Index", "Commodities", "Currency", "Crypto"]
 TIMEFRAME_OPTIONS = ["Daily", "Weekly"]
+
+# ETF Universe (from Pragyam)
+ETF_LIST = [
+    "CHEMICAL.NS", "NIFTYIETF.NS", "MON100.NS", "MAKEINDIA.NS", "SILVERIETF.NS",
+    "HEALTHIETF.NS", "CONSUMIETF.NS", "GOLDIETF.NS", "INFRAIETF.NS", "CPSEETF.NS",
+    "TNIDETF.NS", "COMMOIETF.NS", "MODEFENCE.NS", "MOREALTY.NS", "PSUBNKIETF.NS",
+    "MASPTOP50.NS", "FMCGIETF.NS", "GROWWPOWER.NS", "ITIETF.NS", "EVINDIA.NS",
+    "MNC.NS", "FINIETF.NS", "AUTOIETF.NS", "PVTBANIETF.NS", "MONIFTY500.NS",
+    "ECAPINSURE.NS", "MIDCAPIETF.NS", "MOSMALL250.NS", "OILIETF.NS", "METALIETF.NS"
+]
 
 # US Index list
 US_INDEX_LIST = ["S&P 500", "DOW JONES", "NASDAQ 100"]
@@ -395,6 +404,11 @@ def get_crypto_symbols(crypto_name=None):
     return None, f"Unknown crypto asset: {crypto_name}"
 
 
+def get_etf_symbols():
+    """Return the fixed ETF universe for analysis"""
+    return ETF_LIST, f"✓ Loaded {len(ETF_LIST)} ETFs"
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True):
     if end_date is None:
@@ -610,7 +624,7 @@ def render_landing_page():
             </h3>
             <p>Scan F&O stocks or entire index constituents. Filter by timeframe. Customize sensitivity thresholds.</p>
             <div class='spec'>
-                <span>Universes:</span> F&O + Indices<br>
+                <span>Universes:</span> F&O + Indices + ETFs<br>
                 <span>Timeframes:</span> Daily · Weekly<br>
                 <span>Symbols:</span> Up to 500<br>
                 <span>Modes:</span> Point + Time Series
@@ -633,8 +647,11 @@ def render_landing_page():
     """, unsafe_allow_html=True)
 
 
-def get_conviction_score(row):
-    """Calculate strength score from signal magnitude with diminishing returns above 50."""
+def get_signal_strength_score(row):
+    """Calculate signal strength from magnitude with diminishing returns above 50.
+
+    Returns: Strength score (0-100) where magnitude 0-50 = linear, >50 = diminishing returns.
+    """
     base_score = abs(row.get('Signal', 0))
     if base_score > 50:
         base_score = 50 + (base_score - 50) * 0.5
@@ -642,17 +659,23 @@ def get_conviction_score(row):
 
 
 def render_signal_detail_card(symbol, price, signal_val, trend_val, zone, signal_type, rsi_val, osc_val, zscore_val, ma_count):
-    """Render a detailed signal card with actionable information."""
-    conviction = get_conviction_score({'Signal': signal_val})
+    """Render detailed signal card with strength indicator and technical confirmations.
+
+    Displays signal magnitude, trend direction, zone status, and technical confirmations
+    (RSI levels, oscillator state) to provide comprehensive signal context.
+
+    Returns: Renders to Streamlit; no return value.
+    """
+    signal_strength = get_signal_strength_score({'Signal': signal_val})
 
     # Determine signal quality
-    if conviction >= 65:
+    if signal_strength >= 65:
         icon = SVGS["DOT"].replace('currentColor', 'var(--emerald)')
         label = "Strong"
-    elif conviction >= 50:
+    elif signal_strength >= 50:
         icon = SVGS["DOT"].replace('currentColor', 'var(--info)')
         label = "Moderate"
-    elif conviction >= 35:
+    elif signal_strength >= 35:
         icon = SVGS["DOT"].replace('currentColor', 'var(--amber)')
         label = "Weak"
     else:
@@ -686,10 +709,10 @@ def render_signal_detail_card(symbol, price, signal_val, trend_val, zone, signal
             </div>
             <div style="text-align: right;">
                 <div style="font-family: var(--data); font-size: 1.25rem; font-weight: 700; color: var(--amber);">
-                    {conviction:.0f}%
+                    {signal_strength:.0f}%
                 </div>
                 <div style="font-family: var(--data); font-size: 0.7rem; color: var(--ink-secondary); text-transform: uppercase; letter-spacing: 0.05em;">
-                    Conviction
+                    Strength
                 </div>
             </div>
         </div>
@@ -757,6 +780,8 @@ def render_sidebar():
             selected_index = st.selectbox("Index", INDEX_LIST, index=0, label_visibility="collapsed")
         elif universe == "US Indexes":
             selected_index = st.selectbox("Index", US_INDEX_LIST, index=US_INDEX_LIST.index("DOW JONES"), label_visibility="collapsed")
+        elif universe == "ETF Index":
+            selected_index = "NSE ETF Universe"
         elif universe == "Commodities":
             selected_index = "Global Commodities"
         elif universe == "Currency":
@@ -804,6 +829,9 @@ def render_sidebar():
             elif universe == "Currency" and selected_index:
                 symbols_count = len(get_currency_symbols(selected_index)[0] or [])
                 universe_display = selected_index
+            elif universe == "ETF Index":
+                symbols_count = len(ETF_LIST)
+                universe_display = "NSE ETFs"
             else:
                 symbols_count = "—"
                 universe_display = universe
@@ -828,7 +856,13 @@ def render_sidebar():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe):
-    """Run WRCI screener analysis and return results DataFrame."""
+    """Execute WRCI momentum analysis on universe symbols and return ranked signals.
+
+    Fetches market data for universe, computes Wave Trend oscillations, calculates
+    signal magnitude and trend values, detects overbought/oversold zones.
+
+    Returns: DataFrame with signals ranked by magnitude, or None on error.
+    """
     obLevel1, obLevel2, osLevel1, osLevel2 = levels
     progress_slot = st.empty()
 
@@ -850,6 +884,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         stock_list, msg = get_currency_symbols(None)   # Runs all pairs
     elif universe == "Crypto":
         stock_list, msg = get_crypto_symbols(None)     # Runs all crypto
+    elif universe == "ETF Index":
+        stock_list, msg = get_etf_symbols()
     else:
         stock_list, msg = None, f"Unknown universe: {universe}"
 
@@ -977,7 +1013,13 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
 
 def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe):
-    """Run time-series WRCI analysis."""
+    """Execute WRCI analysis across historical date range for signal evolution tracking.
+
+    Differs from run_screener_analysis: processes 500+ days of history to detect
+    signal emergence, persistence, and fade patterns over time for timeline visualization.
+
+    Returns: Dict with per-date results for historical signal tracking.
+    """
     progress_slot = st.empty()
     progress_bar(progress_slot, 5, "Fetching historical depth", f"Date range: {start_date} to {end_date}")
 
@@ -999,6 +1041,8 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         stock_list, _ = get_currency_symbols(None)
     elif universe == "Crypto":
         stock_list, _ = get_crypto_symbols(None)
+    elif universe == "ETF Index":
+        stock_list, _ = get_etf_symbols()
     else:
         stock_list = None
 
@@ -1339,8 +1383,14 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
     return table_html
 
 
-def _build_conviction_table_html(df: pd.DataFrame, side: str = 'long') -> str:
-    """Build Pragyam-style HTML table for top conviction signals."""
+def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> str:
+    """Build ranked HTML table for top signals by magnitude.
+
+    Creates styled HTML table with colored accent for side (long=green, short=red),
+    displaying symbol, price, signal magnitude, trend direction, and zone status.
+
+    Returns: Complete HTML document string ready for st.components.v1.html().
+    """
     import html as html_module
 
     accent_light = "#34D399" if side == 'long' else "#FB7185"
@@ -1671,7 +1721,7 @@ def main():
                     </h4>
                     """, unsafe_allow_html=True)
                     if not top_longs.empty:
-                        long_conviction_html = _build_conviction_table_html(top_longs, side='long')
+                        long_conviction_html = _build_signal_strength_table_html(top_longs, side='long')
                         st.components.v1.html(long_conviction_html, height=94 + len(top_longs) * 40)
                     else:
                         st.info("No bullish signals detected in this period.")
@@ -1683,7 +1733,7 @@ def main():
                     </h4>
                     """, unsafe_allow_html=True)
                     if not top_shorts.empty:
-                        short_conviction_html = _build_conviction_table_html(top_shorts, side='short')
+                        short_conviction_html = _build_signal_strength_table_html(top_shorts, side='short')
                         st.components.v1.html(short_conviction_html, height=94 + len(top_shorts) * 40)
                     else:
                         st.info("No bearish signals detected in this period.")
