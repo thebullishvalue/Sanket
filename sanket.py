@@ -1778,35 +1778,47 @@ def main():
                 st.dataframe(display_df, width='stretch', height=500)
 
                 # ── PREMIUM DOWNLOAD SECTION ──────────────────────────────────────────────
-                st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+                st.markdown('<div class="section-divider" style="margin-top: 2rem;"></div>', unsafe_allow_html=True)
                 
-                dl_col1, dl_col2 = st.columns([3, 1])
-                with dl_col1:
-                    st.markdown(f"""
-                    <div style="display: flex; align-items: center; gap: 0.75rem;">
-                        <div style="width: 32px; height: 32px; border-radius: 8px; background: rgba(34, 211, 238, 0.1); display: flex; align-items: center; justify-content: center; color: var(--cyan);">
-                            {SVGS['CHECK'].replace('14', '18')}
-                        </div>
-                        <div>
-                            <h4 style="font-family: var(--display); font-size: 0.9rem; color: var(--ink-primary); margin: 0; text-transform: uppercase; letter-spacing: 0.08em;">
-                                Export Quant Dataset
-                            </h4>
-                            <p style="font-family: var(--data); font-size: 0.75rem; color: var(--ink-secondary); margin: 0.1rem 0 0 0;">
-                                Integrated signal history and technical diagnostics for external validation.
-                            </p>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                # Filter signals for curated downloads
+                bullish_df = results_df[results_df['L_5d'] != "—"].copy().sort_values('Signal', ascending=False)
+                bearish_df = results_df[results_df['S_5d'] != "—"].copy().sort_values('Signal', ascending=True)
+
+                hdr_col, btn_col1, btn_col2 = st.columns([2.2, 0.9, 0.9])
                 
-                with dl_col2:
-                    csv_data = display_df.to_csv(index=False).encode('utf-8')
+                with hdr_col:
+                    ui.render_section_header(
+                        "Export Quant Dataset",
+                        "Curated bullish and bearish signal archives by timing",
+                        icon="download",
+                        accent="cyan"
+                    )
+                
+                # Align buttons with the header text
+                with btn_col1:
+                    st.markdown('<div style="height: 1.8rem;"></div>', unsafe_allow_html=True)
+                    csv_bullish = bullish_df.to_csv(index=False).encode('utf-8')
                     st.download_button(
-                        label="Download CSV",
-                        data=csv_data,
-                        file_name=f"sanket_signals_{analysis_date}.csv",
+                        label="Bullish Signals",
+                        data=csv_bullish,
+                        file_name=f"bullish_signals_{analysis_date}.csv",
                         mime="text/csv",
                         use_container_width=True,
-                        key="csv_download_primary"
+                        key="dl_bullish_curated",
+                        help="Download all currently active bullish signals by timing"
+                    )
+
+                with btn_col2:
+                    st.markdown('<div style="height: 1.8rem;"></div>', unsafe_allow_html=True)
+                    csv_bearish = bearish_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="Bearish Signals",
+                        data=csv_bearish,
+                        file_name=f"bearish_signals_{analysis_date}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="dl_bearish_curated",
+                        help="Download all currently active bearish signals by timing"
                     )
 
             render_footer()
