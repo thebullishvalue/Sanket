@@ -166,25 +166,25 @@ def render_conviction_signal(
     if conviction >= 65:
         signal_class = "buy"
         signal_text = "Strong Buy"
-        emoji = "🟢"
+        icon_svg = ICONS["target"].replace('1.5', '2') # Bolder icon
         conviction_bar_width = min(100, conviction)
         conviction_bar_color = "var(--emerald)"
     elif conviction >= 50:
         signal_class = "buy"
         signal_text = "Buy"
-        emoji = "🟩"
+        icon_svg = ICONS["activity"]
         conviction_bar_width = min(100, conviction)
         conviction_bar_color = "var(--emerald-bright)"
     elif conviction >= 35:
         signal_class = "hold"
         signal_text = "Hold"
-        emoji = "🟡"
+        icon_svg = ICONS["cube"]
         conviction_bar_width = min(100, conviction)
         conviction_bar_color = "var(--amber)"
     else:
         signal_class = "sell"
         signal_text = "Caution"
-        emoji = "🔴"
+        icon_svg = ICONS["shield"]
         conviction_bar_width = min(100, conviction)
         conviction_bar_color = "var(--rose)"
 
@@ -211,8 +211,8 @@ def render_conviction_signal(
                 </div>
             </div>
             <div style="font-family:var(--data); font-size:0.75rem; font-weight:700; color:var(--ink-primary); min-width:40px; text-align:right; position:relative; z-index:1;">{int(conviction)}</div>
-            <div class="signal-pill {signal_class}" style="display:inline-flex; align-items:center; gap:0.3rem; padding:0.3rem 0.75rem; border-radius:20px; font-size:0.72rem; font-weight:600; position:relative; z-index:1;">
-                {emoji} {signal_text}
+            <div class="signal-pill {signal_class}" style="display:inline-flex; align-items:center; gap:0.4rem; padding:0.3rem 0.75rem; border-radius:20px; font-size:0.72rem; font-weight:600; position:relative; z-index:1;">
+                <div style="width:12px; height:12px;">{icon_svg}</div> {signal_text}
             </div>
         </div>
         """,

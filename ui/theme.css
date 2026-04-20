@@ -1231,18 +1231,6 @@ footer {
     border-top: 1px solid rgba(212, 168, 83, 0.15);
 }
 
-/* Nishkarsh convention aliases */
-.signal-card.undervalued {
-    @apply: signal-card.buy;
-}
-
-.signal-card.overvalued {
-    @apply: signal-card.sell;
-}
-
-.signal-card.fair {
-    @apply: signal-card.hold;
-}
 
 .signal-card.undervalued {
     border-top: 1px solid rgba(52, 211, 153, 0.15);
@@ -1725,7 +1713,7 @@ footer {
 .section-divider {
     height: 1px;
     background: linear-gradient(90deg, var(--border) 0%, transparent 100%);
-    margin: var(--sp-6) 0;
+    margin: var(--sp-3) 0;
     border: none;
 }
 
@@ -1746,7 +1734,7 @@ footer {
     color: var(--ink-tertiary);
     text-transform: uppercase;
     letter-spacing: 0.12em;
-    margin: var(--sp-6) 0 var(--sp-3) 0;
+    margin: var(--sp-2) 0 var(--sp-2) 0;
 }
 
 .stTextInput input,
