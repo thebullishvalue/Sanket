@@ -1817,28 +1817,32 @@ def main():
                         <div style="
                             display: grid;
                             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-                            gap: 0.5rem 1.5rem;
+                            gap: 0.45rem 1.5rem;
                         ">
                             <div>
                                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Signal</span>
                                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">WRCI oscillator value. Higher magnitude = stronger momentum. Bullish signals are positive, bearish are negative.</span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">WRCI oscillator value. Positive = bullish momentum, negative = bearish. Higher magnitude = stronger signal.</span>
                             </div>
                             <div>
                                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Trend</span>
                                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Directional strength of the underlying move. Positive = uptrend, negative = downtrend.</span>
-                            </div>
-                            <div>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Signal + Trend</span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Both positive = confirmed bullish momentum, high conviction. Both negative = confirmed bearish, high conviction. Signal positive but Trend negative = bullish signal against a downtrend — watch for reversal or wait for trend to turn. Signal negative but Trend positive = bearish signal in an uptrend — possible exhaustion, not yet a clean short.</span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Directional strength of the move. Positive = uptrend, negative = downtrend.</span>
                             </div>
                             <div>
                                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Timing</span>
                                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Age of the signal. Older signals are more prudent — the move has had time to mature and confirm the shift in direction. &ldquo;Today&rdquo; signals are fresh and may still be setting up.</span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Older signals are more prudent — the shift has had time to mature and confirm. Today signals are still setting up.</span>
                             </div>
+                        </div>
+                        <div style="
+                            margin-top: 0.6rem;
+                            padding-top: 0.6rem;
+                            border-top: 1px solid rgba(255,255,255,0.05);
+                        ">
+                            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Reading Signal &amp; Trend together</span>
+                            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
+                            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Both positive = confirmed bullish, high conviction. Both negative = confirmed bearish, high conviction. Signal positive + Trend negative = bullish signal against a downtrend — wait for trend to turn before acting. Signal negative + Trend positive = bearish signal inside an uptrend — possible exhaustion, not yet a clean short.</span>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
