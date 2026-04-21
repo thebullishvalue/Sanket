@@ -1884,8 +1884,8 @@ def main():
                 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
                 # Top conviction signals — side-by-side tables (long vs short)
-                top_longs = results_df[results_df['Signal'] > 0].sort_values('Signal', ascending=False).head(8)
-                top_shorts = results_df[results_df['Signal'] < 0].sort_values('Signal', ascending=True).head(8)
+                top_longs = longs_df.head(8)
+                top_shorts = shorts_df.head(8)
 
                 col_l, col_s = st.columns(2)
 
