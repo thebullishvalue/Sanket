@@ -1884,8 +1884,8 @@ def main():
                 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
                 # Top conviction signals — side-by-side tables (long vs short)
-                top_longs = longs_df.head(8)
-                top_shorts = shorts_df.head(8)
+                top_longs = longs_df.head(10)
+                top_shorts = shorts_df.head(10)
 
                 col_l, col_s = st.columns(2)
 
@@ -1937,48 +1937,62 @@ def main():
 
                 st.dataframe(display_df, width='stretch', height=500)
 
-                # ── PREMIUM DOWNLOAD SECTION ──────────────────────────────────────────────
+                # ── EXPORT SECTION ─────────────────────────────────────────────────────────
                 st.markdown('<div class="section-divider" style="margin-top: 2rem;"></div>', unsafe_allow_html=True)
-                
-                # Filter signals for curated downloads
-                bullish_df = results_df[results_df['L_5d'] != "—"].copy().sort_values('Signal', ascending=False)
-                bearish_df = results_df[results_df['S_5d'] != "—"].copy().sort_values('Signal', ascending=True)
 
-                hdr_col, btn_col1, btn_col2 = st.columns([2.2, 0.9, 0.9])
-                
-                with hdr_col:
-                    ui.render_section_header(
-                        "Export Quant Dataset",
-                        "Curated bullish and bearish signal archives by timing",
-                        icon="download",
-                        accent="cyan"
-                    )
-                
-                # Align buttons with the header text
-                with btn_col1:
-                    st.markdown('<div style="height: 1.8rem;"></div>', unsafe_allow_html=True)
-                    csv_bullish = bullish_df.to_csv(index=False).encode('utf-8')
+                ui.render_section_header(
+                    "Export Quant Dataset",
+                    "Signal archives by timing and top-ranked strength lists",
+                    icon="download",
+                    accent="cyan"
+                )
+
+                # Row 1 — full signal lists by timing
+                st.markdown('<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.65rem; color:#4B5563; text-transform:uppercase; letter-spacing:0.08em; margin: 0.5rem 0 0.4rem 0;">Signals by Timing</p>', unsafe_allow_html=True)
+                dl_col1, dl_col2 = st.columns(2)
+                with dl_col1:
                     st.download_button(
-                        label="Bullish Signals",
-                        data=csv_bullish,
+                        label="↑  Bullish Signals",
+                        data=longs_df.to_csv(index=False).encode('utf-8'),
                         file_name=f"bullish_signals_{analysis_date}.csv",
                         mime="text/csv",
                         use_container_width=True,
-                        key="dl_bullish_curated",
-                        help="Download all currently active bullish signals by timing"
+                        key="dl_bullish_timing",
+                        help="All active bullish signals grouped by timing"
                     )
-
-                with btn_col2:
-                    st.markdown('<div style="height: 1.8rem;"></div>', unsafe_allow_html=True)
-                    csv_bearish = bearish_df.to_csv(index=False).encode('utf-8')
+                with dl_col2:
                     st.download_button(
-                        label="Bearish Signals",
-                        data=csv_bearish,
+                        label="↓  Bearish Signals",
+                        data=shorts_df.to_csv(index=False).encode('utf-8'),
                         file_name=f"bearish_signals_{analysis_date}.csv",
                         mime="text/csv",
                         use_container_width=True,
-                        key="dl_bearish_curated",
-                        help="Download all currently active bearish signals by timing"
+                        key="dl_bearish_timing",
+                        help="All active bearish signals grouped by timing"
+                    )
+
+                # Row 2 — top 10 by signal strength
+                st.markdown('<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.65rem; color:#4B5563; text-transform:uppercase; letter-spacing:0.08em; margin: 0.9rem 0 0.4rem 0;">Top 10 by Strength</p>', unsafe_allow_html=True)
+                dl_col3, dl_col4 = st.columns(2)
+                with dl_col3:
+                    st.download_button(
+                        label="↑  Top 10 Bullish",
+                        data=top_longs.to_csv(index=False).encode('utf-8'),
+                        file_name=f"top10_bullish_{analysis_date}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="dl_top10_bullish",
+                        help="Top 10 bullish signals ranked by signal magnitude"
+                    )
+                with dl_col4:
+                    st.download_button(
+                        label="↓  Top 10 Bearish",
+                        data=top_shorts.to_csv(index=False).encode('utf-8'),
+                        file_name=f"top10_bearish_{analysis_date}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="dl_top10_bearish",
+                        help="Top 10 bearish signals ranked by signal magnitude"
                     )
 
             render_footer()
