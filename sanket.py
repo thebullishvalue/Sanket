@@ -115,6 +115,8 @@ BENCHMARK_INDEXES_LIST = [
     "NIFTYSMLCAP50.NS",       # Nifty Smallcap 50
     "NIFTY_SMALLCAP_100.NS",  # Nifty Smallcap 100
     "NIFTY_SMALLCAP_250.NS",  # Nifty Smallcap 250
+    # Volatility
+    "^INDIAVIX",       # India VIX
     # Broad market — BSE
     "^BSESN",          # S&P BSE Sensex
     "BSE-100.BO",      # BSE 100
