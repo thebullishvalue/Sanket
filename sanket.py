@@ -857,7 +857,7 @@ def render_sidebar():
         selected_index = None
 
         if universe == "India Indexes":
-            selected_index = st.selectbox("Index", INDEX_LIST, index=0, label_visibility="collapsed")
+            selected_index = st.selectbox("Index", INDEX_LIST, index=INDEX_LIST.index("Benchmark Indexes"), label_visibility="collapsed")
         elif universe == "US Indexes":
             selected_index = st.selectbox("Index", US_INDEX_LIST, index=US_INDEX_LIST.index("DOW JONES"), label_visibility="collapsed")
         elif universe == "ETF Index":
@@ -1783,6 +1783,71 @@ def main():
                             st.components.v1.html(short_table_html, height=120 + _groups * 46 + _rows * 44)
                         else:
                             st.info("No bearish signals detected.")
+
+                    st.markdown("""
+                    <div style="
+                        position: relative;
+                        margin-top: 1.25rem;
+                        padding: 0.85rem 1rem 0.85rem 1rem;
+                        background: rgba(255, 255, 255, 0.015);
+                        border: 1px solid rgba(255, 255, 255, 0.06);
+                        border-radius: 8px;
+                        overflow: hidden;
+                    ">
+                        <!-- amber top rule -->
+                        <div style="
+                            position: absolute; top: 0; left: 0; right: 0; height: 1px;
+                            background: linear-gradient(90deg, #D4A853 0%, rgba(212,168,83,0.25) 60%, transparent 100%);
+                            opacity: 0.55;
+                        "></div>
+
+                        <!-- header row -->
+                        <div style="
+                            display: flex; align-items: center; gap: 0.45rem;
+                            margin-bottom: 0.65rem;
+                            font-family: 'IBM Plex Mono', monospace;
+                            font-size: 0.58rem;
+                            font-weight: 600;
+                            letter-spacing: 0.12em;
+                            text-transform: uppercase;
+                            color: #D4A853;
+                        ">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#D4A853" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                            </svg>
+                            How to read this table
+                        </div>
+
+                        <!-- legend grid -->
+                        <div style="
+                            display: grid;
+                            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                            gap: 0.5rem 1.5rem;
+                        ">
+                            <div>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Signal</span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">WRCI oscillator value. Higher magnitude = stronger momentum. Bullish signals are positive, bearish are negative.</span>
+                            </div>
+                            <div>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Trend</span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Directional bias of the underlying move. Positive = uptrend, negative = downtrend. Aligns with Signal for conviction.</span>
+                            </div>
+                            <div>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Zone</span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Market regime at signal time. OB = overbought, OS = oversold, N = neutral. Signals from OS/OB zones carry higher edge.</span>
+                            </div>
+                            <div>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Timing</span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Age of the signal. &ldquo;Today&rdquo; = freshest, highest priority. Older signals may still be valid but carry reduced urgency.</span>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
                 else:
                     st.info("No signals detected in the specified universe and timeframe.")
 
