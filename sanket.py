@@ -1827,17 +1827,17 @@ def main():
                             <div>
                                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Trend</span>
                                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Directional bias of the underlying move. Positive = uptrend, negative = downtrend. Aligns with Signal for conviction.</span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Directional strength of the underlying move. Positive = uptrend, negative = downtrend.</span>
                             </div>
                             <div>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Zone</span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Signal + Trend</span>
                                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Market regime at signal time. OB = overbought, OS = oversold, N = neutral. Signals from OS/OB zones carry higher edge.</span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Both positive = confirmed bullish momentum, high conviction. Both negative = confirmed bearish, high conviction. Signal positive but Trend negative = bullish signal against a downtrend — watch for reversal or wait for trend to turn. Signal negative but Trend positive = bearish signal in an uptrend — possible exhaustion, not yet a clean short.</span>
                             </div>
                             <div>
                                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Timing</span>
                                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Age of the signal. &ldquo;Today&rdquo; = freshest, highest priority. Older signals may still be valid but carry reduced urgency.</span>
+                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Age of the signal. Older signals are more prudent — the move has had time to mature and confirm the shift in direction. &ldquo;Today&rdquo; signals are fresh and may still be setting up.</span>
                             </div>
                         </div>
                     </div>
