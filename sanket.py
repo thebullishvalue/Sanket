@@ -1326,12 +1326,14 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
         .portfolio-table {{
             width: 100%;
             border-radius: 10px;
-            overflow: hidden;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
             border: 1px solid rgba(255, 255, 255, 0.05);
             background: linear-gradient(145deg, rgba(17, 24, 39, 0.45) 0%, rgba(17, 24, 39, 0.4) 100%);
         }}
         .portfolio-table table {{
             width: 100%;
+            min-width: 480px;
             border-collapse: collapse;
         }}
         .portfolio-table thead th {{
@@ -1444,12 +1446,14 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
         .portfolio-table {{
             width: 100%;
             border-radius: 10px;
-            overflow: hidden;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
             border: 1px solid rgba(255, 255, 255, 0.05);
             background: linear-gradient(145deg, rgba(17, 24, 39, 0.45) 0%, rgba(17, 24, 39, 0.4) 100%);
         }}
         .portfolio-table table {{
             width: 100%;
+            min-width: 480px;
             border-collapse: collapse;
         }}
         .portfolio-table thead th {{
@@ -1682,7 +1686,7 @@ def main():
                             long_table_html = _build_signal_table_html(long_stats, side='long')
                             _groups = sum(1 for a in _age_order if long_stats[a]['count'] > 0)
                             _rows = sum(long_stats[a]['count'] for a in _age_order)
-                            st.components.v1.html(long_table_html, height=94 + _groups * 42 + _rows * 40)
+                            st.components.v1.html(long_table_html, height=120 + _groups * 46 + _rows * 44)
                         else:
                             st.info("No bullish signals detected.")
 
@@ -1692,7 +1696,7 @@ def main():
                             short_table_html = _build_signal_table_html(short_stats, side='short')
                             _groups = sum(1 for a in _age_order if short_stats[a]['count'] > 0)
                             _rows = sum(short_stats[a]['count'] for a in _age_order)
-                            st.components.v1.html(short_table_html, height=94 + _groups * 42 + _rows * 40)
+                            st.components.v1.html(short_table_html, height=120 + _groups * 46 + _rows * 44)
                         else:
                             st.info("No bearish signals detected.")
                 else:
