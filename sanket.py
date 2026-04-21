@@ -720,7 +720,7 @@ def render_landing_page():
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
             AWAITING ANALYSIS PARAMETERS
         </h4>
-        <p>Configure via the <strong>Sidebar</strong>: select <strong>Universe</strong>, <strong>Timeframe</strong>, <strong>Date Range</strong>, and <strong>Engine Settings</strong>.<br>
+        <p>Configure via the <strong>Sidebar</strong>: select <strong>Universe</strong>, <strong>Timeframe</strong>, <strong>Temporal Range</strong>, and <strong>Engine Settings</strong>.<br>
            Click <strong>RUN SCREENER</strong> to analyze and discover today's signals.<br>
            <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will compute Wave Trend oscillations · Calculate signal magnitude · Rank by strength</span></p>
     </div>
@@ -873,9 +873,9 @@ def render_sidebar():
 
         # Temporal Range Section
         st.markdown('<div class="sidebar-title">Temporal Range</div>', unsafe_allow_html=True)
-        analysis_mode = st.radio("Mode", ["Single Date", "Date Range"], horizontal=True, label_visibility="collapsed")
+        analysis_mode = st.radio("Mode", ["Snapshot", "Range Study"], horizontal=True, label_visibility="collapsed")
 
-        if analysis_mode == "Single Date":
+        if analysis_mode == "Snapshot":
             analysis_date = st.date_input("Date", datetime.date.today(), max_value=datetime.date.today(), label_visibility="collapsed")
             start_date_hist, end_date_hist = None, None
         else:
@@ -1215,7 +1215,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     console.summary("RANGE STUDY SUMMARY", {
         "Universe": universe,
         "Universe Index": selected_index,
-        "Date Range": f"{start_date} to {end_date}",
+        "Range Study": f"{start_date} to {end_date}",
         "Total Signals Generated": int(total_signals),
         "Avg Signal Strength": round(avg_signal, 2),
         "Bias Ratio (L/S)": round(overall_ratio, 2),
@@ -1679,8 +1679,8 @@ def main():
         st.session_state["run_error"] = None
         st.rerun()
 
-    # Reset timeseries_done if mode switches to Single Date
-    if mode == "Single Date" and st.session_state.get("timeseries_done"):
+    # Reset timeseries_done if mode switches to Snapshot
+    if mode == "Snapshot" and st.session_state.get("timeseries_done"):
         st.session_state["timeseries_done"] = False
         st.rerun()
 
@@ -1694,7 +1694,7 @@ def main():
     else:
         # Run analysis if flagged
         if st.session_state.get("run_screener_flag"):
-            if mode == "Single Date":
+            if mode == "Snapshot":
                 # Console header for local terminal monitoring
                 console.header("SANKET TERMINAL — Institutional Signal Screener", f"v{VERSION}")
                 console.main_header("ANALYSIS RUN START", {
