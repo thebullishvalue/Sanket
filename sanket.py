@@ -1794,14 +1794,11 @@ def main():
                         border-radius: 8px;
                         overflow: hidden;
                     ">
-                        <!-- amber top rule -->
                         <div style="
                             position: absolute; top: 0; left: 0; right: 0; height: 1px;
                             background: linear-gradient(90deg, #D4A853 0%, rgba(212,168,83,0.25) 60%, transparent 100%);
                             opacity: 0.55;
                         "></div>
-
-                        <!-- header row -->
                         <div style="
                             display: flex; align-items: center; gap: 0.45rem;
                             margin-bottom: 0.65rem;
@@ -1817,8 +1814,6 @@ def main():
                             </svg>
                             How to read this table
                         </div>
-
-                        <!-- legend grid -->
                         <div style="
                             display: grid;
                             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

@@ -1,383 +1,495 @@
 # SANKET — Market Signal Screener
-## Wave Trend Composite Index (WRCI) Quantitative Signal Detection System
 
-**SANKET** identifies momentum signals and trend strength across Indian stocks, global indexes, commodities, currency pairs, and cryptocurrencies. Uses the WRCI (Wave Trend Composite Index) engine to detect bullish/bearish signals, rank by magnitude, and identify overbought/oversold zones with daily and weekly timeframe analysis.
+> **संकेत** — *Signal. Indicator. Omen.*
+> Wave-Regime Composite Index (WRCI) quantitative signal scanner built for Indian and global markets.
 
-### Key Features
+SANKET applies the WRCI momentum engine across your chosen universe — from individual NIFTY sector constituents to benchmark index instruments, global commodities, FX pairs, and crypto — and returns ranked bullish/bearish signals with age tracking, zone detection, and trend confirmation. It runs as a Streamlit web application with a custom Obsidian Quant Terminal dark UI.
 
-- **Wave Trend Signal Detection**: WRCI momentum oscillations identify bullish (long) and bearish (short) signals
-- **Multi-Universe Scanning**: F&O stocks, Indian indexes (NIFTY 50-500, sector indices), US indexes, commodities, currency, crypto
-- **Signal Strength Ranking**: Rank signals by magnitude with diminishing returns above magnitude 50 for confidence weighting
-- **Zone Detection**: Automatically identify overbought and oversold zones based on configurable thresholds
-- **Trend Direction Tracking**: Secondary Trend oscillator shows directional strength and momentum confirmation
-- **Dual Timeframe Analysis**: Daily and weekly signal detection for multi-timeframe confluence
-- **Point & Range Study Modes**: Single-date screener or historical date-range analysis (500+ days)
-- **Age-Based Signal Timeline**: Group signals by detection date (Today, 1d, 2d, 3d, 5d) to track emergence
-- **Time-Series Visualization**: Track signal evolution across dates with interactive charts
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Getting Started](#getting-started)
+- [Architecture](#architecture)
+- [WRCI Engine](#wrci-engine)
+- [Universes & Coverage](#universes--coverage)
+- [Signal Output Reference](#signal-output-reference)
+- [Analysis Modes](#analysis-modes)
+- [Troubleshooting](#troubleshooting)
+- [Development Guide](#development-guide)
+- [License](#license)
+
+---
+
+## Features
+
+- **WRCI Signal Detection** — Wave-Regime Composite Index identifies bullish (long cross) and bearish (short cross) momentum events by combining a smoothed Wave Trend oscillator with a volume-weighted trend directional count
+- **Multi-Universe Scanning** — India Indexes (F&O, 26 NIFTY indices, Benchmark Instruments), US Indexes, NSE ETF Universe, Commodities, Currency, Crypto
+- **Benchmark Indexes Mode** — Track the index instruments themselves (^NSEI, ^NSEBANK, ^INDIAVIX, ^BSESN, BSE-100, etc.) as an asset universe rather than their constituents
+- **Signal Strength Ranking** — Magnitude-based scoring (0–100) with diminishing returns above 50 to prevent extreme outliers from dominating
+- **Age-Based Timing Groups** — Signals bucketed into Today / 1 Day Ago / 2 Days Ago / 3 Days Ago / Within 5 Days, each with count and average magnitude
+- **Zone Detection** — Automatic OB Extreme / OB / OS / OS Extreme / Neutral classification with configurable thresholds
+- **Dual Timeframe** — Daily and Weekly WRCI computation; weekly via Friday-close resampling
+- **Single Date + Range Study** — Point-in-time screener or historical multi-date signal evolution across a user-defined window
+- **Time-Series Charts** — WRCI + Trend oscillator chart for top symbols across the last 100 candles
+- **Live Data Injection** — If today's candle is not yet in the historical feed, appends intraday quote before analysis
+- **3-Source Constituent Fetch** — NSE JSON API → NSE archive CSV → Wikipedia fallback, tried in order for every India index
+- **Resilient Error Display** — Fetch failures survive Streamlit reruns; displayed above the landing page instead of silently vanishing
+- **Mobile-Responsive Tables** — Horizontal scroll with `min-width` guard prevents row truncation on narrow viewports
+- **Signal Interpretation Legend** — Inline guide below timing tables explaining Signal, Trend, Zone, and Timing columns
+- **Obsidian Quant Terminal UI** — Dark-first design with amber accents, light mode toggle, IBM Plex Mono + Space Grotesk typography
 
 ---
 
 ## Tech Stack
 
-- **Language**: Python 3.8+
-- **Framework**: Streamlit (interactive web dashboard)
-- **Data**: yfinance (market data), NSE API (Indian stock constituents), nsepython (F&O list)
-- **Analysis**: NumPy, Pandas (data processing)
-- **Charts**: Plotly (interactive WRCI/Trend visualization)
-- **HTTP**: requests (web scraping), urllib3 (SSL handling)
-- **UI**: Custom CSS (Obsidian Quant Terminal theme), SVG icons, HTML iframes
+| Layer | Technology |
+|---|---|
+| Language | Python 3.8+ |
+| Web Framework | Streamlit |
+| Market Data | yfinance (global), NSE API + nsepython (India) |
+| Data Processing | pandas, NumPy (vectorized operations) |
+| Charts | Plotly (interactive WRCI/Trend visualisation) |
+| HTTP | requests, urllib3 |
+| UI | Custom CSS (Obsidian Quant Terminal), inline SVG icons, HTML iframes |
+| Logging | Custom ANSI console logger (`logger.py`) |
 
 ---
 
 ## Prerequisites
 
-- Python 3.8 or higher
-- pip (Python package manager)
-- Internet connection (for data fetching)
-- Optional: NSE market data access (automatic via API)
+- **Python 3.8 or higher**
+- **pip**
+- **Internet access** — required for market data (yfinance) and NSE constituent lists
+
+No database, no Redis, no message queue. Entirely stateless beyond Streamlit session state.
 
 ---
 
 ## Getting Started
 
-### 1. Clone or Download the Repository
+### 1. Obtain the project
 
 ```bash
-# If in a git repository:
+# From git:
 git clone <repository-url>
-cd Sanket-final
+cd Sanket-Final
 
-# Or download the folder directly
+# Or copy the folder directly
 ```
 
-### 2. Install Dependencies
+### 2. (Recommended) Create a virtual environment
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # macOS/Linux
+.venv\Scripts\activate           # Windows
+```
+
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**Key Dependencies:**
-- streamlit >= 1.28
-- pandas >= 1.5
-- numpy >= 1.23
-- yfinance >= 0.2.28
-- plotly >= 5.14
-- requests >= 2.28
-- nsepython >= 0.2.16
+Full dependency list:
 
-### 3. Run the Application
+| Package | Purpose |
+|---|---|
+| `streamlit` | Web app framework |
+| `pandas` | DataFrame processing |
+| `pandas-datareader` | Supplementary data fetching |
+| `yfinance` | OHLCV market data (global + NSE) |
+| `numpy` | Vectorized WRCI computation |
+| `plotly` | Interactive oscillator charts |
+| `requests` | NSE API / CSV fetching |
+| `nsepython` | NSE advances/declines (F&O fallback) |
+| `logger` | Bundled ANSI console logger |
+
+### 4. Launch
 
 ```bash
 streamlit run sanket.py
 ```
 
-The app will open at `http://localhost:8501` in your browser.
+Opens at **http://localhost:8501**.
+
+### 5. First run
+
+1. Sidebar → **Universe**: `India Indexes` (default)
+2. Sidebar → **Index**: `Benchmark Indexes` (default)
+3. Sidebar → **Timeframe**: `Daily`
+4. Sidebar → **Mode**: `Single Date` → today's date
+5. Click **◈ RUN SCREENER**
+
+Results appear across two tabs: **Action Dashboard** (signals by timing) and **Signal Strength Analysis**.
 
 ---
 
-## Architecture Overview
+## Architecture
 
 ### Directory Structure
 
 ```
-Sanket-final/
-├── sanket.py                    # Main application (all logic + UI)
-├── logger.py                    # Console logging utilities
-├── requirements.txt             # Python dependencies
+Sanket-Final/
+├── sanket.py            # Entire application — constants, data fetch, WRCI engine, UI
+├── logger.py            # ANSI console output system (ConsoleOutput class)
+├── requirements.txt     # pip dependencies
 ├── ui/
-│   ├── __init__.py
-│   ├── theme.py                # CSS injection, theme system
-│   └── components.py           # Reusable UI components
-├── README.md                    # This file
-├── CHANGELOG.md                 # Version history
-└── .gitignore
+│   ├── theme.py         # CSS injection, chart theming, progress bar helper
+│   ├── theme.css        # Full Obsidian Quant Terminal stylesheet
+│   └── components.py    # Reusable Streamlit components (metric card, section header, etc.)
+├── README.md
+├── CHANGELOG.md
+└── LICENSE
 ```
 
-### Request Lifecycle
+### Application Flow
 
-1. **User Configuration** → Sidebar controls select universe, timeframe, date range, WRCI parameters
-2. **Run Screener Button** → Triggers analysis run, sets session state flags
-3. **Data Fetching** → Fetch market data for selected universe symbols (yfinance for global, NSE for India)
-4. **WRCI Analysis** → Compute Wave Trend + Trend oscillators for each symbol
-5. **Signal Detection** → Identify bullish/bearish signals, calculate magnitude, detect zones
-6. **Ranking & Display** → Sort by strength, group by age, render interactive tables
-7. **Response** → Display signal cards, conviction tables, time-series charts
+```
+Browser Request
+      │
+      ▼
+ inject_css()                ← Obsidian Quant Terminal stylesheet injected once
+ render_theme_toggle()       ← Light/dark mode button
+      │
+      ▼
+ render_sidebar()
+   ├── Universe selector
+   ├── Index selector
+   ├── Timeframe (Daily / Weekly)
+   ├── Mode (Single Date / Date Range)
+   ├── Date picker(s)
+   └── ◈ RUN SCREENER button
+      │
+      ▼ (on run_clicked)
+ session_state["run_screener_flag"] = True → st.rerun()
+      │
+      ▼
+ run_screener_analysis()
+   ├── get_*_symbols()      ← Universe-specific fetcher
+   ├── fetch_batch_data()   ← yfinance parallel download
+   ├── resample_to_weekly() ← if Weekly timeframe
+   ├── run_full_analysis()  ← WRCI engine per ticker
+   └── returns results_df
+      │
+      ▼
+ session_state["results_df"] = results_df → st.rerun()
+      │
+      ▼
+ Render tabs
+   ├── Tab 1: Action Dashboard
+   │     ├── bull_tab: _build_signal_table_html(side='long')
+   │     ├── bear_tab: _build_signal_table_html(side='short')
+   │     └── Signal interpretation legend
+   ├── Tab 2: Signal Strength Analysis
+   │     ├── Metric cards
+   │     ├── Top Bullish (ranked)
+   │     └── Top Bearish (ranked)
+   └── (Range Study) Inline time-series charts
+```
 
-### Core Modules
+### Session State Keys
 
-**Data Fetching (`get_*_symbols()` functions)**
-- `get_index_stock_list()`: Fetch NIFTY 50/NEXT 50/etc. constituents from NSE CSV archives
-- `get_fno_stock_list()`: Fetch F&O eligible stocks with 3 fallback sources (NSE API → advances/declines → NIFTY 500)
-- `get_us_index_symbols()`: Map S&P 500, DOW JONES, NASDAQ 100 to yfinance tickers
-- `get_commodity_symbols()`: Commodity futures (Gold, Oil, Wheat, etc.)
-- `get_currency_symbols()`: FX pairs (EUR/USD, USD/INR, GBP/JPY, etc.)
-- `get_crypto_symbols()`: Cryptocurrencies (Bitcoin, Ethereum, etc.)
+| Key | Type | Purpose |
+|---|---|---|
+| `results_df` | `DataFrame \| None` | Cached screener output; `None` = landing page |
+| `run_screener_flag` | `bool` | Triggers analysis on next render cycle |
+| `run_timeseries_flag` | `bool` | Reserved for range study trigger |
+| `timeseries_done` | `bool` | Suppresses re-render after range study completes |
+| `run_error` | `str \| None` | Fetch error message; survives rerun, shown above landing page |
 
-**Market Data Fetch**
-- `fetch_batch_data()`: Download 1+ years of OHLCV data for symbols in parallel
-- Handles API errors gracefully, skips unavailable symbols
+---
 
-**WRCI Engine (`run_screener_analysis()`, `run_timeseries_analysis()`)**
-- Compute Wave Trend oscillator: smoothed price momentum
-- Compute Trend oscillator: directional strength confirmation
-- Detect crossovers, calculate signal magnitude (absolute value)
-- Apply diminishing returns above magnitude 50 for strength scoring
-- Flag symbols in overbought (>80 by default) or oversold (<20) zones
+## WRCI Engine
 
-**Signal Bucketing & Display**
-- `_bucket_signals_by_age()`: Group signals by detection date
-- `_build_signal_table_html()`: Generate HTML table with age sections
-- `_build_conviction_table_html()`: Ranked table of top signals
-- `render_signal_detail_card()`: Detailed popup with RSI/price/zone confirmation
+The core algorithm lives in `run_full_analysis()` and combines two sub-oscillators.
 
-**UI Rendering**
-- `render_sidebar()`: Configuration panel (universe, timeframe, date, WRCI parameters)
-- `render_landing_page()`: System overview and instructions
-- `render_footer()`: Copyright and version info
-- SVG icons injected via CSS for tab labels
+### Sub-oscillator 1 — Wave Trend (WT1)
 
-### Signal Strength Calculation
+```
+hlc3  = (High + Low + Close) / 3
+hma_p = HMA(hlc3, 15)           # Hull Moving Average of price
+esa   = EMA(hlc3, wt_n1)        # Default wt_n1 = 10
+d     = EMA(|hlc3 - esa|, wt_n1)
+ci    = (hlc3 - esa) / (0.015 × d)
+wt1   = EMA(ci, wt_n2)          # Default wt_n2 = 21
+```
 
-**Formula:**
+### Sub-oscillator 2 — Normalised Trend Count
+
+```
+hma_p = HMA(hlc3, 15)
+trend = Σ sign(hma_p[i] - hma_p[i-k]) for k=1..reg_len   # Default reg_len = 20
+norm_trend = (trend × (10 / reg_len)) × 10
+```
+
+### Composite
+
+```
+composite_line   = (wt1 + norm_trend) / 2
+composite_signal = rolling_mean(composite_line, 4)
+```
+
+### Signal Conditions
+
+| Condition | Criteria |
+|---|---|
+| **Long Cross** | `composite_line` crosses above `composite_signal` |
+| **Short Cross** | `composite_line` crosses below `composite_signal` |
+| **OB Extreme** | `composite_line > 80` |
+| **OB** | `composite_line > 40` |
+| **OS** | `composite_line < -40` |
+| **OS Extreme** | `composite_line < -80` |
+| **Neutral** | Everything else |
+
+### Signal Strength Scoring
+
 ```python
-base_score = abs(Signal)
-if base_score > 50:
-    base_score = 50 + (base_score - 50) * 0.5
-strength = min(100, base_score)
+score = abs(Signal)
+if score > 50:
+    score = 50 + (score - 50) × 0.5   # diminishing returns above 50
+score = min(100, score)
 ```
 
-**Rationale:** Linear scoring for magnitude 0-50, then diminishing returns above 50 to prevent extreme values from dominating rankings.
-
-**Quality Labels:**
-- Strong: >= 65
-- Moderate: 50-64
-- Weak: 35-49
-- Very Weak: < 35
+Quality bands: **Strong** ≥ 65 · **Moderate** 50–64 · **Weak** 35–49 · **Very Weak** < 35
 
 ---
 
-## Configuration & Settings
+## Universes & Coverage
 
-### Sidebar Parameters
+### India Indexes
 
-| Parameter | Type | Range | Description |
-| --- | --- | --- | --- |
-| **Universe** | Dropdown | 5 options | Market universe (India Indexes, US Indexes, Commodities, Currency, Crypto) |
-| **Index/Universe** | Dropdown | 17 indices | NIFTY 50/NEXT 50/100/200/500, NIFTY sectors, F&O Stocks, US indexes, etc. |
-| **Timeframe** | Dropdown | Daily, Weekly | Candle period for WRCI calculation |
-| **Mode** | Radio | Single Date, Range | Single-date screener or historical date-range analysis |
-| **Target Date** | Date picker | Any date | Analysis date for Single Date mode (defaults to today) |
-| **Date Range** | Date range picker | Any range | Start-end dates for Range Study mode |
-| **REG Length** | Slider | 10-50 | Regularization period for Wave Trend smoothing |
-| **WT N1** | Slider | 5-20 | Fast EMA period for Wave Trend |
-| **WT N2** | Slider | 20-50 | Slow EMA period for Wave Trend |
-| **OB Level** | Slider | 50-100 | Overbought threshold |
-| **OS Level** | Slider | -100 to -50 | Oversold threshold |
+Selected from a 29-item dropdown. Constituent lists fetched via 3-source cascade:
 
-### WRCI Parameters Explained
+1. **NSE JSON API** — `https://www.nseindia.com/api/equity-stockIndices?index={NAME}` (primary; session-warmed)
+2. **NSE Archive CSV** — `https://archives.nseindia.com/content/indices/ind_{name}list.csv` (fallback)
+3. **Wikipedia** — index-specific page table (last resort, available for 5 major indices)
 
-- **REG Length**: Smoothing period; higher = smoother, more lag
-- **WT N1**: Fast EMA controls responsiveness to recent price moves
-- **WT N2**: Slow EMA provides trend context and stability
-- **Default values** (10, 9, 21) tuned for daily timeframe
+| Group | Entries |
+|---|---|
+| Special | F&O Stocks |
+| Broad Market | NIFTY 50, NEXT 50, 100, 200, 500 |
+| Midcap | NIFTY MIDCAP 50/100/150, NIFTY MID SELECT |
+| Smallcap | NIFTY SMLCAP 50/100/250 |
+| Banking | NIFTY BANK, NIFTY PRIVATE BANK, NIFTY PSU BANK |
+| Sectoral | NIFTY FIN SERVICE, IT, AUTO, FMCG, PHARMA, METAL, ENERGY, INFRA, REALTY, MEDIA |
+| Instruments | **Benchmark Indexes** (default) |
 
----
+### Benchmark Indexes
 
-## Output & Interpretation
+Tracks the 34 index instruments themselves as the analysis universe — not their constituents.
 
-### Signal Columns
+| Group | Tickers |
+|---|---|
+| Broad NSE | `^NSEI` `^NSMIDCP` `NIFTY_100.NS` `NIFTY_200.NS` `NIFTY_500.NS` `^NSEMDCP50` `NIFTY_MIDCAP_100.NS` `NIFTY_MIDCAP_150.NS` `NIFTY_MID_SELECT.NS` `NIFTYSMLCAP50.NS` `NIFTY_SMALLCAP_100.NS` `NIFTY_SMALLCAP_250.NS` |
+| Volatility | `^INDIAVIX` |
+| Broad BSE | `^BSESN` `BSE-100.BO` `BSE-200.BO` `BSE-500.BO` |
+| Sectoral NSE | `^NSEBANK` `^CNXFIN` `^CNXIT` `^CNXAUTO` `^CNXFMCG` `^CNXPHARMA` `^CNXMETAL` `^CNXREALTY` `^CNXENERGY` `^CNXINFRA` `^CNXPSUBANK` `NIFTY_PRIVATE_BANK.NS` `^CNXMEDIA` |
 
-| Column | Meaning | Range | Interpretation |
-| --- | --- | --- | --- |
-| **Symbol** | Stock/commodity/crypto ticker | String | Identifier for the asset |
-| **Price** | Current price in INR (or USD) | Float | Latest market price |
-| **Signal** | Wave Trend oscillator value | -100 to +100 | Positive = bullish, negative = bearish |
-| **Trend** | Trend oscillator value | -100 to +100 | Confirms direction; >30 strong up, <-30 strong down |
-| **Zone** | Overbought/Oversold label | OB / OS / — | Indicates extreme conditions |
-| **Age** | Signal detection date | Today, 1d, 2d, 3d, 5d+ | How long ago signal appeared |
-| **Strength** | Magnitude-based score | 0-100 | Confidence/power of the signal |
+### ETF Index
 
-### Reading the Screener
+30 NSE-listed ETFs covering FMCG, IT, Pharma, Auto, PSU Bank, Infra, Gold, Silver, Defence, EV, Smallcap, etc.
 
-**"Today · 8 signals · Avg: +42.3"** = 8 bullish signals detected today with average magnitude 42.3
+### US Indexes
 
-**"Strengthening" / "Weakening" / "Stable"** = Compares today's average signal magnitude vs. older signals. Strengthening = fresh, strong signals vs. aging ones.
+S&P 500 (`^GSPC`), DOW JONES (`^DJI`), NASDAQ 100 (`^NDX`)
 
-**Rank 01 - NIFTY 50 · ₹22,150 · Signal: +67.8 · Trend: +45.2 · Zone: OB**
-- 1st strongest signal (magnitude 67.8)
-- In overbought zone (Signal > 80)
-- Strong uptrend confirmation (Trend +45.2)
+### Commodities
 
----
+16 commodity futures via yfinance: Gold, Silver, Crude Oil (WTI + Brent), Natural Gas, Copper, Platinum, Palladium, Wheat, Corn, Soybeans, Coffee, Sugar, Cotton, Lumber, Cocoa.
 
-## Usage Guide
+### Currency
 
-### Single Date Mode (Point Screener)
+25 FX pairs: EUR/USD, GBP/USD, USD/JPY, USD/INR, USD/CHF, AUD/USD, USD/CAD, NZD/USD, EUR/GBP, EUR/JPY, GBP/JPY, and others.
 
-1. **Select Universe** (e.g., "India Indexes")
-2. **Select Index** (e.g., "NIFTY 50")
-3. **Select Timeframe** (Daily or Weekly)
-4. **Set Date** (defaults to today)
-5. **Adjust WRCI Parameters** if needed (optional)
-6. **Click RUN SCREENER**
-7. **View Results**:
-   - **Action Dashboard**: Age-grouped signals with timeline
-   - **Signal Strength Tab**: Ranked by magnitude
-   - **Top Bullish/Bearish**: Highest conviction signals each side
-   - **Time-Series**: WRCI evolution chart (last 100 candles)
+### Crypto
 
-### Range Study Mode (Time-Series)
-
-1. Follow steps 1-3 above
-2. **Select "Range" mode**
-3. **Set Start & End dates** (up to 500 days back)
-4. **Click RUN SCREENER**
-5. **View Results**: Historical signal emergence across all dates
-   - Each date shows signals that appeared that day
-   - Charts show WRCI oscillations for ~20 sample symbols
-   - Identify turning points and signal persistence
-
-### Interpreting Results
-
-**Strong Signal = High Conviction Entry?** Not necessarily. Strength = magnitude. Confirmation comes from:
-- Trend > 30 (strong up) or Trend < -30 (strong down)
-- Zone label (OB/OS indicates exhaustion risk)
-- Signal age (fresher signals may be more tradeable)
-
-**Overbought Signals**: Signals in OB zone (red) = high magnitude but exhaustion risk. Best for shorts.
-
-**Oversold Signals**: Signals in OS zone (green) = high magnitude but bounce risk. Best for longs.
+21 cryptocurrencies: Bitcoin, Ethereum, Solana, BNB, XRP, Cardano, Dogecoin, Tron, Chainlink, Polkadot, Polygon, Litecoin, Bitcoin Cash, Shiba Inu, Avalanche, Near, Uniswap, Stellar, Ethereum Classic, Monero, Cosmos.
 
 ---
 
-## Time-Series Analysis Details
+## Signal Output Reference
 
-### What is Range Study?
+### Timing Tables (Action Dashboard)
 
-Analyzes signals across 500+ days to show:
-- **Signal emergence pattern**: When does each symbol get signaled?
-- **Signal persistence**: Does it stay signaled for multiple days?
-- **Trend confirmation**: Which signals have strong trend support?
+Signals are grouped by age. Each age group shows a header with count and average magnitude, followed by individual rows.
 
-### Interpreting Timeline
+| Column | Description |
+|---|---|
+| **Symbol** | Ticker or display name (e.g. `RELIANCE` or `BTC-USD (Bitcoin)`) |
+| **Price (₹)** | Closing price at analysis date |
+| **Signal** | WRCI composite value. Positive = bullish momentum, negative = bearish. Magnitude indicates strength. |
+| **Trend** | Normalised trend count. Positive = uptrend, negative = downtrend. Aligns with Signal for high-conviction setups. |
+| **Zone** | Market regime: `OB Extreme` · `OB` · `Neutral` · `OS` · `OS Extreme`. OB/OS signals carry exhaustion risk. |
 
-**Axis X**: Date (from start to end date)
-**Axis Y**: Symbol
-**Color intensity**: Signal magnitude (brighter = stronger)
+**Timing groups:**
 
-**Use case**: Find symbols with persistent, strengthening signals = higher conviction longs/shorts
+| Group | Meaning |
+|---|---|
+| Today | Signal fired on the analysis date — highest urgency |
+| 1 Day Ago | Signal fired one session prior — still fresh |
+| 2 / 3 Days Ago | Ageing signal — watch for follow-through or fade |
+| Within 5 Days | Any signal in the 5-day window not captured above |
+
+### Signal Strength Tab
+
+Top 8 bullish and top 8 bearish signals ranked by absolute Signal magnitude. Shows rank, symbol, price, signal, trend, and zone.
+
+---
+
+## Analysis Modes
+
+### Single Date (Point Screener)
+
+1. Select Universe + Index + Timeframe
+2. Set analysis date (defaults to today)
+3. Click **◈ RUN SCREENER**
+4. View Action Dashboard and Signal Strength tabs
+
+Data fetched covers ~665 days back from the target date. If today's candle is absent (market still open), a live 1-day quote is appended.
+
+### Date Range (Range Study)
+
+1. Select Universe + Index + Timeframe
+2. Switch Mode to **Date Range**
+3. Set Start and End dates
+4. Click **◈ RUN SCREENER**
+
+Runs a multi-date pass: for each date in the range, WRCI is sampled and signals recorded. Output includes an interactive heatmap and WRCI charts for ~20 representative symbols across the period.
 
 ---
 
 ## Troubleshooting
 
-### "No data available for symbols"
-- **Cause**: yfinance couldn't fetch data (network issue or invalid ticker)
-- **Solution**: Check internet connection, retry
+### "Failed to fetch constituents" error on landing page
 
-### "Failed to fetch F&O list from all sources"
-- **Cause**: NSE API unreachable, advances/declines unavailable
-- **Solution**: Try again in a few minutes, check NSE website status
+**Cause:** All three NSE data sources (API, CSV, Wikipedia) failed for the selected index.
 
-### "Streamlit connection lost"
-- **Cause**: App crashed or server restarted
-- **Solution**: Refresh browser, verify terminal shows no errors
+**Solutions:**
+- NSE's API throttles automated requests; wait 60 seconds and retry
+- Try a different index that uses the CSV fallback (e.g. NIFTY 50 is reliably served)
+- Check https://www.nseindia.com for planned downtime
 
-### Signals look weak or absent
-- **Cause**: WRCI parameters tuned for specific volatility; different market conditions require adjustment
-- **Solution**: Increase REG length (10→15) for noise reduction, or adjust N1/N2 for sensitivity
+### "No data returned" / analysis produces no results
 
-### Price data stale
-- **Cause**: yfinance caching or market closed
-- **Solution**: Wait for market to open or manually refresh page
+**Cause:** yfinance couldn't download price data for the symbol list.
+
+**Solutions:**
+- Verify internet connection
+- Try a smaller index (e.g. NIFTY BANK instead of NIFTY 500) to isolate the issue
+- yfinance occasionally returns empty frames during market hours — retry after a few minutes
+
+### Tables cut off on mobile
+
+This was a known issue (fixed in current version). Tables use `overflow-x: auto` with `min-width: 480px` so narrow screens scroll horizontally instead of squishing columns. If you see truncation, hard-refresh the browser to clear cached CSS.
+
+### Signal strength appears low across the board
+
+WRCI is tuned with defaults: `reg_len=20`, `wt_n1=10`, `wt_n2=21`. These defaults work well for daily Indian large-cap equities. For smaller or more volatile universes (crypto, smallcap), signals naturally carry higher magnitude. Changing timeframe to Weekly often produces cleaner, stronger signals.
+
+### App shows landing page instead of results after run
+
+**Cause:** The screener returned `None` (constituent fetch or data download failed). The error message is displayed above the landing page — look for the red error banner at the top.
+
+### Streamlit "connection lost" in browser
+
+The terminal running `streamlit run sanket.py` shows the actual exception. Common causes: a dependency version conflict, or a timeout on large universes (NIFTY 500 + 500 days).
 
 ---
 
-## Development
+## Development Guide
 
 ### Adding a New Universe
 
-1. **Define the universe** in constants (line 120+):
-   ```python
-   MY_UNIVERSE_MAP = { "Symbol1": "Ticker1", "Symbol2": "Ticker2" }
-   MY_UNIVERSE_LIST = list(MY_UNIVERSE_MAP.keys())
-   ```
-
-2. **Add getter function**:
-   ```python
-   def get_my_universe_symbols(index):
-       return list(MY_UNIVERSE_MAP.values()), f"✓ Fetched {len(...)} symbols"
-   ```
-
-3. **Wire in render_sidebar()** (line ~750):
-   ```python
-   elif universe == "My Universe":
-       stock_list, msg = get_my_universe_symbols(selected_index)
-   ```
-
-4. **Update UI text** (line ~120):
-   ```python
-   UNIVERSE_OPTIONS = ["India Indexes", "US Indexes", ..., "My Universe"]
-   ```
-
-### Customizing Signal Strength Formula
-
-Edit `get_conviction_score()` (line 637):
+1. **Define the map and list** in the constants block (~line 140):
 ```python
-def get_conviction_score(row):
-    base_score = abs(row.get('Signal', 0))
-    if base_score > 50:
-        base_score = 50 + (base_score - 50) * 0.5  # ← Adjust multiplier here
-    return min(100, base_score)
+MY_MAP = {"Gold ETF": "GOLDBEES.NS", "Silver ETF": "SILVERBEES.NS"}
+MY_LIST = list(MY_MAP.keys())
 ```
 
-Lower multiplier (0.3) = less diminishing returns, higher multiplier (0.8) = more aggressive decay
+2. **Add a getter function**:
+```python
+def get_my_symbols():
+    return list(MY_MAP.values()), f"✓ Loaded {len(MY_MAP)} symbols"
+```
+
+3. **Wire into `render_sidebar()`**:
+```python
+elif universe == "My Universe":
+    selected_index = "My Universe"
+```
+
+4. **Wire into `run_screener_analysis()` and `run_timeseries_analysis()`**:
+```python
+elif universe == "My Universe":
+    stock_list, msg = get_my_symbols()
+```
+
+5. **Add to `UNIVERSE_OPTIONS`**:
+```python
+UNIVERSE_OPTIONS = ["India Indexes", ..., "My Universe"]
+```
+
+### Adding a New India Index
+
+1. Add the display name to `INDEX_LIST`
+2. Add the NSE archive CSV URL to `INDEX_URL_MAP`:
+```python
+"NIFTY CONSUMPTION": f"{BASE_URL}ind_niftyconsumptionlist.csv"
+```
+The NSE JSON API is tried first (using the display name directly), so the CSV entry is only a fallback.
+
+### Adjusting WRCI Parameters
+
+Parameters are currently hardcoded in `render_sidebar()`:
+```python
+reg_len, wt_n1, wt_n2 = 20, 10, 21
+obLevel1, obLevel2, osLevel1, osLevel2 = 80, 40, -80, -40
+```
+
+To make them user-configurable, replace these with `st.slider()` calls and pass them through to `run_screener_analysis()`.
 
 ### Adjusting Zone Thresholds
 
-Defaults in sidebar (lines 750-800):
-```python
-obLevel1_default = 80  # Overbought boundary
-osLevel1_default = -80  # Oversold boundary
-```
-
-Higher values = fewer zone alerts, lower = more sensitive
+Modify the four levels above. Higher absolute values = fewer zone alerts (less sensitive). The thresholds feed directly into `run_full_analysis()` → `np.select()` classification.
 
 ---
 
-## Performance Considerations
+## Performance Benchmarks
 
-- **Batch data fetch**: ~2-3 sec for 50 symbols, ~10-15 sec for 500
-- **WRCI calculation**: Negligible (vectorized NumPy)
-- **HTML rendering**: ~2-3 sec for large tables (500+ rows)
-- **Time-series mode**: 15-30 sec for 500-day analysis on 100+ symbols
+| Universe | Symbol Count | Fetch Time | WRCI Compute | Total |
+|---|---|---|---|---|
+| NIFTY BANK | ~12 | ~2s | <1s | ~3s |
+| NIFTY 50 | ~50 | ~4s | <1s | ~5s |
+| NIFTY 100 | ~100 | ~6s | <1s | ~7s |
+| NIFTY 500 | ~500 | ~15s | ~2s | ~17s |
+| F&O Stocks | ~180 | ~8s | ~1s | ~9s |
+| Benchmark Indexes | 34 | ~3s | <1s | ~4s |
+
+Range Study (100 days, 50 symbols): ~25–35s
 
 ---
 
 ## Known Limitations
 
-1. **Intraday data**: Only daily/weekly candles; no intraday analysis
-2. **Real-time**: Requires manual re-run; no live updates
-3. **Historical**: Limited to ~2+ years back (yfinance constraint)
-4. **F&O list**: NSE API sometimes unavailable; fallbacks to NIFTY 500 approximation
+- **No intraday support** — Daily and Weekly candles only; no hourly or sub-hourly WRCI
+- **No live auto-refresh** — Manual re-run required; there is no websocket or polling loop
+- **Historical depth** — yfinance reliably provides ~2 years; requests beyond that may return incomplete data
+- **NSE API availability** — NSE throttles or blocks automated requests intermittently; the 3-source cascade mitigates but does not eliminate this
+- **Benchmark Indexes data** — Some `NIFTY_*.NS` and `BSE-*.BO` tickers have limited history on yfinance; they are silently skipped if data is insufficient
 
 ---
 
 ## License
 
-Built by **Antigravity** as member of Pragyam Product Family.
+Copyright © 2026 Antigravity. All rights reserved.
+
+Built as part of the **Pragyam** product family. See [LICENSE](LICENSE) for terms.
 
 ---
 
-## Support & Feedback
-
-For issues, feature requests, or questions:
-- Check this README first
-- Review CHANGELOG for known issues
-- Test with default parameters if issues persist
-
----
-
-**Version**: v2.0  
-**Last Updated**: April 2026  
-**Status**: Production Ready
+*SANKET v1.0.0 · @thebullishvalue · Pragyam / Antigravity*

@@ -1,222 +1,110 @@
 # CHANGELOG — SANKET Signal Screener
 
-All notable changes to the SANKET signal screening system are documented here.
+All notable changes to SANKET are documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [v2.0] — April 2026
+## [v1.0.0] — April 2026
 
-### 🎯 Major Features Added
+Initial production release of the SANKET WRCI Signal Screener.
 
-#### F&O Stocks Universe Integration
-- **Added**: F&O Stocks as primary option in India Indexes
-- **Features**: Fetch F&O eligible stocks from NSE with 3 fallback sources
-  - Primary: NSE F&O API endpoint
-  - Fallback 1: NSE advances/declines data
-  - Fallback 2: NIFTY 500 CSV (when API unavailable)
-- **Impact**: Users can now screen only F&O-eligible names for derivative trading
-- **Reliability**: Multiple fallback sources ensure consistent data availability
+### Core Engine
 
-#### Dynamic Table Height Calculation
-- **Fixed**: Tables cutting off rows at bottom of viewport
-- **Before**: Fixed heights (3000px, 1500px) caused row cutoff on small universes
-- **After**: Dynamic calculation based on actual data:
-  - Signal tables: `height = 94 + (num_groups × 42) + (num_rows × 40)`
-  - Conviction tables: `height = 94 + (num_rows × 40)`
-- **Impact**: All rows now visible without excessive whitespace
+- **WRCI (Wave-Regime Composite Index)** — Combines Wave Trend oscillator (EMA-smoothed channel index) with a normalised HMA-based trend directional count into a single composite signal line
+- Signal detection via composite line / signal line crossovers (Long Cross, Short Cross)
+- Zone classification: OB Extreme (>80), OB (>40), OS (<-40), OS Extreme (<-80), Neutral
+- Signal strength scoring with diminishing returns above magnitude 50 (prevents outliers from dominating rankings)
+- Support for **Daily** and **Weekly** timeframes; weekly via Friday-close OHLCV resampling
 
-#### Documentation Accuracy Overhaul
-- **Audited**: All docstrings, descriptions, error messages for accuracy
-- **Fixed Issues**:
-  - Copy claimed "technical confirmations" but system ranks by magnitude only
-  - Metrics described as percentages but calculated as absolute values
-  - "Conviction" terminology replaced with honest "Signal Strength"
-- **Result**: All user-facing text now accurately reflects actual behavior
+### Universes
 
-### 📝 Documentation Updates
+- **India Indexes** — 26 NIFTY indices (broad market, midcap, smallcap, sectoral) + F&O Stocks + Benchmark Indexes (34 instruments)
+- **Benchmark Indexes** — ^NSEI, ^NSMIDCP, ^INDIAVIX, ^BSESN, BSE-100/200/500, ^NSEBANK, ^CNXFIN, ^CNXIT, ^CNXAUTO, ^CNXFMCG, ^CNXPHARMA, ^CNXMETAL, ^CNXREALTY, ^CNXENERGY, ^CNXINFRA, ^CNXPSUBANK, NIFTY_PRIVATE_BANK.NS, ^CNXMEDIA, and full NSE midcap/smallcap suite — set as default universe
+- **ETF Index** — 30 NSE-listed ETFs
+- **US Indexes** — S&P 500, DOW JONES, NASDAQ 100
+- **Commodities** — 16 commodity futures (Gold, Silver, Crude WTI/Brent, Natural Gas, Copper, Wheat, Corn, etc.)
+- **Currency** — 25 FX pairs
+- **Crypto** — 21 cryptocurrencies
 
-#### Module Docstrings
-- Added context to function docstrings:
-  - `run_screener_analysis()`: Now explains WRCI processing pipeline
-  - `run_timeseries_analysis()`: Clarifies historical date-range behavior
-  - `render_signal_detail_card()`: Documents all parameters and rendering
+### India Index Constituent Fetching
 
-#### User Interface Text
-- **Landing Page Card 1**: "identifies momentum signals... with daily updates" (was "detects reversals in real-time")
-- **Landing Page Card 2**: "Rank momentum signals by strength, identify zones..." (was "trend confirmations without jargon")
-- **Universe Coverage Card**: Clear explanation of F&O + Index coverage
-- **Dashboard Labels**:
-  - "Signal Strength Analysis" (was "Conviction Analysis")
-  - "Avg Signal Magnitude" (was "Avg Signal Strength")
-  - "Strongest Bullish/Bearish Signals" (was "Top Long/Short Conviction")
+3-source cascade with automatic fallthrough:
+1. **NSE JSON API** — `nseindia.com/api/equity-stockIndices?index={NAME}` (session-warmed, same endpoint as F&O)
+2. **NSE Archive CSV** — `archives.nseindia.com/content/indices/ind_{name}list.csv`
+3. **Wikipedia fallback** — Index-specific page for NIFTY 50, NEXT 50, BANK, IT, FIN SERVICE
 
-#### Error Messages
-- All error messages now specific about what failed and why
-- Example: "✓ Fetched 500 F&O securities" vs generic "Success"
+Sectoral indices (AUTO, FMCG, PHARMA, METAL, ENERGY, INFRA, REALTY, MEDIA, PRIVATE BANK, PSU BANK) previously failed silently because NSE archive CSV was the only source; now resolved by NSE API as primary.
 
-### 🧹 Code Quality Improvements (Kaizen)
+### Analysis Modes
 
-#### Dead Code Removal
-- **Removed**: `get_fno_stock_list()` function stub (57 lines)
-  - Function was defined but never called (confirmed via AST analysis)
-  - Replaced with working implementation post-import
-- **Removed**: 7 unused documentation files
-  - `v5_func.txt`, `engine_diff.txt`, `v5_engine.txt`, `final_engine.txt`, `final_func.txt`
-  - `scratch/` directory (development utilities)
-  - `sector_map.pkl` (unused data file)
-- **Rationale**: Reduce codebase friction, simplify maintenance
+- **Single Date (Point Screener)** — WRCI sampled at a specific date; live intraday quote appended if today's candle is absent from the feed
+- **Date Range (Range Study)** — Multi-date pass across a user-defined window; per-date results with heatmap and WRCI charts for representative symbols
 
-#### No Behavioral Changes
-- All removals verified to have zero impact on system output
-- Syntax validation confirms no regressions
-- Signal detection logic unchanged
+### Signal Display
 
-### 📋 Version Metadata
+- **Action Dashboard** — Signals grouped by age: Today / 1 Day Ago / 2 Days Ago / 3 Days Ago / Within 5 Days; each group shows count and average magnitude
+- **Signal Strength Tab** — Top 8 bullish + top 8 bearish ranked by absolute magnitude
+- **Bullish / Bearish sub-tabs** — Separate tabs for long and short timing tables with per-tab accent colours (emerald / rose)
+- **Signal interpretation legend** — Inline guide below timing tables explaining Signal, Trend, Zone, and Timing columns; styled with system glass card + amber accent
 
-- **Status**: Stable (production-ready)
-- **Python**: 3.8+
-- **Key Dependencies**: Unchanged (yfinance, pandas, streamlit, plotly)
+### Data Layer
 
-### 🔍 Testing Notes
+- `fetch_batch_data()` — Parallel yfinance download with MultiIndex flattening; live 1-day append when today is absent
+- `resample_to_weekly()` — Friday-close OHLCV aggregation
+- NSE F&O list — 3-source fetch: NSE F&O API → nsepython advances/declines → NIFTY 500 CSV
 
-- F&O fetch tested with 3 fallback scenarios
-- Dynamic table height validated on universes of 10, 100, 500 symbols
-- Documentation accuracy verified by code audit against actual behavior
-- No regressions in single-date or time-series modes
+### Error Handling
 
----
+- Fetch failures stored in `session_state["run_error"]` and displayed above the landing page — survives the `st.rerun()` cycle that previously swallowed error messages silently
+- `run_error` key initialised at startup; cleared on every new run
 
-## [v1.0] — December 2025
+### UI & Design
 
-### ✨ Initial Release
+- **Obsidian Quant Terminal** theme — dark glass panels, amber (#D4A853) accent system, IBM Plex Mono + Space Grotesk typefaces
+- Light mode toggle via `render_theme_toggle()`
+- Custom SVG icon system (CHECK, LONG, SHORT, DOT, UP, DOWN, ZAP, CHART, STRENGTH, SETTINGS)
+- Mobile-responsive HTML tables — `overflow-x: auto` + `min-width: 480px` + `touch-action: auto` prevents bottom-row clipping on narrow viewports
+- Dynamic iframe height formula: `120 + groups×46 + rows×44` (buffers for scrollbar chrome and section headers)
+- System spec card in sidebar (version, universe, timeframe, mode)
+- Landing page with three system cards: Signal Engine, Signal Types, Universe Coverage
 
-#### Core Features
-- **Wave Trend Composite Index (WRCI) Engine**: Momentum oscillator signal detection
-- **Multi-Universe Scanning**: India Indexes, US Indexes, Commodities, Currency, Crypto
-- **Signal Strength Ranking**: Magnitude-based scoring with diminishing returns above 50
-- **Zone Detection**: Automatic overbought/oversold identification
-- **Dual Timeframe**: Daily and weekly WRCI analysis
+### Console Logger
 
-#### User Interface
-- **Sidebar Configuration**: Universe, index, date, timeframe, WRCI parameters
-- **Two Analysis Modes**:
-  - Single Date: Point-in-time screener
-  - Range Study: Historical date-range signal evolution
-- **Three Dashboard Tabs**:
-  - Action Dashboard: Age-grouped signals with timeline
-  - Signal Strength: Ranked by magnitude
-  - Top Bullish/Bearish: Conviction rankings each side
-- **Interactive Charts**: WRCI + Trend oscillator visualization (last 100 candles)
-
-#### Market Data Sources
-- **Indian Stocks**: NSE CSV archives (NIFTY 50, sector indices, 500 constituents)
-- **US Markets**: yfinance (S&P 500, DOW JONES, NASDAQ 100)
-- **Commodities**: 16 commodity futures (gold, oil, wheat, etc.)
-- **Currency**: 25 FX pairs (EUR/USD, USD/INR, etc.)
-- **Crypto**: 21 cryptocurrencies (Bitcoin, Ethereum, etc.)
-
-#### Technical Foundation
-- **Framework**: Streamlit interactive web app
-- **Data Processing**: pandas, NumPy (vectorized)
-- **Charts**: Plotly interactive graphs
-- **Styling**: Custom CSS (Obsidian Quant Terminal theme), SVG icons
-- **HTTP**: requests + nsepython for data fetching
-
-#### Performance
-- Batch data fetch: 2-3 sec for 50 symbols, 10-15 sec for 500
-- WRCI calculation: <1 sec (vectorized)
-- Full screener run: 15-30 sec depending on universe size
-
-#### Known Limitations
-- Intraday data not supported (daily/weekly only)
-- No live real-time updates (manual re-run required)
-- Historical data limited to ~2 years (yfinance constraint)
-- F&O list fallback to NIFTY 500 when API unavailable
+- `ConsoleOutput` class in `logger.py` — direct stdout with ANSI colours; bypasses Python's logging module
+- Phase timers, section headers, run summaries, per-symbol detail lines
+- Compatible with Windows 10+ (colorama or manual VT100 enable)
+- Unique run ID per analysis: `YYYYMMDD_HHMMSS_uuid8`
 
 ---
 
 ## Version Numbering
 
-**Format**: `v[MAJOR].[MINOR]`
+`v[MAJOR].[MINOR].[PATCH]`
 
-- **MAJOR**: Significant feature addition or breaking change
-- **MINOR**: Bug fixes, refinements, documentation
-
-**v1.0**: Launch with core WRCI engine and multi-universe support  
-**v2.0**: F&O integration, accuracy fixes, code cleanup
+- **MAJOR** — New universe, breaking change to output schema, or significant engine change
+- **MINOR** — New features, UI additions, additional index coverage
+- **PATCH** — Bug fixes, fetch reliability improvements, copy/documentation corrections
 
 ---
 
-## Roadmap (Future Considerations)
+## Roadmap
 
-### Potential v2.1 Enhancements
-- [ ] Intraday (hourly/4h) signal detection
-- [ ] Live real-time screener with auto-refresh
-- [ ] Custom universe definition (user CSV import)
-- [ ] Alert system (email/SMS on new signals)
-- [ ] Signal backtesting module
+### Near-term
+- [ ] Hourly / 4-hour timeframe support
+- [ ] Auto-refresh mode (configurable polling interval)
+- [ ] User-defined CSV import for custom universes
+- [ ] Alert export (email / Telegram on new signals)
 
-### Potential v3.0 Features
-- [ ] Portfolio heat-map (sector rotation analysis)
-- [ ] Correlation matrix (multi-asset confluence)
-- [ ] Strategy backtesting engine
-- [ ] API endpoint for external integrations
-- [ ] Mobile app (React Native)
+### Medium-term
+- [ ] Signal backtesting module — historical hit-rate per zone type
+- [ ] Sector rotation heatmap
+- [ ] Correlation matrix for multi-asset confluence view
 
----
-
-## Migration Notes
-
-### Upgrading from v1.0 → v2.0
-
-**Breaking Changes**: None
-
-**New in v2.0**:
-- F&O Stocks now default option (index 0) in India Indexes
-- Table rendering improved; may appear in different heights
-- Copy/descriptions changed for accuracy; no logic changes
-- Dead files removed; no functional impact
-
-**What's the Same**:
-- Signal detection algorithm unchanged
-- All analysis parameters unchanged
-- Output format identical
-- Performance characteristics same
-
-**Action Required**: None. Existing workflows continue unchanged.
+### Long-term
+- [ ] REST API endpoint for external integrations
+- [ ] Strategy builder with user-defined entry/exit rules
 
 ---
 
-## Contributors & Credits
-
-**Built by**: Antigravity  
-**Product Family**: Pragyam  
-**WRCI Algorithm**: Wave Trend momentum analysis (technical analysis foundation)  
-**Data Sources**: NSE archives, yfinance, nsepython
-
----
-
-## Support & Feedback
-
-- **Issues**: Test with default parameters first
-- **Feature Requests**: Document use case and expected behavior
-- **Data Problems**: Verify NSE/yfinance availability; check for API rate limits
-
----
-
-## Changelog Maintenance
-
-This changelog follows [Keep a Changelog](https://keepachangelog.com/) format.
-
-- **Added**: New features
-- **Changed**: Changes to existing functionality
-- **Deprecated**: Soon-to-be removed features
-- **Removed**: Dead code/features
-- **Fixed**: Bug fixes
-- **Security**: Security fixes
-
----
-
-**Last Updated**: April 2026  
-**Maintained by**: Antigravity / Pragyam  
-**Status**: Active Development
+*Maintained by Antigravity / Pragyam · @thebullishvalue*

@@ -1,0 +1,66 @@
+SANKET — Proprietary Software License
+
+Copyright (c) 2026 Antigravity. All rights reserved.
+
+SANKET is proprietary software developed by Antigravity as part of the
+Pragyam product family. This software and all associated source code,
+documentation, design assets, and analytical methodologies are the
+exclusive intellectual property of Antigravity.
+
+PERMITTED USES
+
+You may use this software solely for personal, internal, or
+organisational market analysis purposes in accordance with the terms
+under which it was provided to you.
+
+RESTRICTIONS
+
+Without the prior written consent of Antigravity, you may not:
+
+  1. Copy, reproduce, or distribute this software or any portion of it,
+     in source or binary form, to any third party.
+
+  2. Modify, adapt, translate, reverse-engineer, decompile, disassemble,
+     or create derivative works based on this software.
+
+  3. Sublicense, sell, rent, lease, transfer, assign, or otherwise
+     commercially exploit this software.
+
+  4. Remove or alter any proprietary notices, trademarks, or labels
+     contained within the software.
+
+  5. Use the WRCI engine, signal detection logic, or UI design system
+     in any other product or service without a separate written licence.
+
+DISCLAIMER
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+NON-INFRINGEMENT.
+
+IN NO EVENT SHALL ANTIGRAVITY BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+OTHER LIABILITY ARISING FROM THE USE OF, OR INABILITY TO USE, THIS
+SOFTWARE, INCLUDING BUT NOT LIMITED TO FINANCIAL LOSSES RESULTING FROM
+TRADING OR INVESTMENT DECISIONS MADE ON THE BASIS OF SIGNALS PRODUCED
+BY THIS SOFTWARE.
+
+MARKET DATA NOTICE
+
+This software fetches market data from third-party providers (NSE India,
+Yahoo Finance, nsepython). Use of that data is subject to the respective
+providers' terms of service. Antigravity makes no representations
+regarding the accuracy, completeness, or timeliness of data obtained
+from these sources.
+
+CONTACT
+
+For licensing enquiries, custom deployments, or permissions beyond the
+scope of this licence, contact Antigravity.
+
+---
+
+Product: SANKET v1.0.0
+Family:  Pragyam
+Author:  Antigravity · @thebullishvalue
+Year:    2026
