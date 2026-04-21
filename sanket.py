@@ -84,10 +84,19 @@ ui.render_theme_toggle()
 
 INDEX_LIST = [
     "F&O Stocks",
+    # Broad market
     "NIFTY 50", "NIFTY NEXT 50", "NIFTY 100", "NIFTY 200", "NIFTY 500",
-    "NIFTY MIDCAP 50", "NIFTY MIDCAP 100", "NIFTY SMLCAP 100", "NIFTY BANK",
-    "NIFTY AUTO", "NIFTY FIN SERVICE", "NIFTY FMCG", "NIFTY IT",
-    "NIFTY MEDIA", "NIFTY METAL", "NIFTY PHARMA",
+    # Midcap
+    "NIFTY MIDCAP 50", "NIFTY MIDCAP 100", "NIFTY MIDCAP 150", "NIFTY MID SELECT",
+    # Smallcap
+    "NIFTY SMLCAP 50", "NIFTY SMLCAP 100", "NIFTY SMLCAP 250",
+    # Sectoral
+    "NIFTY BANK", "NIFTY PRIVATE BANK", "NIFTY PSU BANK",
+    "NIFTY FIN SERVICE",
+    "NIFTY IT", "NIFTY AUTO", "NIFTY FMCG", "NIFTY PHARMA",
+    "NIFTY METAL", "NIFTY ENERGY", "NIFTY INFRA", "NIFTY REALTY",
+    "NIFTY MEDIA",
+    # All indexes as instruments
     "Benchmark Indexes",
 ]
 
@@ -136,15 +145,24 @@ INDEX_URL_MAP = {
     "NIFTY 500": f"{BASE_URL}ind_nifty500list.csv",
     "NIFTY MIDCAP 50": f"{BASE_URL}ind_niftymidcap50list.csv",
     "NIFTY MIDCAP 100": f"{BASE_URL}ind_niftymidcap100list.csv",
+    "NIFTY MIDCAP 150": f"{BASE_URL}ind_niftymidcap150list.csv",
+    "NIFTY MID SELECT": f"{BASE_URL}ind_niftymidcapselectlist.csv",
+    "NIFTY SMLCAP 50":  f"{BASE_URL}ind_niftysmallcap50list.csv",
     "NIFTY SMLCAP 100": f"{BASE_URL}ind_niftysmallcap100list.csv",
+    "NIFTY SMLCAP 250": f"{BASE_URL}ind_niftysmallcap250list.csv",
     "NIFTY BANK": f"{BASE_URL}ind_niftybanklist.csv",
+    "NIFTY PRIVATE BANK": f"{BASE_URL}ind_niftypvtbanklist.csv",
+    "NIFTY PSU BANK": f"{BASE_URL}ind_niftypsubanklist.csv",
     "NIFTY AUTO": f"{BASE_URL}ind_niftyautolist.csv",
     "NIFTY FIN SERVICE": f"{BASE_URL}ind_niftyfinancelist.csv",
     "NIFTY FMCG": f"{BASE_URL}ind_niftyfmcglist.csv",
     "NIFTY IT": f"{BASE_URL}ind_niftyitlist.csv",
-    "NIFTY MEDIA": f"{BASE_URL}ind_niftymedialist.csv",
+    "NIFTY PHARMA": f"{BASE_URL}ind_niftypharmalist.csv",
     "NIFTY METAL": f"{BASE_URL}ind_niftymetallist.csv",
-    "NIFTY PHARMA": f"{BASE_URL}ind_niftypharmalist.csv"
+    "NIFTY ENERGY": f"{BASE_URL}ind_niftyenergylist.csv",
+    "NIFTY INFRA": f"{BASE_URL}ind_niftyinfrastructurelist.csv",
+    "NIFTY REALTY": f"{BASE_URL}ind_niftyrealtylist.csv",
+    "NIFTY MEDIA": f"{BASE_URL}ind_niftymedialist.csv",
 }
 
 WIKI_URL_MAP = {
