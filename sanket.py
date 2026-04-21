@@ -1388,6 +1388,11 @@ def _render_signal_legend(side: str = 'long') -> None:
         </div>
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.45rem 1.5rem;">
             <div>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.82rem; font-weight:600; color:#F1F5F9;">Timing</span>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#4B5563;"> · </span>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#94A3B8;">{timing_desc}</span>
+            </div>
+            <div>
                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.82rem; font-weight:600; color:#F1F5F9;">Signal</span>
                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#4B5563;"> · </span>
                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#94A3B8;">{signal_desc}</span>
@@ -1396,11 +1401,6 @@ def _render_signal_legend(side: str = 'long') -> None:
                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.82rem; font-weight:600; color:#F1F5F9;">Trend</span>
                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#4B5563;"> · </span>
                 <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#94A3B8;">{trend_desc}</span>
-            </div>
-            <div>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.82rem; font-weight:600; color:#F1F5F9;">Timing</span>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#4B5563;"> · </span>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#94A3B8;">{timing_desc}</span>
             </div>
         </div>
         <div style="margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid rgba(255,255,255,0.05);">
