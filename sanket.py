@@ -635,6 +635,251 @@ def run_full_analysis(df, reg_len=20, wt_n1=10, wt_n2=21, obLevel1=80, obLevel2=
     return df
 
 # ══════════════════════════════════════════════════════════════════════════════
+# REGIME INTELLIGENCE ENGINE (NIRNAY FEATURES)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class AdaptiveHMM:
+    """Hidden Markov Model for regime state discovery - classifies WRCI signals"""
+    
+    def __init__(self):
+        self.n_states = 3
+        self.transition_matrix = np.array([
+            [0.85, 0.10, 0.05],
+            [0.10, 0.80, 0.10],
+            [0.05, 0.10, 0.85]
+        ])
+        self.emission_means = np.array([0.6, 0.0, -0.6])
+        self.emission_stds = np.array([0.3, 0.25, 0.3])
+        self.state_probabilities = np.array([0.33, 0.34, 0.33])
+        self.observation_history = []
+        self.state_history = []
+    
+    def _gaussian_pdf(self, x, mean, std):
+        if std < 1e-8:
+            return 1.0 if abs(x - mean) < 1e-8 else 0.0
+        return np.exp(-0.5 * ((x - mean) / std) ** 2) / (std * np.sqrt(2 * np.pi))
+    
+    def update(self, observation):
+        self.observation_history.append(observation)
+        predicted = self.transition_matrix.T @ self.state_probabilities
+        emissions = np.array([self._gaussian_pdf(observation, self.emission_means[s], self.emission_stds[s]) for s in range(3)])
+        updated = emissions * predicted
+        total = updated.sum()
+        if total > 1e-10:
+            updated /= total
+        else:
+            updated = np.array([0.33, 0.34, 0.33])
+        self.state_probabilities = updated
+        most_likely = np.argmax(updated)
+        self.state_history.append(most_likely)
+        
+        if len(self.observation_history) >= 10:
+            recent_obs = np.array(self.observation_history[-50:])
+            recent_states = self.state_history[-len(recent_obs):]
+            for state in range(3):
+                mask = np.array(recent_states) == state
+                if mask.sum() >= 2:
+                    state_obs = recent_obs[mask]
+                    self.emission_means[state] = 0.9 * self.emission_means[state] + 0.1 * np.mean(state_obs)
+                    self.emission_stds[state] = 0.9 * self.emission_stds[state] + 0.1 * max(np.std(state_obs), 0.1)
+        
+        return {"BULL": updated[0], "NEUTRAL": updated[1], "BEAR": updated[2]}
+    
+    def reset(self):
+        self.state_probabilities = np.array([0.33, 0.34, 0.33])
+        self.observation_history = []
+        self.state_history = []
+
+
+class GARCHDetector:
+    """GARCH-inspired volatility regime detection for WRCI signal variance"""
+    
+    def __init__(self):
+        self.current_variance = 0.04
+        self.omega = 0.0001
+        self.alpha = 0.1
+        self.beta = 0.85
+        self.long_term_mean = 0.04
+        self.shock_history = []
+    
+    def update(self, shock):
+        self.shock_history.append(shock)
+        shock_sq = shock ** 2
+        new_var = self.omega + self.alpha * shock_sq + self.beta * self.current_variance
+        self.current_variance = np.clip(new_var, 0.001, 1.0)
+        
+        if len(self.shock_history) >= 10:
+            realized = np.var(self.shock_history[-min(50, len(self.shock_history)):])
+            self.long_term_mean = 0.95 * self.long_term_mean + 0.05 * realized
+        
+        return np.sqrt(self.current_variance)
+    
+    def get_regime(self):
+        current_vol = np.sqrt(self.current_variance)
+        long_term_vol = np.sqrt(self.long_term_mean)
+        ratio = current_vol / long_term_vol if long_term_vol > 0 else 1.0
+        
+        if ratio < 0.6:
+            return "LOW", 1.3
+        elif ratio < 0.9:
+            return "NORMAL", 1.0
+        elif ratio < 1.4:
+            return "HIGH", 0.8
+        else:
+            return "EXTREME", 0.6
+    
+    def reset(self):
+        self.current_variance = 0.04
+        self.shock_history = []
+
+
+class CUSUMDetector:
+    """CUSUM change point detection for WRCI signal regime shifts"""
+    
+    def __init__(self, threshold=4.0, drift=0.5):
+        self.threshold = threshold
+        self.drift = drift
+        self.positive_cusum = 0.0
+        self.negative_cusum = 0.0
+        self.value_history = []
+        self.running_mean = 0.0
+        self.running_std = 1.0
+    
+    def update(self, value):
+        self.value_history.append(value)
+        
+        if len(self.value_history) >= 3:
+            recent = self.value_history[-min(20, len(self.value_history)):]
+            self.running_mean = np.mean(recent)
+            self.running_std = max(np.std(recent), 0.1)
+        
+        z = (value - self.running_mean) / self.running_std
+        self.positive_cusum = max(0, self.positive_cusum + z - self.drift)
+        self.negative_cusum = max(0, self.negative_cusum - z - self.drift)
+        
+        change_detected = self.positive_cusum > self.threshold or self.negative_cusum > self.threshold
+        
+        if change_detected:
+            self.positive_cusum = 0
+            self.negative_cusum = 0
+        
+        return change_detected
+    
+    def reset(self):
+        self.positive_cusum = 0.0
+        self.negative_cusum = 0.0
+        self.value_history = []
+
+
+class AdaptiveKalmanFilter:
+    """Kalman filter for WRCI signal smoothing"""
+    
+    def __init__(self, process_var=0.01, measurement_var=0.1):
+        self.estimate = 0.0
+        self.error_covariance = 1.0
+        self.process_variance = process_var
+        self.measurement_variance = measurement_var
+        self.innovation_history = []
+    
+    def update(self, measurement):
+        predicted_estimate = self.estimate
+        predicted_covariance = self.error_covariance + self.process_variance
+        innovation = measurement - predicted_estimate
+        self.innovation_history.append(innovation)
+        if len(self.innovation_history) > 50:
+            self.innovation_history.pop(0)
+        innovation_cov = predicted_covariance + self.measurement_variance
+        kalman_gain = predicted_covariance / innovation_cov
+        self.estimate = predicted_estimate + kalman_gain * innovation
+        self.error_covariance = (1 - kalman_gain) * predicted_covariance
+        
+        if len(self.innovation_history) >= 5:
+            innovation_var = np.var(self.innovation_history[-min(20, len(self.innovation_history)):])
+            self.measurement_variance = 0.9 * self.measurement_variance + 0.1 * innovation_var
+        
+        return self.estimate
+    
+    def reset(self, initial=0.0):
+        self.estimate = initial
+        self.error_covariance = 1.0
+        self.innovation_history = []
+
+
+def run_regime_analysis(df):
+    """Apply Regime Intelligence to WRCI-computed dataframe"""
+    hmm = AdaptiveHMM()
+    garch = GARCHDetector()
+    cusum = CUSUMDetector()
+    kalman = AdaptiveKalmanFilter()
+    
+    regimes = []
+    hmm_bulls = []
+    hmm_bears = []
+    vol_regimes = []
+    change_points = []
+    confidences = []
+    signal_history = []
+    
+    unified_vals = df['Unified_Osc'].values
+    
+    for i in range(len(df)):
+        sig = unified_vals[i] if not np.isnan(unified_vals[i]) else 0
+        filtered = kalman.update(sig / 10.0)
+        
+        shock = sig - signal_history[-1] if signal_history else 0
+        garch.update(shock)
+        vol_regime, _ = garch.get_regime()
+        
+        hmm_probs = hmm.update(filtered)
+        change = cusum.update(filtered)
+        
+        bull_p = hmm_probs['BULL']
+        bear_p = hmm_probs['BEAR']
+        
+        if change:
+            regime = "TRANSITION"
+        elif bull_p > 0.6:
+            regime = "BULL"
+        elif bear_p > 0.6:
+            regime = "BEAR"
+        elif bull_p > 0.4:
+            regime = "WEAK_BULL"
+        elif bear_p > 0.4:
+            regime = "WEAK_BEAR"
+        else:
+            regime = "NEUTRAL"
+        
+        regimes.append(regime)
+        hmm_bulls.append(bull_p)
+        hmm_bears.append(bear_p)
+        vol_regimes.append(vol_regime)
+        change_points.append(change)
+        confidences.append(max(bull_p, bear_p, hmm_probs['NEUTRAL']))
+        signal_history.append(sig)
+    
+    df['Regime'] = regimes
+    df['HMM_Bull'] = hmm_bulls
+    df['HMM_Bear'] = hmm_bears
+    df['Vol_Regime'] = vol_regimes
+    df['Change_Point'] = change_points
+    df['Confidence'] = confidences
+    
+    return df
+
+
+def calculate_divergences(df):
+    """Calculate bullish and bearish divergences for WRCI signals"""
+    osc_rising = df['Unified_Osc'] > df['Unified_Osc'].shift(1)
+    price_falling = df['Close'] < df['Close'].shift(1)
+    osc_falling = df['Unified_Osc'] < df['Unified_Osc'].shift(1)
+    price_rising = df['Close'] > df['Close'].shift(1)
+    
+    df['Bullish_Div'] = osc_rising & price_falling & (df['Unified_Osc'] < -5)
+    df['Bearish_Div'] = osc_falling & price_rising & (df['Unified_Osc'] > 5)
+    
+    return df
+
+# ══════════════════════════════════════════════════════════════════════════════
 # DATA HANDLING & UTILITIES
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -881,7 +1126,7 @@ def render_sidebar():
         else:
             analysis_date = datetime.date.today()
             col_date1, col_date2 = st.columns(2)
-            with col_date1: start_date_hist = st.date_input("Start", datetime.date.today() - datetime.timedelta(days=30), label_visibility="collapsed")
+            with col_date1: start_date_hist = st.date_input("Start", datetime.date.today() - datetime.timedelta(days=300), label_visibility="collapsed")
             with col_date2: end_date_hist = st.date_input("End", datetime.date.today(), label_visibility="collapsed")
 
         # WRCI Engine — hardcoded defaults
@@ -1151,7 +1396,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     console.success(f"Downloaded depth for {len(data_dict)} entities")
     console.end_phase("HISTORICAL ACQUISITION")
 
-    progress_bar(progress_slot, 15, "Processing WRCI oscillations", f"{len(data_dict)} stocks")
+    progress_bar(progress_slot, 15, "Processing WRCI + Regime Intelligence", f"{len(data_dict)} stocks")
     all_results = []
 
     for i, (ticker, df) in enumerate(data_dict.items()):
@@ -1161,8 +1406,9 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
             if timeframe == "Weekly":
                 df = resample_to_weekly(df)
             df = run_full_analysis(df, reg_len, wt_n1, wt_n2, *levels)
+            df = run_regime_analysis(df)
+            df = calculate_divergences(df)
 
-            # Filter for requested range
             mask = (df.index.date >= start_date) & (df.index.date <= end_date)
             range_df = df.loc[mask]
 
@@ -1175,7 +1421,16 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'Wave': row['WT1'],
                     'Zone': row['Condition'],
                     'LongSignal': row['long_cond'],
-                    'ShortSignal': row['short_cond']
+                    'ShortSignal': row['short_cond'],
+                    # Regime Intelligence columns
+                    'Regime': row.get('Regime', 'NEUTRAL'),
+                    'HMM_Bull': row.get('HMM_Bull', 0),
+                    'HMM_Bear': row.get('HMM_Bear', 0),
+                    'Vol_Regime': row.get('Vol_Regime', 'NORMAL'),
+                    'Change_Point': row.get('Change_Point', False),
+                    'Confidence': row.get('Confidence', 0),
+                    'Bullish_Div': row.get('Bullish_Div', False),
+                    'Bearish_Div': row.get('Bearish_Div', False),
                 })
             
             console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: {len(range_df)} data points processed")
@@ -1192,25 +1447,61 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         return
 
     ts_df = pd.DataFrame(all_results)
+    ts_df['Date'] = pd.to_datetime(ts_df['Date'])
+    ts_df = ts_df.sort_values('Date')
+
+    # Aggregate daily metrics - WRCI + Regime Intelligence
     daily_agg = ts_df.groupby('Date').agg({
         'Signal': 'mean',
         'Trend': 'mean',
         'Wave': 'mean',
         'LongSignal': 'sum',
         'ShortSignal': 'sum',
-        'Zone': lambda x: x.mode()[0] if len(x.mode()) > 0 else 'Neutral'
+        'Zone': lambda x: x.mode()[0] if len(x.mode()) > 0 else 'Neutral',
+        # Regime aggregations
+        'Regime': lambda x: x.mode()[0] if len(x.mode()) > 0 else 'NEUTRAL',
+        'HMM_Bull': 'mean',
+        'HMM_Bear': 'mean',
+        'Vol_Regime': lambda x: x.mode()[0] if len(x.mode()) > 0 else 'NORMAL',
+        'Change_Point': 'sum',
+        'Confidence': 'mean',
+        'Bullish_Div': 'sum',
+        'Bearish_Div': 'sum',
     })
 
-    # Compute additional metrics
     daily_agg['TotalSignals'] = daily_agg['LongSignal'] + daily_agg['ShortSignal']
     daily_agg['L_S_Ratio'] = daily_agg['LongSignal'] / (daily_agg['ShortSignal'] + 0.01)
     daily_agg['Conviction'] = daily_agg['Signal'].abs()
+
+    # Compute zone percentages
+    zone_counts = ts_df.groupby('Date')['Zone'].apply(lambda x: (x.isin(['OB Extreme', 'OB'])).sum())
+    os_counts = ts_df.groupby('Date')['Zone'].apply(lambda x: (x.isin(['OS Extreme', 'OS'])).sum())
+    total_per_day = ts_df.groupby('Date').size()
+    daily_agg['Oversold_Pct'] = (zone_counts / total_per_day * 100).fillna(0)
+    daily_agg['Overbought_Pct'] = (os_counts / total_per_day * 100).fillna(0)
+
+    # Compute regime percentages
+    regime_bull = ts_df.groupby('Date')['Regime'].apply(lambda x: x.str.contains('BULL', na=False).sum())
+    regime_bear = ts_df.groupby('Date')['Regime'].apply(lambda x: x.str.contains('BEAR', na=False).sum())
+    regime_trans = ts_df.groupby('Date')['Regime'].apply(lambda x: (x == 'TRANSITION').sum())
+    daily_agg['Regime_Bull_Pct'] = (regime_bull / total_per_day * 100).fillna(0)
+    daily_agg['Regime_Bear_Pct'] = (regime_bear / total_per_day * 100).fillna(0)
+    daily_agg['Regime_Transition_Pct'] = (regime_trans / total_per_day * 100).fillna(0)
 
     # Summary metrics
     total_signals = daily_agg['TotalSignals'].sum()
     avg_signal = daily_agg['Signal'].mean()
     overall_ratio = daily_agg['LongSignal'].sum() / max(daily_agg['ShortSignal'].sum(), 1)
     most_common_zone = ts_df['Zone'].mode()[0] if len(ts_df['Zone'].mode()) > 0 else 'Neutral'
+    dominant_regime = ts_df['Regime'].mode()[0] if len(ts_df['Regime'].mode()) > 0 else 'NEUTRAL'
+    
+    avg_oversold = daily_agg['Oversold_Pct'].mean()
+    avg_overbought = daily_agg['Overbought_Pct'].mean()
+    total_buys = int(daily_agg['LongSignal'].sum())
+    total_sells = int(daily_agg['ShortSignal'].sum())
+    avg_bull_regime = daily_agg['Regime_Bull_Pct'].mean()
+    avg_bear_regime = daily_agg['Regime_Bear_Pct'].mean()
+    total_change_points = int(daily_agg['Change_Point'].sum())
 
     console.summary("RANGE STUDY SUMMARY", {
         "Universe": universe,
@@ -1219,7 +1510,8 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         "Total Signals Generated": int(total_signals),
         "Avg Signal Strength": round(avg_signal, 2),
         "Bias Ratio (L/S)": round(overall_ratio, 2),
-        "Dominant Regime": most_common_zone,
+        "Dominant Zone": most_common_zone,
+        "HMM Regime": dominant_regime,
         "Status": "COMPLETE"
     })
     console.line('═', 70)
@@ -1230,51 +1522,240 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
     ui.render_section_header(f"Range Study ({start_date} to {end_date})", icon="history", accent="violet")
 
-    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-    with col_m1:
-        ui.render_metric_card("Total Signals", str(int(total_signals)), f"{int(daily_agg['LongSignal'].sum())} long · {int(daily_agg['ShortSignal'].sum())} short", "info")
-    with col_m2:
-        ui.render_metric_card("Avg Signal Strength", f"{avg_signal:+.1f}", "Across all days", "neutral")
-    with col_m3:
+    # Summary metric cards
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    with c1:
+        ui.render_metric_card("Total Signals", str(int(total_signals)), f"{total_buys} long · {total_sells} short", "info")
+    with c2:
+        ui.render_metric_card("Avg Oversold", f"{avg_oversold:.1f}%", "Daily Average", "success")
+    with c3:
+        ui.render_metric_card("Avg Overbought", f"{avg_overbought:.1f}%", "Daily Average", "danger")
+    with c4:
+        ui.render_metric_card("Period Regime", dominant_regime, f"Bull: {avg_bull_regime:.0f}% | Bear: {avg_bear_regime:.0f}%", "warning")
+    with c5:
         ui.render_metric_card("L/S Ratio", f"{overall_ratio:.2f}", f"{'Bullish' if overall_ratio > 1 else 'Bearish'} bias", "info")
-    with col_m4:
-        ui.render_metric_card("Dominant Zone", most_common_zone, "Most common regime", "warning")
+    with c6:
+        ui.render_metric_card("Trading Days", str(len(daily_agg)), "Analyzed", "neutral")
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-    # Signal Frequency over time (line chart)
-    st.markdown(f'<h4 style="font-family: var(--data); font-size: 0.9rem; color: var(--ink-secondary); text-transform: uppercase; margin-bottom: 1rem; letter-spacing: 0.08em; display: flex; align-items: center; gap: 0.5rem;">{SVGS["CHART"]} Signal Frequency</h4>', unsafe_allow_html=True)
-    fig_freq = go.Figure()
-    fig_freq.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['LongSignal'], fill='tozeroy', name='Long Signals', line=dict(color='#2DD4A8', width=2), fillcolor='rgba(45, 212, 168, 0.2)'))
-    fig_freq.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['ShortSignal'], fill='tozeroy', name='Short Signals', line=dict(color='#E8555A', width=2), fillcolor='rgba(232, 85, 90, 0.2)'))
-    fig_freq.update_layout(title='', height=300, hovermode='x unified')
-    apply_chart_theme(fig_freq)
-    st.plotly_chart(fig_freq, width='stretch')
+    # Create 4 tabs like NIRNAY
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Signal Dashboard",
+        "Transaction Dynamics", 
+        "Regime Analysis",
+        "Data Terminal"
+    ])
 
-    # Signal Strength Trend (line chart)
-    st.markdown(f'<h4 style="font-family: var(--data); font-size: 0.9rem; color: var(--ink-secondary); text-transform: uppercase; margin-bottom: 1rem; letter-spacing: 0.08em; display: flex; align-items: center; gap: 0.5rem;">{SVGS["UP"]} Signal Strength Trend</h4>', unsafe_allow_html=True)
-    fig_sig = go.Figure()
-    fig_sig.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Signal'], fill='tozeroy', name='Avg Signal', line=dict(color='#D4A853', width=2), fillcolor='rgba(212, 168, 83, 0.2)'))
-    fig_sig.update_layout(title='', height=300, yaxis=dict(title=dict(text='Avg Signal Strength', font=dict(size=11, color='#94A3B8'))), hovermode='x unified')
-    apply_chart_theme(fig_sig)
-    st.plotly_chart(fig_sig, width='stretch')
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 1: SIGNAL DASHBOARD
+    # ═══════════════════════════════════════════════════════════════════
+    with tab1:
+        ui.render_section_header("Extreme Signal Trends", "Overbought / Oversold Distribution Over Time", icon="activity", accent="cyan")
+        
+        fig_zones = go.Figure()
+        fig_zones.add_trace(go.Scatter(
+            x=daily_agg.index, y=daily_agg['Oversold_Pct'],
+            mode='lines', name='Oversold %',
+            fill='tozeroy', fillcolor='rgba(52,211,153,0.12)',
+            line=dict(color='#2DD4A8', width=2)
+        ))
+        fig_zones.add_trace(go.Scatter(
+            x=daily_agg.index, y=daily_agg['Overbought_Pct'],
+            mode='lines', name='Overbought %',
+            fill='tozeroy', fillcolor='rgba(251,113,133,0.12)',
+            line=dict(color='#E8555A', width=2)
+        ))
+        ymax = max(daily_agg['Oversold_Pct'].max(), daily_agg['Overbought_Pct'].max()) * 1.15
+        fig_zones.update_layout(title='', height=350, hovermode='x unified', yaxis=dict(range=[0, ymax]))
+        apply_chart_theme(fig_zones)
+        st.plotly_chart(fig_zones, width='stretch')
 
-    # Long/Short Ratio (line chart)
-    st.markdown(f'<h4 style="font-family: var(--data); font-size: 0.9rem; color: var(--ink-secondary); text-transform: uppercase; margin-bottom: 1rem; letter-spacing: 0.08em; display: flex; align-items: center; gap: 0.5rem;">{SVGS["STRENGTH"]} Long/Short Ratio</h4>', unsafe_allow_html=True)
-    fig_ratio = go.Figure()
-    fig_ratio.add_hline(y=1.0, line_dash="dash", line_color="#D4A853", annotation_text="Neutral", annotation_position="right")
-    fig_ratio.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['L_S_Ratio'], fill='tozeroy', name='L/S Ratio', line=dict(color='#06B6D4', width=2), fillcolor='rgba(6, 182, 212, 0.2)'))
-    fig_ratio.update_layout(title='', height=300, yaxis=dict(title=dict(text='Ratio', font=dict(size=11, color='#94A3B8'))), hovermode='x unified')
-    apply_chart_theme(fig_ratio)
-    st.plotly_chart(fig_ratio, width='stretch')
+        st.markdown("<br>", unsafe_allow_html=True)
+        ui.render_section_header("Signal Volume Trends", "Raw Counts Over Time", icon="bar-chart", accent="info")
+        
+        fig_counts = go.Figure()
+        fig_counts.add_trace(go.Bar(
+            x=daily_agg.index, y=daily_agg['LongSignal'],
+            name='Oversold', 
+            marker=dict(color='#2DD4A8', line=dict(color='#2DD4A8', width=1))
+        ))
+        fig_counts.add_trace(go.Bar(
+            x=daily_agg.index, y=daily_agg['ShortSignal'],
+            name='Overbought', 
+            marker=dict(color='#E8555A', line=dict(color='#E8555A', width=1))
+        ))
+        fig_counts.update_layout(title='', height=300, hovermode='x unified', barmode='group')
+        apply_chart_theme(fig_counts)
+        st.plotly_chart(fig_counts, width='stretch')
 
-    # Signal Conviction trend (line chart)
-    st.markdown(f'<h4 style="font-family: var(--data); font-size: 0.9rem; color: var(--ink-secondary); text-transform: uppercase; margin-bottom: 1rem; letter-spacing: 0.08em; display: flex; align-items: center; gap: 0.5rem;">{SVGS["STRENGTH"]} Signal Conviction (Strength Confidence)</h4>', unsafe_allow_html=True)
-    fig_conviction = go.Figure()
-    fig_conviction.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Conviction'], fill='tozeroy', name='Conviction', line=dict(color='#8B5CF6', width=2), fillcolor='rgba(139, 92, 246, 0.2)'))
-    fig_conviction.update_layout(title='', height=300, yaxis_title='Avg Absolute Signal Strength', hovermode='x unified')
-    apply_chart_theme(fig_conviction)
-    st.plotly_chart(fig_conviction, width='stretch')
+    # ════════════════════════════════════���═���════════════════════════════════════
+    # TAB 2: TRANSACTION DYNAMICS
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab2:
+        ui.render_section_header("Transaction Signal Trends", "Buy / Sell Signal Counts Over Time", icon="zap", accent="emerald")
+        
+        fig_signals = go.Figure()
+        fig_signals.add_trace(go.Scatter(
+            x=daily_agg.index, y=daily_agg['LongSignal'],
+            mode='lines+markers', name='Long Signals',
+            line=dict(color='#2DD4A8', width=2),
+            marker=dict(size=6, color='#2DD4A8')
+        ))
+        fig_signals.add_trace(go.Scatter(
+            x=daily_agg.index, y=daily_agg['ShortSignal'],
+            mode='lines+markers', name='Short Signals',
+            line=dict(color='#E8555A', width=2),
+            marker=dict(size=6, color='#E8555A')
+        ))
+        fig_signals.update_layout(title='', height=300, hovermode='x unified')
+        apply_chart_theme(fig_signals)
+        st.plotly_chart(fig_signals, width='stretch')
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        ui.render_section_header("Divergence Persistence", "Divergence Signals Over Time", icon="trending-up", accent="amber")
+        
+        fig_div = go.Figure()
+        fig_div.add_trace(go.Bar(
+            x=daily_agg.index, y=daily_agg['Bullish_Div'],
+            name='Bullish Divergence', 
+            marker=dict(color='#D4A853', line=dict(color='#D4A853', width=1))
+        ))
+        fig_div.add_trace(go.Bar(
+            x=daily_agg.index, y=-daily_agg['Bearish_Div'],
+            name='Bearish Divergence', 
+            marker=dict(color='#06B6D4', line=dict(color='#06B6D4', width=1))
+        ))
+        fig_div.update_layout(title='', height=300, hovermode='x unified', barmode='relative')
+        apply_chart_theme(fig_div)
+        st.plotly_chart(fig_div, width='stretch')
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 3: REGIME ANALYSIS
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab3:
+        ui.render_section_header("Aggregate Signal Momentum", "Average Signal Value Over Time", icon="activity", accent="rose")
+        
+        colors = ['#2DD4A8' if v < -20 else '#E8555A' if v > 20 else '#64748B' for v in daily_agg['Signal']]
+        
+        fig_avg = go.Figure()
+        fig_avg.add_trace(go.Scatter(
+            x=daily_agg.index, y=daily_agg['Signal'].clip(lower=0),
+            fill='tozeroy', fillcolor='rgba(232,85,90,0.05)',
+            line=dict(width=0), showlegend=False, hoverinfo='skip'
+        ))
+        fig_avg.add_trace(go.Scatter(
+            x=daily_agg.index, y=daily_agg['Signal'].clip(upper=0),
+            fill='tozeroy', fillcolor='rgba(45,212,168,0.05)',
+            line=dict(width=0), showlegend=False, hoverinfo='skip'
+        ))
+        fig_avg.add_trace(go.Scatter(
+            x=daily_agg.index, y=daily_agg['Signal'],
+            mode='lines+markers', name='Avg Signal',
+            line=dict(color='#D4A853', width=2),
+            marker=dict(size=6, color=colors)
+        ))
+        fig_avg.add_hline(y=20, line=dict(color='rgba(239,68,68,0.5)', width=1, dash='dash'))
+        fig_avg.add_hline(y=-20, line=dict(color='rgba(16,185,129,0.5)', width=1, dash='dash'))
+        fig_avg.add_hline(y=0, line=dict(color='rgba(255,255,255,0.3)', width=1))
+        fig_avg.update_layout(title='', height=300, hovermode='x unified', yaxis=dict(range=[-80, 80]))
+        apply_chart_theme(fig_avg)
+        st.plotly_chart(fig_avg, width='stretch')
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        ui.render_section_header("HMM Regime Distribution Over Time", "Percentage of symbols in each HMM regime daily", icon="activity", accent="cyan")
+        
+        fig_regime = go.Figure()
+        fig_regime.add_trace(go.Scatter(
+            x=daily_agg.index, y=daily_agg['Regime_Bull_Pct'],
+            mode='lines', name='Bull Regime %',
+            fill='tozeroy', fillcolor='rgba(52,211,153,0.12)',
+            line=dict(color='#2DD4A8', width=2)
+        ))
+        fig_regime.add_trace(go.Scatter(
+            x=daily_agg.index, y=daily_agg['Regime_Bear_Pct'],
+            mode='lines', name='Bear Regime %',
+            fill='tozeroy', fillcolor='rgba(232,85,90,0.12)',
+            line=dict(color='#E8555A', width=2)
+        ))
+        fig_regime.update_layout(title='', height=300, hovermode='x unified', yaxis=dict(range=[0, 100]))
+        apply_chart_theme(fig_regime)
+        st.plotly_chart(fig_regime, width='stretch')
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        ui.render_section_header("Volatility Dynamics", "Volatility Regime & Change Points Over Time", icon="shield", accent="amber")
+        
+        # Compute high vol percentage
+        vol_high = ts_df.groupby('Date')['Vol_Regime'].apply(lambda x: (x.isin(['HIGH', 'EXTREME'])).sum() / len(x) * 100)
+        
+        fig_vol = go.Figure()
+        fig_vol.add_trace(go.Scatter(
+            x=daily_agg.index, y=vol_high.fillna(0),
+            mode='lines+markers', name='High Vol %',
+            line=dict(color='#D4A853', width=2),
+            marker=dict(size=5)
+        ))
+        fig_vol.add_trace(go.Bar(
+            x=daily_agg.index, y=daily_agg['Change_Point'],
+            name='Change Points',
+            marker=dict(color='#A855F7', opacity=0.7)
+        ))
+        fig_vol.update_layout(title='', height=250, hovermode='x unified')
+        apply_chart_theme(fig_vol)
+        st.plotly_chart(fig_vol, width='stretch')
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_r1, col_r2 = st.columns(2)
+        
+        with col_r1:
+            ui.render_section_header("State Transition Metrics", "HMM Regime Statistics", icon="bar-chart", accent="emerald")
+            regime_stats = {
+                "Metric": ["Avg Bull Regime %", "Avg Bear Regime %", "Total Change Points", "Avg High Vol %"],
+                "Value": [f"{avg_bull_regime:.1f}%", f"{avg_bear_regime:.1f}%", f"{total_change_points}", f"{vol_high.mean():.1f}%"]
+            }
+            st.dataframe(pd.DataFrame(regime_stats), width='stretch', hide_index=True)
+        
+        with col_r2:
+            ui.render_section_header("Distribution Metrics", "Signal Statistics", icon="database", accent="rose")
+            signal_stats = {
+                "Metric": ["Mean Signal", "Median Signal", "Min Signal", "Max Signal", "Std Dev"],
+                "Value": [
+                    f"{daily_agg['Signal'].mean():.2f}",
+                    f"{daily_agg['Signal'].median():.2f}",
+                    f"{daily_agg['Signal'].min():.2f}",
+                    f"{daily_agg['Signal'].max():.2f}",
+                    f"{daily_agg['Signal'].std():.2f}"
+                ]
+            }
+            st.dataframe(pd.DataFrame(signal_stats), width='stretch', hide_index=True)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 4: DATA TERMINAL
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab4:
+        ui.render_section_header("Analytical Data", f"Daily Time Series ({len(daily_agg)} days)", icon="list", accent="cyan")
+        
+        display_ts = daily_agg.copy()
+        display_ts.index = display_ts.index.strftime('%Y-%m-%d')
+        display_ts = display_ts.reset_index().rename(columns={'Date': 'Date'})
+        
+        # Select columns to display
+        display_cols = ['Date', 'LongSignal', 'ShortSignal', 'Signal', 'Oversold_Pct', 'Overbought_Pct', 
+                      'Regime_Bull_Pct', 'Regime_Bear_Pct', 'Change_Point']
+        display_ts = display_ts[display_cols]
+        display_ts.columns = ['Date', 'Long Sig', 'Short Sig', 'Avg Signal', 'Oversold %', 'Overbought %',
+                           'Bull Regime %', 'Bear Regime %', 'Change Pts']
+        
+        st.dataframe(display_ts, width='stretch', hide_index=True, height=500)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        csv_data = ts_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Full Report (CSV)",
+            data=csv_data,
+            file_name=f"sanket_range_study_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     render_footer()
