@@ -1343,6 +1343,75 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long') -> dict
     return buckets, stats, trend, trend_color
 
 
+def _render_signal_legend(side: str = 'long') -> None:
+    """Render context-aware interpretation legend below a timing table."""
+    if side == 'long':
+        signal_desc  = "Positive WRCI value — the oscillator has crossed upward, indicating building bullish momentum. Higher magnitude = stronger push."
+        trend_desc   = "Positive = uptrend confirming the signal. Negative = downtrend still in place despite the bullish cross."
+        timing_desc  = "Older bullish signals are more reliable — the upside shift has had time to prove itself. Today&rsquo;s signal is fresh and may still be developing."
+        together_good = "Signal &#x2B; + Trend &#x2B; = high conviction long — momentum and direction fully aligned."
+        together_mixed = "Signal &#x2B; + Trend &#x2212; = bullish cross against a downtrend. Likely a counter-trend bounce — wait for Trend to turn positive before committing."
+    else:
+        signal_desc  = "Negative WRCI value — the oscillator has crossed downward, indicating building selling pressure. Higher magnitude (more negative) = stronger push."
+        trend_desc   = "Negative = downtrend confirming the signal. Positive = uptrend still in place despite the bearish cross."
+        timing_desc  = "Older bearish signals are more reliable — the downside shift has confirmed over time. Today&rsquo;s signal is fresh and may still be developing."
+        together_good = "Signal &#x2212; + Trend &#x2212; = high conviction short — momentum and direction fully aligned."
+        together_mixed = "Signal &#x2212; + Trend &#x2B; = bearish cross inside an uptrend. Possible exhaustion or pullback — not a clean short until the trend turns negative."
+
+    st.markdown(f"""
+    <div style="
+        position: relative;
+        margin-top: 1.25rem;
+        padding: 0.85rem 1rem 0.85rem 1rem;
+        background: rgba(255, 255, 255, 0.015);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 8px;
+        overflow: hidden;
+    ">
+        <div style="
+            position: absolute; top: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, #D4A853 0%, rgba(212,168,83,0.25) 60%, transparent 100%);
+            opacity: 0.55;
+        "></div>
+        <div style="
+            display: flex; align-items: center; gap: 0.45rem;
+            margin-bottom: 0.65rem;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.58rem; font-weight: 600;
+            letter-spacing: 0.12em; text-transform: uppercase;
+            color: #D4A853;
+        ">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#D4A853" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            How to read this table
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.45rem 1.5rem;">
+            <div>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Signal</span>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">{signal_desc}</span>
+            </div>
+            <div>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Trend</span>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">{trend_desc}</span>
+            </div>
+            <div>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Timing</span>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">{timing_desc}</span>
+            </div>
+        </div>
+        <div style="margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid rgba(255,255,255,0.05);">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Reading Signal &amp; Trend together</span>
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">{together_good} &nbsp;&nbsp;{together_mixed}</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
     """Build organized HTML table for signals grouped by age with section headers."""
     import html as html_module
@@ -1773,6 +1842,7 @@ def main():
                             st.components.v1.html(long_table_html, height=120 + _groups * 46 + _rows * 44)
                         else:
                             st.info("No bullish signals detected.")
+                        _render_signal_legend(side='long')
 
                     with bear_tab:
                         if not shorts_df.empty:
@@ -1783,69 +1853,7 @@ def main():
                             st.components.v1.html(short_table_html, height=120 + _groups * 46 + _rows * 44)
                         else:
                             st.info("No bearish signals detected.")
-
-                    st.markdown("""
-                    <div style="
-                        position: relative;
-                        margin-top: 1.25rem;
-                        padding: 0.85rem 1rem 0.85rem 1rem;
-                        background: rgba(255, 255, 255, 0.015);
-                        border: 1px solid rgba(255, 255, 255, 0.06);
-                        border-radius: 8px;
-                        overflow: hidden;
-                    ">
-                        <div style="
-                            position: absolute; top: 0; left: 0; right: 0; height: 1px;
-                            background: linear-gradient(90deg, #D4A853 0%, rgba(212,168,83,0.25) 60%, transparent 100%);
-                            opacity: 0.55;
-                        "></div>
-                        <div style="
-                            display: flex; align-items: center; gap: 0.45rem;
-                            margin-bottom: 0.65rem;
-                            font-family: 'IBM Plex Mono', monospace;
-                            font-size: 0.58rem;
-                            font-weight: 600;
-                            letter-spacing: 0.12em;
-                            text-transform: uppercase;
-                            color: #D4A853;
-                        ">
-                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#D4A853" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-                            </svg>
-                            How to read this table
-                        </div>
-                        <div style="
-                            display: grid;
-                            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-                            gap: 0.45rem 1.5rem;
-                        ">
-                            <div>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Signal</span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">WRCI oscillator value. Positive = bullish momentum, negative = bearish. Higher magnitude = stronger signal.</span>
-                            </div>
-                            <div>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Trend</span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Directional strength of the move. Positive = uptrend, negative = downtrend.</span>
-                            </div>
-                            <div>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Timing</span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
-                                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Older signals are more prudent — the shift has had time to mature and confirm. Today signals are still setting up.</span>
-                            </div>
-                        </div>
-                        <div style="
-                            margin-top: 0.6rem;
-                            padding-top: 0.6rem;
-                            border-top: 1px solid rgba(255,255,255,0.05);
-                        ">
-                            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600; color:#F1F5F9;">Reading Signal &amp; Trend together</span>
-                            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#4B5563;"> · </span>
-                            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.6rem; color:#94A3B8;">Both positive = confirmed bullish, high conviction. Both negative = confirmed bearish, high conviction. Signal positive + Trend negative = bullish signal against a downtrend — wait for trend to turn before acting. Signal negative + Trend positive = bearish signal inside an uptrend — possible exhaustion, not yet a clean short.</span>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                        _render_signal_legend(side='short')
 
                 else:
                     st.info("No signals detected in the specified universe and timeframe.")
