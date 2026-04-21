@@ -69,6 +69,8 @@ if "run_timeseries_flag" not in st.session_state:
     st.session_state["run_timeseries_flag"] = False
 if "timeseries_done" not in st.session_state:
     st.session_state["timeseries_done"] = False
+if "run_error" not in st.session_state:
+    st.session_state["run_error"] = None
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INITIALIZE UI
@@ -329,49 +331,64 @@ def get_index_stock_list(index):
     if index == "Benchmark Indexes":
         return BENCHMARK_INDEXES_LIST, f"✓ Loaded {len(BENCHMARK_INDEXES_LIST)} benchmark index instruments"
 
-    url = INDEX_URL_MAP.get(index)
-    if not url:
-        return None, f"No URL for {index}"
-        
+    # --- Source 1: NSE JSON API (most reliable, same endpoint as F&O) ---
     try:
+        import urllib.parse
+        api_url = f"https://www.nseindia.com/api/equity-stockIndices?index={urllib.parse.quote(index)}"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'application/json',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
+            'Referer': 'https://www.nseindia.com/market-data/live-equity-market',
         }
-        
         session = requests.Session()
-        session.get("https://archives.nseindia.com", headers=headers, verify=False, timeout=10)
-        
-        response = session.get(url, headers=headers, verify=False, timeout=15)
-        response.raise_for_status()
-        
-        csv_file = io.StringIO(response.text)
-        stock_df = pd.read_csv(csv_file)
-        
-        # Find symbol column case-insensitively
-        symbol_col = next((c for c in stock_df.columns if c.lower() == 'symbol'), None)
-        
-        if symbol_col:
-            symbols = stock_df[symbol_col].tolist()
-            symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
-            return symbols_ns, f"SUCCESS: Fetched {len(symbols_ns)} constituents"
-        else:
-            return None, f"No Symbol column found in {stock_df.columns.tolist()}"
-            
-    except Exception as e:
-        wiki_result = _fetch_index_from_wikipedia(index)
-        if wiki_result[0]:
-            return wiki_result
-        return None, f"Error: {e}"
+        session.get("https://www.nseindia.com", headers=headers, timeout=10)
+        response = session.get(api_url, headers=headers, timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            if 'data' in data:
+                symbols = [item['symbol'] for item in data['data'] if 'symbol' in item]
+                # Skip the first entry — it's always the index itself, not a constituent
+                symbols = [s for s in symbols[1:] if s and str(s).strip()]
+                if symbols:
+                    symbols_ns = [str(s) + ".NS" for s in symbols]
+                    return symbols_ns, f"✓ Fetched {len(symbols_ns)} constituents (NSE API)"
+    except Exception:
+        pass
+
+    # --- Source 2: NSE archives CSV ---
+    url = INDEX_URL_MAP.get(index)
+    if url:
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Cache-Control': 'max-age=0',
+            }
+            session = requests.Session()
+            session.get("https://archives.nseindia.com", headers=headers, verify=False, timeout=10)
+            response = session.get(url, headers=headers, verify=False, timeout=15)
+            response.raise_for_status()
+            stock_df = pd.read_csv(io.StringIO(response.text))
+            symbol_col = next((c for c in stock_df.columns if c.lower() == 'symbol'), None)
+            if symbol_col:
+                symbols = stock_df[symbol_col].tolist()
+                symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
+                if symbols_ns:
+                    return symbols_ns, f"✓ Fetched {len(symbols_ns)} constituents (NSE archive)"
+        except Exception:
+            pass
+
+    # --- Source 3: Wikipedia fallback ---
+    wiki_result = _fetch_index_from_wikipedia(index)
+    if wiki_result[0]:
+        return wiki_result
+
+    return None, f"Could not fetch constituents for '{index}'. NSE API, archive CSV, and Wikipedia all failed."
 
 
 def _fetch_index_from_wikipedia(index):
@@ -1570,6 +1587,7 @@ def main():
         st.session_state["run_screener_flag"] = True
         st.session_state["timeseries_done"] = False
         st.session_state["results_df"] = None
+        st.session_state["run_error"] = None
         st.rerun()
 
     # Reset timeseries_done if mode switches to Single Date
@@ -1580,6 +1598,8 @@ def main():
     # Show landing page if no results yet AND not in time-series display mode
     if st.session_state["results_df"] is None and not st.session_state.get("run_screener_flag") and not st.session_state.get("timeseries_done"):
         ui.render_header("SANKET", "Market Signal Screener · संकेत · WRCI Engine")
+        if st.session_state.get("run_error"):
+            st.error(st.session_state["run_error"])
         render_landing_page()
         render_footer()
     else:
@@ -1594,10 +1614,14 @@ def main():
                     "Timeframe": timeframe,
                     "Target Date": analysis_date
                 })
-                
+
                 results_df = run_screener_analysis(
                     universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe
                 )
+                if results_df is None:
+                    st.session_state["run_error"] = f"Failed to fetch constituents for '{selected_index}'. Check your internet connection or try a different index."
+                else:
+                    st.session_state["run_error"] = None
                 st.session_state["results_df"] = results_df
                 st.session_state["run_screener_flag"] = False
                 st.rerun()
