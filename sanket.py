@@ -85,7 +85,44 @@ INDEX_LIST = [
     "NIFTY 50", "NIFTY NEXT 50", "NIFTY 100", "NIFTY 200", "NIFTY 500",
     "NIFTY MIDCAP 50", "NIFTY MIDCAP 100", "NIFTY SMLCAP 100", "NIFTY BANK",
     "NIFTY AUTO", "NIFTY FIN SERVICE", "NIFTY FMCG", "NIFTY IT",
-    "NIFTY MEDIA", "NIFTY METAL", "NIFTY PHARMA"
+    "NIFTY MEDIA", "NIFTY METAL", "NIFTY PHARMA",
+    "Benchmark Indexes",
+]
+
+# Broad-market + sectoral index instruments (traded as tickers, not constituents)
+BENCHMARK_INDEXES_LIST = [
+    # Broad market — NSE
+    "^NSEI",           # Nifty 50
+    "^NSMIDCP",        # Nifty Next 50
+    "NIFTY_100.NS",    # Nifty 100
+    "NIFTY_200.NS",    # Nifty 200
+    "NIFTY_500.NS",    # Nifty 500
+    "^NSEMDCP50",      # Nifty Midcap 50
+    "NIFTY_MIDCAP_100.NS",    # Nifty Midcap 100
+    "NIFTY_MIDCAP_150.NS",    # Nifty Midcap 150
+    "NIFTY_MID_SELECT.NS",    # Nifty Midcap Select
+    "NIFTYSMLCAP50.NS",       # Nifty Smallcap 50
+    "NIFTY_SMALLCAP_100.NS",  # Nifty Smallcap 100
+    "NIFTY_SMALLCAP_250.NS",  # Nifty Smallcap 250
+    # Broad market — BSE
+    "^BSESN",          # S&P BSE Sensex
+    "BSE-100.BO",      # BSE 100
+    "BSE-200.BO",      # BSE 200
+    "BSE-500.BO",      # BSE 500
+    # Sectoral — NSE
+    "^NSEBANK",        # Nifty Bank
+    "^CNXFIN",         # Nifty Financial Services
+    "^CNXIT",          # Nifty IT
+    "^CNXAUTO",        # Nifty Auto
+    "^CNXFMCG",        # Nifty FMCG
+    "^CNXPHARMA",      # Nifty Pharma
+    "^CNXMETAL",       # Nifty Metal
+    "^CNXREALTY",      # Nifty Realty
+    "^CNXENERGY",      # Nifty Energy
+    "^CNXINFRA",       # Nifty Infrastructure
+    "^CNXPSUBANK",     # Nifty PSU Bank
+    "NIFTY_PRIVATE_BANK.NS",  # Nifty Private Bank
+    "^CNXMEDIA",       # Nifty Media
 ]
 
 BASE_URL = "https://archives.nseindia.com/content/indices/"
@@ -288,6 +325,9 @@ def get_fno_stock_list():
 def get_index_stock_list(index):
     if index == "F&O Stocks":
         return get_fno_stock_list()
+
+    if index == "Benchmark Indexes":
+        return BENCHMARK_INDEXES_LIST, f"✓ Loaded {len(BENCHMARK_INDEXES_LIST)} benchmark index instruments"
 
     url = INDEX_URL_MAP.get(index)
     if not url:
