@@ -1349,14 +1349,14 @@ def _render_signal_legend(side: str = 'long') -> None:
         signal_desc  = "Positive WRCI value — the oscillator has crossed upward, indicating building bullish momentum. Higher magnitude = stronger push."
         trend_desc   = "Positive = uptrend confirming the signal. Negative = downtrend still in place despite the bullish cross."
         timing_desc  = "Older bullish signals are more reliable — the upside shift has had time to prove itself. Today&rsquo;s signal is fresh and may still be developing."
-        together_good = "Signal &#x2B; + Trend &#x2B; = high conviction long — momentum and direction fully aligned."
-        together_mixed = "Signal &#x2B; + Trend &#x2212; = bullish cross against a downtrend. Likely a counter-trend bounce — wait for Trend to turn positive before committing."
+        together_good = "Signal &#x2B; | Trend &#x2B; = high conviction long — momentum and direction fully aligned."
+        together_mixed = "Signal &#x2B; | Trend &#x2212; = bullish cross against a downtrend. Likely a counter-trend bounce — wait for Trend to turn positive before committing."
     else:
         signal_desc  = "Negative WRCI value — the oscillator has crossed downward, indicating building selling pressure. Higher magnitude (more negative) = stronger push."
         trend_desc   = "Negative = downtrend confirming the signal. Positive = uptrend still in place despite the bearish cross."
         timing_desc  = "Older bearish signals are more reliable — the downside shift has confirmed over time. Today&rsquo;s signal is fresh and may still be developing."
-        together_good = "Signal &#x2212; + Trend &#x2212; = high conviction short — momentum and direction fully aligned."
-        together_mixed = "Signal &#x2212; + Trend &#x2B; = bearish cross inside an uptrend. Possible exhaustion or pullback — not a clean short until the trend turns negative."
+        together_good = "Signal &#x2212; | Trend &#x2212; = high conviction short — momentum and direction fully aligned."
+        together_mixed = "Signal &#x2212; | Trend &#x2B; = bearish cross inside an uptrend. Possible exhaustion or pullback — not a clean short until the trend turns negative."
 
     st.markdown(f"""
     <div style="
@@ -1839,7 +1839,7 @@ def main():
                             long_table_html = _build_signal_table_html(long_stats, side='long')
                             _groups = sum(1 for a in _age_order if long_stats[a]['count'] > 0)
                             _rows = sum(long_stats[a]['count'] for a in _age_order)
-                            st.components.v1.html(long_table_html, height=120 + _groups * 46 + _rows * 44)
+                            st.components.v1.html(long_table_html, height=70 + _groups * 46 + _rows * 44)
                         else:
                             st.info("No bullish signals detected.")
                         _render_signal_legend(side='long')
@@ -1850,7 +1850,7 @@ def main():
                             short_table_html = _build_signal_table_html(short_stats, side='short')
                             _groups = sum(1 for a in _age_order if short_stats[a]['count'] > 0)
                             _rows = sum(short_stats[a]['count'] for a in _age_order)
-                            st.components.v1.html(short_table_html, height=120 + _groups * 46 + _rows * 44)
+                            st.components.v1.html(short_table_html, height=70 + _groups * 46 + _rows * 44)
                         else:
                             st.info("No bearish signals detected.")
                         _render_signal_legend(side='short')
