@@ -26,21 +26,20 @@ SANKET applies the WRCI momentum engine across your chosen universe — from ind
 
 ## Features
 
-- **WRCI Signal Detection** — Wave-Regime Composite Index identifies bullish (long cross) and bearish (short cross) momentum events by combining a smoothed Wave Trend oscillator with a volume-weighted trend directional count
+- **Dual Signal Engine** — Two independent signal generation logics running in parallel:
+  - **Threshold Set** — Composite oscillator crosses extreme levels (−40 / +40) with signal-line confirmation
+  - **Crossover Set** — Composite oscillator crosses its signal line while already in extreme territory
+  - **Momentum Set** — Pure crossover (no level filter) used exclusively by Range Study
+- **WRCI Signal Detection** — Wave-Regime Composite Index identifies bullish and bearish momentum events by combining a smoothed Wave Trend oscillator with a volume-weighted trend directional count
 - **Multi-Universe Scanning** — India Indexes (F&O, 26 NIFTY indices, Benchmark Instruments), US Indexes, NSE ETF Universe, Commodities, Currency, Crypto
 - **Benchmark Indexes Mode** — Track the index instruments themselves (^NSEI, ^NSEBANK, ^INDIAVIX, ^BSESN, BSE-100, etc.) as an asset universe rather than their constituents
-- **Signal Strength Ranking** — Magnitude-based scoring (0–100) with diminishing returns above 50 to prevent extreme outliers from dominating
-- **Age-Based Timing Groups** — Signals bucketed into Today / 1 Day Ago / 2 Days Ago / 3 Days Ago / Within 5 Days, each with count and average magnitude
-- **Zone Detection** — Automatic OB Extreme / OB / OS / OS Extreme / Neutral classification with configurable thresholds
-- **Dual Timeframe** — Daily and Weekly WRCI computation; weekly via Friday-close resampling
-- **Single Date + Range Study** — Point-in-time screener or historical multi-date signal evolution across a user-defined window
-- **Time-Series Charts** — WRCI + Trend oscillator chart for top symbols across the last 100 candles
-- **Live Data Injection** — If today's candle is not yet in the historical feed, appends intraday quote before analysis
-- **3-Source Constituent Fetch** — NSE JSON API → NSE archive CSV → Wikipedia fallback, tried in order for every India index
-- **Resilient Error Display** — Fetch failures survive Streamlit reruns; displayed above the landing page instead of silently vanishing
-- **Mobile-Responsive Tables** — Horizontal scroll with `min-width` guard prevents row truncation on narrow viewports
-- **Signal Interpretation Legend** — Inline guide below timing tables explaining Signal, Trend, Zone, and Timing columns
-- **Obsidian Quant Terminal UI** — Dark-first design with amber accents, light mode toggle, IBM Plex Mono + Space Grotesk typography
+- **Signal Strength Ranking** — Magnitude-based scoring with diminishing returns above 50 to prevent extreme outliers from dominating
+- **UMA v6 Intelligence Layer** — Integration of Market Signal Fusion (MSF) and Macro-Market Regime (MMR) ensemble for advanced trend and volatility analysis.
+- **V4 Mathematical Parity** — Primary Signal and Trend oscillators aligned exactly with the v4 institutional baseline.
+- **Regime-Aware States** — Confirmed Bullish/Bearish states driven by HMM (Hidden Markov Model) regime detection and macro-divergence analysis.
+- **Asset Index Mode** — Treat global bond yields, commodities, and currencies as unified asset classes rather than isolated tickers.
+- **Age-Based Timing Groups** — Signals bucketed into Today / 1 Day Ago / 2 Days Ago / 3 Days Ago / Within 5 Days.
+- **Obsidian Quant Terminal UI** — Dark-first design with amber accents, light mode toggle, IBM Plex Mono + Space Grotesk typography.
 
 ---
 
@@ -217,6 +216,7 @@ esa   = EMA(hlc3, wt_n1)        # Default wt_n1 = 10
 d     = EMA(|hlc3 - esa|, wt_n1)
 ci    = (hlc3 - esa) / (0.015 × d)
 wt1   = EMA(ci, wt_n2)          # Default wt_n2 = 21
+wt2   = SMA(wt1, 4)             # 4-period simple moving average of wt1
 ```
 
 ### Sub-oscillator 2 — Normalised Trend Count
@@ -234,17 +234,28 @@ composite_line   = (wt1 + norm_trend) / 2
 composite_signal = rolling_mean(composite_line, 4)
 ```
 
-### Signal Conditions
+### Signal Conditions — Three Independent Sets
 
-| Condition | Criteria |
+The system computes three signal sets for different use-cases:
+
+#### Set A — Threshold (Screener Primary)
+Long when composite crosses **below −40** (oversold entry) with `composite_signal` > −40. Short when composite crosses **above +40** (overbought entry) with `composite_signal` < +40.
+
+#### Set B — Crossover (Screener Secondary)
+Long when `composite_line` crosses **below** `composite_signal` while already in oversold (`composite_line < −40`). Short when `composite_line` crosses **above** `composite_signal` while already in overbought (`composite_line > +40`).
+
+#### Set C — Momentum (Range Study Only)
+Pure crossover logic with no level filter: Long when `composite_line` crosses above `composite_signal`; Short when it crosses below.
+
+### Zone Classification
+
+| Zone | Criteria |
 |---|---|
-| **Long Cross** | `composite_line` crosses above `composite_signal` |
-| **Short Cross** | `composite_line` crosses below `composite_signal` |
-| **OB Extreme** | `composite_line > 80` |
-| **OB** | `composite_line > 40` |
-| **OS** | `composite_line < -40` |
-| **OS Extreme** | `composite_line < -80` |
-| **Neutral** | Everything else |
+| OB Extreme | `composite_line > 80` |
+| OB | `composite_line > 40` |
+| Neutral | everything else |
+| OS | `composite_line < -40` |
+| OS Extreme | `composite_line < -80` |
 
 ### Signal Strength Scoring
 
@@ -256,6 +267,15 @@ score = min(100, score)
 ```
 
 Quality bands: **Strong** ≥ 65 · **Moderate** 50–64 · **Weak** 35–49 · **Very Weak** < 35
+
+### UMA State Detection
+
+Unified Market Analysis overlays four highlight states on top of WRCI signals:
+
+- **Bullish Divergence** — Oscillator rising while price falling, with WRCI < −5
+- **Bearish Divergence** — Oscillator falling while price rising, with WRCI > +5
+- **Confirmed Bullish** — MSF & MMR both bullish agreement (>40) + deep oversold WRCI (<10)
+- **Confirmed Bearish** — MSF & MMR both bearish agreement (<-40) + deep overbought WRCI (>-10)
 
 ---
 
@@ -314,9 +334,18 @@ S&P 500 (`^GSPC`), DOW JONES (`^DJI`), NASDAQ 100 (`^NDX`)
 
 ## Signal Output Reference
 
-### Timing Tables (Action Dashboard)
+### Action Dashboard — Dual Signal Sets
 
-Signals are grouped by age. Each age group shows a header with count and average magnitude, followed by individual rows.
+The screener displays **two independent signal logics** side-by-side:
+
+| Column Set | Description |
+|---|---|
+| **Threshold** (Set A) | Signals where composite crosses ±40 with signal-line confirmation |
+| **Crossover** (Set B) | Signals where composite crosses its signal line within extreme zones |
+
+Each set has its own timing table with nested tabs.
+
+### Timing Tables Columns
 
 | Column | Description |
 |---|---|
@@ -324,6 +353,7 @@ Signals are grouped by age. Each age group shows a header with count and average
 | **Price (₹)** | Closing price at analysis date |
 | **Signal** | WRCI composite value. Positive = bullish momentum, negative = bearish. Magnitude indicates strength. |
 | **Trend** | Normalised trend count. Positive = uptrend, negative = downtrend. Aligns with Signal for high-conviction setups. |
+| **UMA State** | Unified Market Analysis highlight: `Bullish Div` · `Bearish Div` · `Confirmed Bullish` · `Confirmed Bearish` · empty |
 | **Zone** | Market regime: `OB Extreme` · `OB` · `Neutral` · `OS` · `OS Extreme`. OB/OS signals carry exhaustion risk. |
 
 **Timing groups:**
@@ -337,7 +367,15 @@ Signals are grouped by age. Each age group shows a header with count and average
 
 ### Signal Strength Tab
 
-Top 8 bullish and top 8 bearish signals ranked by absolute Signal magnitude. Shows rank, symbol, price, signal, trend, and zone.
+Two side-by-side sections:
+- **Threshold Signals** — Top 10 longs and top 10 shorts from Set A
+- **Crossover Signals** — Top 10 longs and top 10 shorts from Set B
+
+Each table shows rank, symbol, price, signal magnitude, trend direction, UMA State, and zone.
+
+### Range Study Mode
+
+Uses **Set C (Momentum)** exclusively — pure composite/signal crossovers without threshold filters. Outputs `LongSignal` / `ShortSignal` columns in the time-series DataFrame.
 
 ---
 
@@ -345,10 +383,10 @@ Top 8 bullish and top 8 bearish signals ranked by absolute Signal magnitude. Sho
 
 ### Single Date (Point Screener)
 
-1. Select Universe + Index + Timeframe
+1. Select Universe + Index + Timeframe (Daily / Weekly / Monthly)
 2. Set analysis date (defaults to today)
 3. Click **◈ RUN SCREENER**
-4. View Action Dashboard and Signal Strength tabs
+4. View Action Dashboard (dual signal sets) and Signal Strength tabs
 
 Data fetched covers ~665 days back from the target date. If today's candle is absent (market still open), a live 1-day quote is appended.
 
@@ -359,7 +397,7 @@ Data fetched covers ~665 days back from the target date. If today's candle is ab
 3. Set Start and End dates
 4. Click **◈ RUN SCREENER**
 
-Runs a multi-date pass: for each date in the range, WRCI is sampled and signals recorded. Output includes an interactive heatmap and WRCI charts for ~20 representative symbols across the period.
+Runs a multi-date pass: for each date in the range, WRCI is sampled and signals recorded. Output includes an interactive heatmap and WRCI charts for ~20 representative symbols across the period. Uses **Set C (Momentum)** logic exclusively for consistent historical tracking.
 
 ---
 
@@ -492,4 +530,4 @@ Built as part of the **Pragyam** product family. See [LICENSE](LICENSE) for term
 
 ---
 
-*SANKET v1.0.0 · @thebullishvalue · Pragyam / Antigravity*
+*SANKET v1.2.0 · @thebullishvalue · Pragyam / Antigravity*
