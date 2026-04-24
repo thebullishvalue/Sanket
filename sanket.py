@@ -175,7 +175,7 @@ WIKI_URL_MAP = {
     "NIFTY FIN SERVICE": "https://en.wikipedia.org/wiki/Nifty_Financial_Services_Index",
 }
 
-UNIVERSE_OPTIONS = ["India Indexes", "US Indexes", "ETF Index", "Commodities", "Currency", "Crypto"]
+UNIVERSE_OPTIONS = ["India Indexes", "US Indexes", "ETF Index", "Commodities", "Currency", "Crypto", "Global Macro"]
 TIMEFRAME_OPTIONS = ["Daily", "Weekly"]
 
 # ETF Universe (from Pragyam)
@@ -190,6 +190,13 @@ ETF_LIST = [
 
 # US Index list
 US_INDEX_LIST = ["S&P 500", "DOW JONES", "NASDAQ 100"]
+
+# Hardcoded DOW 30 fallback (as of late 2024 — used only when Wikipedia is unreachable)
+_DOW30_FALLBACK = [
+    "AAPL", "AMGN", "AMZN", "AXP", "BA",  "CAT", "CRM", "CSCO", "CVX", "DIS",
+    "DOW",  "GS",   "HD",   "HON", "IBM",  "JNJ", "JPM", "KO",   "MCD", "MRK",
+    "MSFT", "NKE",  "NVDA", "PG",  "SHW",  "TRV", "UNH", "V",    "VZ",  "WMT",
+]
 
 # Commodities list (Yahoo Finance) — Expanded from Pragyam
 COMMODITY_MAP = {
@@ -275,8 +282,91 @@ CRYPTO_MAP = {
 }
 CRYPTO_LIST = list(CRYPTO_MAP.keys())
 
+# Global Macro Bond ETF Universe — proxy for global yield dynamics via yfinance-available instruments
+GLOBAL_MACRO_MAP = {
+    # ── US Treasuries (Full Curve) ─────────────────────────────────────────────
+    "US Treasury 1-3 Month":             "BIL",
+    "US Treasury Ultra-Short (0-1Y)":    "SHV",
+    "US Treasury 0-3 Month (SGOV)":      "SGOV",
+    "US Treasury Short (1-3Y)":          "SHY",
+    "US Treasury Short (1-3Y) Vanguard": "VGSH",
+    "US Treasury Intermediate (3-7Y)":   "IEI",
+    "US Treasury Intermediate (7-10Y)":  "IEF",
+    "US Treasury Intermediate Vanguard": "VGIT",
+    "US Treasury Long (10-20Y)":         "TLH",
+    "US Treasury Long (20Y+)":           "TLT",
+    "US Treasury Long Vanguard":         "VGLT",
+    "US Treasury Total Market":          "GOVT",
+    # ── Direct Yield Indices (Raw %) ──────────────────────────────────────────
+    "US 13-Week T-Bill Yield":           "^IRX",
+    "US 5-Year Treasury Yield":          "^FVX",
+    "US 10-Year Treasury Yield":         "^TNX",
+    "US 30-Year Treasury Yield":         "^TYX",
+    # ── Inflation-Protected (TIPS) ─────────────────────────────────────────────
+    "US TIPS Broad Market":              "TIP",
+    "US TIPS Short-Term":                "VTIP",
+    "International Govt Inflation-Linked": "WIP",
+    # ── Aggregate / Multi-Sector ───────────────────────────────────────────────
+    "US Core Aggregate Bond":            "AGG",
+    "US Total Bond Market":              "BND",
+    "US Floating Rate Notes":            "FLOT",
+    "Global Aggregate Bond (Hedged)":    "BNDW",
+    "Total International Bond (ex-US)":  "BNDX",
+    # ── US Corporate: Investment Grade ────────────────────────────────────────
+    "US Corporate Investment Grade":     "LQD",
+    "US Corporate Short-Term (1-5Y)":    "VCSH",
+    "US Corporate Intermediate":         "VCIT",
+    "US Corporate Long-Term":            "VCLT",
+    # ── High Yield & Alternative Credit ───────────────────────────────────────
+    "US High Yield Corporate":           "HYG",
+    "US High Yield Corporate SPDR":      "JNK",
+    "Global High Yield Bond":            "GHYG",
+    "Global Green Bond":                 "BGRN",
+    "Preferred Stock (Hybrid)":          "PFF",
+    "Convertible Bonds":                 "CWB",
+    "Fallen Angels (Recent HY)":         "FALN",
+    # ── Structured & Asset-Backed ─────────────────────────────────────────────
+    "US Mortgage-Backed Securities":     "MBB",
+    "US Mortgage-Backed Vanguard":       "VMBS",
+    "US Senior Loan (Floating Rate)":    "BKLN",
+    # ── Municipal Bonds ───────────────────────────────────────────────────────
+    "US Municipal National":             "MUB",
+    "US Municipal Tax-Exempt Vanguard":  "VTEB",
+    # ── Developed Markets Sovereign (Europe) ─────────────────────────────────
+    "International Treasury (ex-US)":    "IGOV",
+    "International Treasury SPDR":       "BWX",
+    "International Corporate Bonds":     "IBND",
+    "Eurozone Government Bond":          "IEGA.L",
+    "Eurozone Corporate Bond (IG)":      "IEAC.L",
+    "Germany Govt Bonds (Bunds/Long)":   "BUNL.L",
+    "Germany Short-Term (Schatz)":       "SDEU.L",
+    "UK Gilts":                          "IGLT.L",
+    "UK Gilts (Inflation-Linked)":       "INXG.L",
+    "UK Corporate Bonds":                "SLXX.L",
+    # ── Developed Markets Sovereign (Asia-Pacific) ────────────────────────────
+    "Japan Government Bonds (Broad)":    "JGBL.L",
+    "Australia Government Bonds":        "VGB.AX",
+    "Canada Broad Aggregate Bond":       "XBB.TO",
+    # ── India Fixed Income ────────────────────────────────────────────────────
+    "India Gov Bonds (LSE Proxy)":       "IIND.L",
+    "India 8-13Y G-Sec":                 "LTGILTBEES.NS",
+    "India 5Y G-Sec":                    "GILT5YBEES.NS",
+    "India AAA PSU Bond (Bharat 2030)":  "EBBETF0430.NS",
+    "India Overnight Rate (Liquid)":     "LIQUIDBEES.NS",
+    # ── Emerging Markets ──────────────────────────────────────────────────────
+    "EM Sovereign Debt (USD)":           "EMB",
+    "EM Sovereign Debt USD Invesco":     "PCY",
+    "EM Sovereign (Local Currency)":     "EMLC",
+    "EM High Yield Corporate":           "EMHY",
+    "China Government Bonds":            "CBON",
+    "China CNY Local Bonds":             "CNYB.L",
+    # ── Broad Duration Proxies ────────────────────────────────────────────────
+    "Short-Term Broad Bond":             "BSV",
+    "Long-Term Broad Bond":              "BLV",
+}
+
 # Asset Name Lookup for friendly display (Reverse map tickers to names)
-ASSET_NAME_LOOKUP = {v: k for k, v in {**COMMODITY_MAP, **CURRENCY_MAP, **CRYPTO_MAP}.items()}
+ASSET_NAME_LOOKUP = {v: k for k, v in {**COMMODITY_MAP, **CURRENCY_MAP, **CRYPTO_MAP, **GLOBAL_MACRO_MAP}.items()}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA FETCHING FUNCTIONS
@@ -441,17 +531,65 @@ def _fetch_index_from_wikipedia(index):
         return None, f"Wikipedia fallback error: {e}"
 
 
-def get_us_index_symbols(index_name):
-    """Get symbols for US index from Yahoo Finance."""
-    index_map = {
-        "S&P 500": ["^GSPC"] + [f"^GSPC-{i}" for i in range(1, 100)],
-        "DOW JONES": ["^DJI"],
-        "NASDAQ 100": ["^NDX"]
+def _fetch_us_index_from_wikipedia(index_name):
+    """Scrape constituent tickers for a US index from Wikipedia."""
+    wiki_urls = {
+        "S&P 500":    "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+        "NASDAQ 100": "https://en.wikipedia.org/wiki/Nasdaq-100",
+        "DOW JONES":  "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average",
     }
-    if index_name in index_map:
-        # For US indices, return major constituent tickers via yfinance
-        return index_map[index_name], f"✓ Fetched {index_name}"
-    return None, f"Unknown US index: {index_name}"
+    url = wiki_urls.get(index_name)
+    if not url:
+        return None, f"No Wikipedia URL configured for {index_name}"
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        tables = pd.read_html(io.StringIO(response.text))
+        for table in tables:
+            cols_lower = [str(c).lower() for c in table.columns]
+            symbol_col = None
+            for candidate in ('symbol', 'ticker'):
+                for i, c in enumerate(cols_lower):
+                    if candidate in c:
+                        symbol_col = table.columns[i]
+                        break
+                if symbol_col is not None:
+                    break
+            if symbol_col is None:
+                continue
+            raw = [str(s).strip() for s in table[symbol_col].dropna().tolist()]
+            # Normalise BRK.B → BRK-B style; drop header echoes and junk rows
+            symbols = []
+            for s in raw:
+                s = s.replace('.', '-')
+                if s and s.lower() not in ('symbol', 'ticker', 'nan') and 1 <= len(s) <= 6:
+                    symbols.append(s)
+            if len(symbols) >= 10:
+                return symbols, f"✓ Fetched {len(symbols)} constituents (Wikipedia)"
+        return None, "No valid symbol table found on Wikipedia page"
+    except Exception as e:
+        return None, f"Wikipedia fetch error: {e}"
+
+
+def get_us_index_symbols(index_name):
+    """Get constituent stock tickers for a US index.
+
+    Primary source: Wikipedia scrape. Fallback: hardcoded list for DOW JONES.
+    Returns plain NYSE/NASDAQ tickers (no exchange suffix).
+    """
+    symbols, msg = _fetch_us_index_from_wikipedia(index_name)
+    if symbols:
+        return symbols, msg
+    if index_name == "DOW JONES":
+        return _DOW30_FALLBACK.copy(), f"✓ Loaded {len(_DOW30_FALLBACK)} DOW constituents (hardcoded fallback)"
+    return None, f"Could not fetch constituents for '{index_name}': {msg}"
+
+
+def get_global_macro_symbols():
+    """Return the Global Macro bond ETF universe."""
+    symbols = list(GLOBAL_MACRO_MAP.values())
+    return symbols, f"✓ Loaded {len(symbols)} Global Macro instruments"
 
 
 def get_commodity_symbols(commodity_type=None):
@@ -1122,6 +1260,8 @@ def render_sidebar():
             selected_index = "Major FX Pairs"
         elif universe == "Crypto":
             selected_index = "Digital Assets (Top 20)"
+        elif universe == "Global Macro":
+            selected_index = "Global Macro Bonds"
 
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
@@ -1166,6 +1306,9 @@ def render_sidebar():
             elif universe == "ETF Index":
                 symbols_count = len(ETF_LIST)
                 universe_display = "NSE ETFs"
+            elif universe == "Global Macro":
+                symbols_count = len(GLOBAL_MACRO_MAP)
+                universe_display = "Global Macro Bonds"
             else:
                 symbols_count = "—"
                 universe_display = universe
@@ -1213,13 +1356,15 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     elif universe == "US Indexes":
         stock_list, msg = get_us_index_symbols(selected_index)
     elif universe == "Commodities":
-        stock_list, msg = get_commodity_symbols(None)  # Runs all commodities
+        stock_list, msg = get_commodity_symbols(None)
     elif universe == "Currency":
-        stock_list, msg = get_currency_symbols(None)   # Runs all pairs
+        stock_list, msg = get_currency_symbols(None)
     elif universe == "Crypto":
-        stock_list, msg = get_crypto_symbols(None)     # Runs all crypto
+        stock_list, msg = get_crypto_symbols(None)
     elif universe == "ETF Index":
         stock_list, msg = get_etf_symbols()
+    elif universe == "Global Macro":
+        stock_list, msg = get_global_macro_symbols()
     else:
         stock_list, msg = None, f"Unknown universe: {universe}"
 
@@ -1436,6 +1581,8 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         stock_list, _ = get_crypto_symbols(None)
     elif universe == "ETF Index":
         stock_list, _ = get_etf_symbols()
+    elif universe == "Global Macro":
+        stock_list, _ = get_global_macro_symbols()
     else:
         stock_list = None
 
@@ -2037,6 +2184,15 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
             </tr>
             """)
 
+    if not table_rows:
+        table_rows.append(f"""
+        <tr>
+            <td colspan="5" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+                font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
+                — no signals detected —
+            </td>
+        </tr>""")
+
     table_html = f"""
     <!DOCTYPE html>
     <html>
@@ -2439,14 +2595,11 @@ def main():
                                 Set A · Composite Line crosses above Signal Line anywhere — broad momentum crossover, no zone filter
                             </p>
                             """, unsafe_allow_html=True)
-                            if not longs_a_df.empty:
-                                _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A')
-                                la_html = _build_signal_table_html(la_stats, side='long')
-                                _g = sum(1 for a in _age_order if la_stats[a]['count'] > 0)
-                                _r = sum(la_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(la_html, height=70 + _g * 46 + _r * 44)
-                            else:
-                                st.info("No Momentum bullish signals in the last 5 sessions.")
+                            _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A')
+                            la_html = _build_signal_table_html(la_stats, side='long')
+                            _g = sum(1 for a in _age_order if la_stats[a]['count'] > 0)
+                            _r = sum(la_stats[a]['count'] for a in _age_order)
+                            st.components.v1.html(la_html, height=max(70 + _g * 46 + _r * 44, 110))
                             _render_signal_legend(side='long', condition_set='A')
 
                         with cross_bull_tab:
@@ -2455,14 +2608,11 @@ def main():
                                 Set B · Composite Line crosses below Signal Line while both are in oversold zone (&lt;−40)
                             </p>
                             """, unsafe_allow_html=True)
-                            if not longs_b_df.empty:
-                                _, lb_stats, _, _ = _bucket_signals_by_age(longs_b_df, side='long', condition_set='B')
-                                lb_html = _build_signal_table_html(lb_stats, side='long')
-                                _g = sum(1 for a in _age_order if lb_stats[a]['count'] > 0)
-                                _r = sum(lb_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(lb_html, height=70 + _g * 46 + _r * 44)
-                            else:
-                                st.info("No Crossover bullish signals in the last 5 sessions.")
+                            _, lb_stats, _, _ = _bucket_signals_by_age(longs_b_df, side='long', condition_set='B')
+                            lb_html = _build_signal_table_html(lb_stats, side='long')
+                            _g = sum(1 for a in _age_order if lb_stats[a]['count'] > 0)
+                            _r = sum(lb_stats[a]['count'] for a in _age_order)
+                            st.components.v1.html(lb_html, height=max(70 + _g * 46 + _r * 44, 110))
                             _render_signal_legend(side='long', condition_set='B')
 
                         with thresh_bull_tab:
@@ -2471,14 +2621,11 @@ def main():
                                 Set C · Composite Line enters oversold zone (&lt;−40) from above, Signal Line still above −40
                             </p>
                             """, unsafe_allow_html=True)
-                            if not longs_c_df.empty:
-                                _, lc_stats, _, _ = _bucket_signals_by_age(longs_c_df, side='long', condition_set='C')
-                                lc_html = _build_signal_table_html(lc_stats, side='long')
-                                _g = sum(1 for a in _age_order if lc_stats[a]['count'] > 0)
-                                _r = sum(lc_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(lc_html, height=70 + _g * 46 + _r * 44)
-                            else:
-                                st.info("No Threshold bullish signals in the last 5 sessions.")
+                            _, lc_stats, _, _ = _bucket_signals_by_age(longs_c_df, side='long', condition_set='C')
+                            lc_html = _build_signal_table_html(lc_stats, side='long')
+                            _g = sum(1 for a in _age_order if lc_stats[a]['count'] > 0)
+                            _r = sum(lc_stats[a]['count'] for a in _age_order)
+                            st.components.v1.html(lc_html, height=max(70 + _g * 46 + _r * 44, 110))
                             _render_signal_legend(side='long', condition_set='C')
 
                     with bear_tab:
@@ -2491,14 +2638,11 @@ def main():
                                 Set A · Composite Line crosses below Signal Line anywhere — broad momentum crossover, no zone filter
                             </p>
                             """, unsafe_allow_html=True)
-                            if not shorts_a_df.empty:
-                                _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A')
-                                sa_html = _build_signal_table_html(sa_stats, side='short')
-                                _g = sum(1 for a in _age_order if sa_stats[a]['count'] > 0)
-                                _r = sum(sa_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(sa_html, height=70 + _g * 46 + _r * 44)
-                            else:
-                                st.info("No Momentum bearish signals in the last 5 sessions.")
+                            _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A')
+                            sa_html = _build_signal_table_html(sa_stats, side='short')
+                            _g = sum(1 for a in _age_order if sa_stats[a]['count'] > 0)
+                            _r = sum(sa_stats[a]['count'] for a in _age_order)
+                            st.components.v1.html(sa_html, height=max(70 + _g * 46 + _r * 44, 110))
                             _render_signal_legend(side='short', condition_set='A')
 
                         with cross_bear_tab:
@@ -2507,14 +2651,11 @@ def main():
                                 Set B · Composite Line crosses above Signal Line while both are in overbought zone (&gt;+40)
                             </p>
                             """, unsafe_allow_html=True)
-                            if not shorts_b_df.empty:
-                                _, sb_stats, _, _ = _bucket_signals_by_age(shorts_b_df, side='short', condition_set='B')
-                                sb_html = _build_signal_table_html(sb_stats, side='short')
-                                _g = sum(1 for a in _age_order if sb_stats[a]['count'] > 0)
-                                _r = sum(sb_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(sb_html, height=70 + _g * 46 + _r * 44)
-                            else:
-                                st.info("No Crossover bearish signals in the last 5 sessions.")
+                            _, sb_stats, _, _ = _bucket_signals_by_age(shorts_b_df, side='short', condition_set='B')
+                            sb_html = _build_signal_table_html(sb_stats, side='short')
+                            _g = sum(1 for a in _age_order if sb_stats[a]['count'] > 0)
+                            _r = sum(sb_stats[a]['count'] for a in _age_order)
+                            st.components.v1.html(sb_html, height=max(70 + _g * 46 + _r * 44, 110))
                             _render_signal_legend(side='short', condition_set='B')
 
                         with thresh_bear_tab:
@@ -2523,14 +2664,11 @@ def main():
                                 Set C · Composite Line enters overbought zone (&gt;+40) from below, Signal Line still below +40
                             </p>
                             """, unsafe_allow_html=True)
-                            if not shorts_c_df.empty:
-                                _, sc_stats, _, _ = _bucket_signals_by_age(shorts_c_df, side='short', condition_set='C')
-                                sc_html = _build_signal_table_html(sc_stats, side='short')
-                                _g = sum(1 for a in _age_order if sc_stats[a]['count'] > 0)
-                                _r = sum(sc_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(sc_html, height=70 + _g * 46 + _r * 44)
-                            else:
-                                st.info("No Threshold bearish signals in the last 5 sessions.")
+                            _, sc_stats, _, _ = _bucket_signals_by_age(shorts_c_df, side='short', condition_set='C')
+                            sc_html = _build_signal_table_html(sc_stats, side='short')
+                            _g = sum(1 for a in _age_order if sc_stats[a]['count'] > 0)
+                            _r = sum(sc_stats[a]['count'] for a in _age_order)
+                            st.components.v1.html(sc_html, height=max(70 + _g * 46 + _r * 44, 110))
                             _render_signal_legend(side='short', condition_set='C')
 
                 else:
