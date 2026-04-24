@@ -623,8 +623,17 @@ def run_full_analysis(df, reg_len=20, wt_n1=10, wt_n2=21, obLevel1=80, obLevel2=
     df['WT1'] = wt1
     df['Norm_Trend'] = norm_trend
     
+    # Set A: Momentum — crossover anywhere (used by Range Study)
     df['long_cond'] = (composite_line > composite_signal) & (composite_line.shift(1) <= composite_signal.shift(1))
     df['short_cond'] = (composite_line < composite_signal) & (composite_line.shift(1) >= composite_signal.shift(1))
+
+    # Set B: Crossover — line crosses signal inside an extreme zone
+    df['long_cond_comp'] = (composite_line < composite_signal) & (composite_line.shift(1) >= composite_signal.shift(1)) & (composite_line < osLevel2)
+    df['short_cond_comp'] = (composite_line > composite_signal) & (composite_line.shift(1) <= composite_signal.shift(1)) & (composite_line > obLevel2)
+
+    # Set C: Threshold — freshly entering OS/OB zone with signal-line validation
+    df['long_cond_wt'] = (composite_line < osLevel2) & (composite_line.shift(1) >= osLevel2) & (composite_signal > osLevel2)
+    df['short_cond_wt'] = (composite_line > obLevel2) & (composite_line.shift(1) <= obLevel2) & (composite_signal < obLevel2)
 
     df['Condition'] = np.select(
         [composite_line > obLevel1, composite_line > obLevel2, composite_line < osLevel1, composite_line < osLevel2],
@@ -1268,12 +1277,20 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
             last_row = df.iloc[idx_pos]
 
-            # Build Signal String
+            # Build Signal String — priority: Set B > Set C > Set A > Zone
             signal_type = "Neutral"
-            if last_row['long_cond']:
-                signal_type = "Long Cross"
+            if last_row['long_cond_comp']:
+                signal_type = "Long Crossover"
+            elif last_row['short_cond_comp']:
+                signal_type = "Short Crossover"
+            elif last_row['long_cond_wt']:
+                signal_type = "Long Threshold"
+            elif last_row['short_cond_wt']:
+                signal_type = "Short Threshold"
+            elif last_row['long_cond']:
+                signal_type = "Long Momentum"
             elif last_row['short_cond']:
-                signal_type = "Short Cross"
+                signal_type = "Short Momentum"
             elif last_row['Condition'] != 'Neutral':
                 signal_type = last_row['Condition']
 
@@ -1295,18 +1312,54 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "Zone": last_row['Condition'],
                 "SignalType": signal_type,
                 "Price": round(last_row['Close'], 2),
-                # Historical Long Signals
+                # Set C: Momentum — Historical Long Signals (kept for Range Study compat)
                 "L_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
                 "L_1d": "●" if sample_range.iloc[-2]['long_cond'] else "—",
                 "L_2d": "●" if sample_range.iloc[-3]['long_cond'] else "—",
                 "L_3d": "●" if sample_range.iloc[-4]['long_cond'] else "—",
-                "L_5d": "●" if sample_range.iloc[: idx_pos + 1].tail(5)['long_cond'].any() else "—",
-                # Historical Short Signals
+                "L_5d": "●" if sample_range.tail(5)['long_cond'].any() else "—",
+                # Set C: Momentum — Historical Short Signals
                 "S_Today": "●" if sample_range.iloc[-1]['short_cond'] else "—",
                 "S_1d": "●" if sample_range.iloc[-2]['short_cond'] else "—",
                 "S_2d": "●" if sample_range.iloc[-3]['short_cond'] else "—",
                 "S_3d": "●" if sample_range.iloc[-4]['short_cond'] else "—",
-                "S_5d": "●" if sample_range.iloc[: idx_pos + 1].tail(5)['short_cond'].any() else "—",
+                "S_5d": "●" if sample_range.tail(5)['short_cond'].any() else "—",
+                # Set A: Momentum — Historical Long Signals
+                "LA_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
+                "LA_1d": "●" if sample_range.iloc[-2]['long_cond'] else "—",
+                "LA_2d": "●" if sample_range.iloc[-3]['long_cond'] else "—",
+                "LA_3d": "●" if sample_range.iloc[-4]['long_cond'] else "—",
+                "LA_5d": "●" if sample_range.tail(5)['long_cond'].any() else "—",
+                # Set A: Momentum — Historical Short Signals
+                "SA_Today": "●" if sample_range.iloc[-1]['short_cond'] else "—",
+                "SA_1d": "●" if sample_range.iloc[-2]['short_cond'] else "—",
+                "SA_2d": "●" if sample_range.iloc[-3]['short_cond'] else "—",
+                "SA_3d": "●" if sample_range.iloc[-4]['short_cond'] else "—",
+                "SA_5d": "●" if sample_range.tail(5)['short_cond'].any() else "—",
+                # Set B: Crossover — Historical Long Signals
+                "LB_Today": "●" if sample_range.iloc[-1]['long_cond_comp'] else "—",
+                "LB_1d": "●" if sample_range.iloc[-2]['long_cond_comp'] else "—",
+                "LB_2d": "●" if sample_range.iloc[-3]['long_cond_comp'] else "—",
+                "LB_3d": "●" if sample_range.iloc[-4]['long_cond_comp'] else "—",
+                "LB_5d": "●" if sample_range.tail(5)['long_cond_comp'].any() else "—",
+                # Set B: Crossover — Historical Short Signals
+                "SB_Today": "●" if sample_range.iloc[-1]['short_cond_comp'] else "—",
+                "SB_1d": "●" if sample_range.iloc[-2]['short_cond_comp'] else "—",
+                "SB_2d": "●" if sample_range.iloc[-3]['short_cond_comp'] else "—",
+                "SB_3d": "●" if sample_range.iloc[-4]['short_cond_comp'] else "—",
+                "SB_5d": "●" if sample_range.tail(5)['short_cond_comp'].any() else "—",
+                # Set C: Threshold — Historical Long Signals
+                "LC_Today": "●" if sample_range.iloc[-1]['long_cond_wt'] else "—",
+                "LC_1d": "●" if sample_range.iloc[-2]['long_cond_wt'] else "—",
+                "LC_2d": "●" if sample_range.iloc[-3]['long_cond_wt'] else "—",
+                "LC_3d": "●" if sample_range.iloc[-4]['long_cond_wt'] else "—",
+                "LC_5d": "●" if sample_range.tail(5)['long_cond_wt'].any() else "—",
+                # Set C: Threshold — Historical Short Signals
+                "SC_Today": "●" if sample_range.iloc[-1]['short_cond_wt'] else "—",
+                "SC_1d": "●" if sample_range.iloc[-2]['short_cond_wt'] else "—",
+                "SC_2d": "●" if sample_range.iloc[-3]['short_cond_wt'] else "—",
+                "SC_3d": "●" if sample_range.iloc[-4]['short_cond_wt'] else "—",
+                "SC_5d": "●" if sample_range.tail(5)['short_cond_wt'].any() else "—",
                 # Additional fields for detail cards
                 "Osc_Value": round(last_row.get('Unified_Osc', 0), 2),
                 "MA_Alignment": 5,  # Placeholder
@@ -1338,7 +1391,14 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     if not results:
         st.warning("No stocks met the analysis criteria.")
         # Return empty DataFrame with expected columns to prevent downstream KeyErrors
-        expected_cols = ["Symbol", "DisplayName", "SimpleName", "Signal", "Trend", "Wave", "Zone", "SignalType", "Price", "L_Today", "L_1d", "L_2d", "L_3d", "L_5d", "S_Today", "S_1d", "S_2d", "S_3d", "S_5d", "Osc_Value", "MA_Alignment", "ZScore_Value"]
+        expected_cols = [
+            "Symbol", "DisplayName", "SimpleName", "Signal", "Trend", "Wave", "Zone", "SignalType", "Price",
+            "L_Today", "L_1d", "L_2d", "L_3d", "L_5d", "S_Today", "S_1d", "S_2d", "S_3d", "S_5d",
+            "LA_Today", "LA_1d", "LA_2d", "LA_3d", "LA_5d", "SA_Today", "SA_1d", "SA_2d", "SA_3d", "SA_5d",
+            "LB_Today", "LB_1d", "LB_2d", "LB_3d", "LB_5d", "SB_Today", "SB_1d", "SB_2d", "SB_3d", "SB_5d",
+            "LC_Today", "LC_1d", "LC_2d", "LC_3d", "LC_5d", "SC_Today", "SC_1d", "SC_2d", "SC_3d", "SC_5d",
+            "Osc_Value", "MA_Alignment", "ZScore_Value",
+        ]
         return pd.DataFrame(columns=expected_cols)
 
     results_df = pd.DataFrame(results)
@@ -1765,9 +1825,19 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 # HELPER FUNCTIONS FOR TAB RENDERING
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long') -> dict:
-    """Bucket signals by age (Today, 1d, 2d, 3d, 5d) with stats for timeline display."""
-    prefix = 'L' if side == 'long' else 'S'
+def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'C') -> dict:
+    """Bucket signals by age (Today, 1d, 2d, 3d, 5d) with stats for timeline display.
+
+    condition_set: 'A' = Momentum (LA_/SA_), 'B' = Crossover (LB_/SB_), 'C' = Threshold (LC_/SC_)
+    """
+    if condition_set == 'A':
+        prefix = 'LA' if side == 'long' else 'SA'
+    elif condition_set == 'B':
+        prefix = 'LB' if side == 'long' else 'SB'
+    elif condition_set == 'C':
+        prefix = 'LC' if side == 'long' else 'SC'
+    else:
+        prefix = 'L' if side == 'long' else 'S'
     target_indicator = "●"
     buckets = {
         "Today": [],
@@ -1824,20 +1894,50 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long') -> dict
     return buckets, stats, trend, trend_color
 
 
-def _render_signal_legend(side: str = 'long') -> None:
-    """Render context-aware interpretation legend below a timing table."""
-    if side == 'long':
-        signal_desc  = "Positive WRCI value — the oscillator has crossed upward, indicating building bullish momentum. Higher magnitude = stronger push."
-        trend_desc   = "Positive = uptrend confirming the signal. Negative = downtrend still in place despite the bullish cross."
-        timing_desc  = "Older bullish signals are more reliable — the upside shift has had time to prove itself. Today&rsquo;s signal is fresh and may still be developing."
-        together_good = "Signal &#x2B; | Trend &#x2B; = high conviction long — momentum and direction fully aligned."
-        together_mixed = "Signal &#x2B; | Trend &#x2212; = bullish cross against a downtrend. Likely a counter-trend bounce — wait for Trend to turn positive before committing."
-    else:
-        signal_desc  = "Negative WRCI value — the oscillator has crossed downward, indicating building selling pressure. Higher magnitude (more negative) = stronger push."
-        trend_desc   = "Negative = downtrend confirming the signal. Positive = uptrend still in place despite the bearish cross."
-        timing_desc  = "Older bearish signals are more reliable — the downside shift has confirmed over time. Today&rsquo;s signal is fresh and may still be developing."
-        together_good = "Signal &#x2212; | Trend &#x2212; = high conviction short — momentum and direction fully aligned."
-        together_mixed = "Signal &#x2212; | Trend &#x2B; = bearish cross inside an uptrend. Possible exhaustion or pullback — not a clean short until the trend turns negative."
+def _render_signal_legend(side: str = 'long', condition_set: str = 'A') -> None:
+    """Render context-aware interpretation legend below a timing table.
+
+    condition_set: 'A' = Momentum, 'B' = Crossover, 'C' = Threshold
+    """
+    if condition_set == 'A':
+        if side == 'long':
+            signal_desc  = "Positive WRCI value — the oscillator has crossed upward, indicating building bullish momentum. Higher magnitude = stronger push."
+            trend_desc   = "Positive = uptrend confirming the signal. Negative = downtrend still in place despite the bullish cross."
+            timing_desc  = "Older bullish signals are more reliable — the upside shift has had time to prove itself. Today&rsquo;s signal is fresh and may still be developing."
+            together_good = "Signal &#x2B; | Trend &#x2B; = high conviction long — momentum and direction fully aligned."
+            together_mixed = "Signal &#x2B; | Trend &#x2212; = bullish cross against a downtrend. Likely a counter-trend bounce — wait for Trend to turn positive before committing."
+        else:
+            signal_desc  = "Negative WRCI value — the oscillator has crossed downward, indicating building selling pressure. Higher magnitude (more negative) = stronger push."
+            trend_desc   = "Negative = downtrend confirming the signal. Positive = uptrend still in place despite the bearish cross."
+            timing_desc  = "Older bearish signals are more reliable — the downside shift has confirmed over time. Today&rsquo;s signal is fresh and may still be developing."
+            together_good = "Signal &#x2212; | Trend &#x2212; = high conviction short — momentum and direction fully aligned."
+            together_mixed = "Signal &#x2212; | Trend &#x2B; = bearish cross inside an uptrend. Possible exhaustion or pullback — not a clean short until the trend turns negative."
+    elif condition_set == 'B':
+        if side == 'long':
+            signal_desc  = "Composite Line crosses below Signal Line while both are in oversold zone (&lt;&minus;40). Momentum exhaustion inside OS territory — a precise reversal-timing signal."
+            trend_desc   = "Negative = downtrend confirming the OS crossover — highest conviction. Positive = crossover in an uptrend&rsquo;s dip — potential sharp recovery."
+            timing_desc  = "Recent crossovers carry the most urgency — the cross just occurred inside an extreme zone. Older Crossover signals may have already played out."
+            together_good = "Signal &lt;&minus;40 | Crossover &#x2713; | Trend &minus; = full alignment — momentum exhausted in oversold, downtrend may be reversing."
+            together_mixed = "Signal &lt;&minus;40 | Crossover &#x2713; | Trend &#x2B; = OS crossover in bullish trend. Likely a dip-buy setup — strongest when trend is gently positive."
+        else:
+            signal_desc  = "Composite Line crosses above Signal Line while both are in overbought zone (&gt;&#x2B;40). Momentum exhaustion inside OB territory — a precise reversal-timing signal."
+            trend_desc   = "Positive = uptrend confirming the OB crossover — highest conviction. Negative = crossover in a downtrend&rsquo;s rally — potential sharp reversal."
+            timing_desc  = "Recent crossovers carry the most urgency — the cross just occurred inside an extreme zone. Older Crossover signals may have already resolved."
+            together_good = "Signal &gt;&#x2B;40 | Crossover &#x2713; | Trend &#x2B; = full alignment — momentum exhausted in overbought, uptrend may be topping."
+            together_mixed = "Signal &gt;&#x2B;40 | Crossover &#x2713; | Trend &minus; = OB crossover in bearish trend. Likely a dead-cat rally — short with tight stops."
+    else:  # condition_set == 'C': Threshold
+        if side == 'long':
+            signal_desc  = "Composite Line has freshly dropped below &minus;40 from neutral, while Signal Line stays above &minus;40. Marks the first bar of oversold entry — a zone-breach signal."
+            trend_desc   = "Negative = downtrend confirming oversold entry. Positive = pullback into OS within an uptrend — potential bounce setup."
+            timing_desc  = "Fresher signals are more actionable — the line just entered the zone. Older signals may have already resolved or deepened."
+            together_good = "Signal &lt;&minus;40 | Trend &minus; = confirmed oversold entry in a downtrend — strongest Threshold long context."
+            together_mixed = "Signal &lt;&minus;40 | Trend &#x2B; = oversold entry in an uptrend. Likely a shallow pullback — watch for quick recovery rather than full reversal."
+        else:
+            signal_desc  = "Composite Line has freshly risen above &#x2B;40 from neutral, while Signal Line stays below &#x2B;40. Marks the first bar of overbought entry — a zone-breach signal."
+            trend_desc   = "Positive = uptrend confirming overbought. Negative = relief rally into OB within a downtrend — potential fade setup."
+            timing_desc  = "Fresher signals are more urgent — the line just entered the zone. Older overbought entries may have already faded or extended."
+            together_good = "Signal &gt;&#x2B;40 | Trend &#x2B; = confirmed overbought in an uptrend — strongest Threshold short context."
+            together_mixed = "Signal &gt;&#x2B;40 | Trend &minus; = overbought in a downtrend. Likely a counter-trend rally — fade quickly or wait for re-entry below &#x2B;40."
 
     st.markdown(f"""
     <div style="
@@ -2037,25 +2137,39 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
     border_color = "rgba(45, 212, 168, 0.3)" if side == 'long' else "rgba(232, 85, 90, 0.3)"
 
     table_rows = []
-    for idx, (_, row) in enumerate(df.iterrows(), 1):
-        symbol = html_module.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
-        price = float(row.get('Price', 0))
-        signal = float(row.get('Signal', 0))
-        trend = float(row.get('Trend', 0))
-        zone = html_module.escape(str(row.get('Zone', '—')))
-
-        rank_str = f"{idx:02d}"
-
+    if df.empty:
         table_rows.append(f"""
         <tr>
-            <td class="numeric" style="color: #D4A853; font-weight: 700;">{rank_str}</td>
-            <td class="symbol">{symbol}</td>
-            <td class="numeric currency">₹{price:,.2f}</td>
-            <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
-            <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
-            <td class="numeric">{zone}</td>
+            <td colspan="6" style="
+                text-align: center;
+                color: #374151;
+                font-family: 'IBM Plex Mono', monospace;
+                font-size: 0.72rem;
+                letter-spacing: 0.06em;
+                padding: 2.25rem 1rem;
+            ">— no signals detected —</td>
         </tr>
         """)
+    else:
+        for idx, (_, row) in enumerate(df.iterrows(), 1):
+            symbol = html_module.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
+            price = float(row.get('Price', 0))
+            signal = float(row.get('Signal', 0))
+            trend = float(row.get('Trend', 0))
+            zone = html_module.escape(str(row.get('Zone', '—')))
+
+            rank_str = f"{idx:02d}"
+
+            table_rows.append(f"""
+            <tr>
+                <td class="numeric" style="color: #D4A853; font-weight: 700;">{rank_str}</td>
+                <td class="symbol">{symbol}</td>
+                <td class="numeric currency">₹{price:,.2f}</td>
+                <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
+                <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
+                <td class="numeric">{zone}</td>
+            </tr>
+            """)
 
     table_html = f"""
     <!DOCTYPE html>
@@ -2219,6 +2333,16 @@ def main():
             # Safety: Ensure required columns exist (handles stale session state)
             if 'SimpleName' not in results_df.columns and not results_df.empty:
                 results_df['SimpleName'] = results_df['Symbol'].str.replace(".NS", "", regex=False).str.lstrip("^")
+            for _col in [
+                'LA_Today', 'LA_1d', 'LA_2d', 'LA_3d', 'LA_5d',
+                'SA_Today', 'SA_1d', 'SA_2d', 'SA_3d', 'SA_5d',
+                'LB_Today', 'LB_1d', 'LB_2d', 'LB_3d', 'LB_5d',
+                'SB_Today', 'SB_1d', 'SB_2d', 'SB_3d', 'SB_5d',
+                'LC_Today', 'LC_1d', 'LC_2d', 'LC_3d', 'LC_5d',
+                'SC_Today', 'SC_1d', 'SC_2d', 'SC_3d', 'SC_5d',
+            ]:
+                if _col not in results_df.columns:
+                    results_df[_col] = "—"
 
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
@@ -2236,34 +2360,55 @@ def main():
             with tab_signals:
                 ui.render_section_header(
                     "Today's Signals",
-                    "Momentum signals ranked by strength across bullish and bearish sides",
+                    "Multi-condition momentum signals — Momentum (A) · Crossover (B) · Threshold (C)",
                     icon="zap",
                     accent="amber"
                 )
 
-                # Split into longs and shorts
+                # Set C: Momentum — crossover anywhere (also used by Range Study)
                 longs_df = results_df[results_df['L_5d'] != "—"].copy().sort_values('Signal', ascending=False)
                 shorts_df = results_df[results_df['S_5d'] != "—"].copy().sort_values('Signal', ascending=True)
 
-                if not longs_df.empty or not shorts_df.empty:
-                    # Summary metrics
+                # Set A: Momentum — broad crossover anywhere
+                longs_a_df = results_df[results_df['LA_5d'] != "—"].copy().sort_values('Signal', ascending=False)
+                shorts_a_df = results_df[results_df['SA_5d'] != "—"].copy().sort_values('Signal', ascending=True)
+
+                # Set B: Crossover — line crosses signal inside extreme zone
+                longs_b_df = results_df[results_df['LB_5d'] != "—"].copy().sort_values('Signal', ascending=False)
+                shorts_b_df = results_df[results_df['SB_5d'] != "—"].copy().sort_values('Signal', ascending=True)
+
+                # Set C: Threshold — freshly entering OS/OB zone
+                longs_c_df = results_df[results_df['LC_5d'] != "—"].copy().sort_values('Signal', ascending=False)
+                shorts_c_df = results_df[results_df['SC_5d'] != "—"].copy().sort_values('Signal', ascending=True)
+
+                _age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
+
+                has_signals = any(not df_.empty for df_ in [longs_a_df, shorts_a_df, longs_b_df, shorts_b_df, longs_c_df, shorts_c_df])
+
+                if has_signals:
+                    # ── Summary metrics ────────────────────────────────────────────────────
+                    total_longs  = len(longs_a_df) + len(longs_b_df) + len(longs_c_df)
+                    total_shorts = len(shorts_a_df) + len(shorts_b_df) + len(shorts_c_df)
+                    all_longs  = pd.concat([longs_a_df, longs_b_df, longs_c_df]).drop_duplicates('Symbol').sort_values('Signal', ascending=False)
+                    all_shorts = pd.concat([shorts_a_df, shorts_b_df, shorts_c_df]).drop_duplicates('Symbol').sort_values('Signal', ascending=True)
+
                     mc1, mc2, mc3, mc4 = st.columns(4)
                     with mc1:
                         ui.render_metric_card(
                             "Long Signals",
-                            str(len(longs_df)),
-                            f"{len(longs_df)/len(results_df)*100:.0f}% of universe",
+                            str(total_longs),
+                            f"A: {len(longs_a_df)} · B: {len(longs_b_df)} · C: {len(longs_c_df)}",
                             "success"
                         )
                     with mc2:
                         ui.render_metric_card(
                             "Short Signals",
-                            str(len(shorts_df)),
-                            f"{len(shorts_df)/len(results_df)*100:.0f}% of universe",
+                            str(total_shorts),
+                            f"A: {len(shorts_a_df)} · B: {len(shorts_b_df)} · C: {len(shorts_c_df)}",
                             "danger"
                         )
                     with mc3:
-                        strongest_long = longs_df.iloc[0] if not longs_df.empty else None
+                        strongest_long = all_longs.iloc[0] if not all_longs.empty else None
                         ui.render_metric_card(
                             "Strongest Long",
                             strongest_long['SimpleName'] if strongest_long is not None else "—",
@@ -2271,9 +2416,9 @@ def main():
                             "info"
                         )
                     with mc4:
-                        strongest_short = shorts_df.iloc[0] if not shorts_df.empty else None
+                        strongest_short = all_shorts.iloc[0] if not all_shorts.empty else None
                         ui.render_metric_card(
-                            "Weakest Short",
+                            "Strongest Short",
                             strongest_short['SimpleName'] if strongest_short is not None else "—",
                             f"Signal: {strongest_short['Signal']:.1f}" if strongest_short is not None else "No signals",
                             "info"
@@ -2281,70 +2426,122 @@ def main():
 
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-                    # Inject SVG icons into nested sub-tab labels via CSS ::before pseudo-elements
-                    st.markdown("""
-                    <style>
-                    [data-testid="stTabs"] [data-testid="stTabs"] button[role="tab"]:nth-of-type(1) [data-testid="stMarkdownContainer"] p::before {
-                        content: '';
-                        display: inline-block;
-                        width: 14px;
-                        height: 14px;
-                        margin-right: 8px;
-                        vertical-align: -2px;
-                        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2334D399' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='m5 12 7-7 7 7'/><path d='M12 19V5'/></svg>");
-                        background-repeat: no-repeat;
-                        background-size: contain;
-                    }
-                    [data-testid="stTabs"] [data-testid="stTabs"] button[role="tab"]:nth-of-type(2) [data-testid="stMarkdownContainer"] p::before {
-                        content: '';
-                        display: inline-block;
-                        width: 14px;
-                        height: 14px;
-                        margin-right: 8px;
-                        vertical-align: -2px;
-                        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23FB7185' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='m19 12-7 7-7-7'/></svg>");
-                        background-repeat: no-repeat;
-                        background-size: contain;
-                    }
-                    </style>
-                    """, unsafe_allow_html=True)
-
-                    # Sub-tabs for Bullish and Bearish signals (side-by-side navigation instead of vertical stacking)
+                    # ── Level-1 sub-tabs: Bullish | Bearish ────────────────────────────────
                     bull_tab, bear_tab = st.tabs(["Bullish Signals by Timing", "Bearish Signals by Timing"])
 
-                    _age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
-
                     with bull_tab:
-                        if not longs_df.empty:
-                            _, long_stats, _, _ = _bucket_signals_by_age(longs_df, side='long')
-                            long_table_html = _build_signal_table_html(long_stats, side='long')
-                            _groups = sum(1 for a in _age_order if long_stats[a]['count'] > 0)
-                            _rows = sum(long_stats[a]['count'] for a in _age_order)
-                            st.components.v1.html(long_table_html, height=70 + _groups * 46 + _rows * 44)
-                        else:
-                            st.info("No bullish signals detected.")
-                        _render_signal_legend(side='long')
+                        # Level-2 nested tabs: Momentum | Crossover | Threshold
+                        mom_bull_tab, cross_bull_tab, thresh_bull_tab = st.tabs(["Momentum", "Crossover", "Threshold"])
+
+                        with mom_bull_tab:
+                            st.markdown("""
+                            <p style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:#94A3B8; margin:0.5rem 0 1rem 0;">
+                                Set A · Composite Line crosses above Signal Line anywhere — broad momentum crossover, no zone filter
+                            </p>
+                            """, unsafe_allow_html=True)
+                            if not longs_a_df.empty:
+                                _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A')
+                                la_html = _build_signal_table_html(la_stats, side='long')
+                                _g = sum(1 for a in _age_order if la_stats[a]['count'] > 0)
+                                _r = sum(la_stats[a]['count'] for a in _age_order)
+                                st.components.v1.html(la_html, height=70 + _g * 46 + _r * 44)
+                            else:
+                                st.info("No Momentum bullish signals in the last 5 sessions.")
+                            _render_signal_legend(side='long', condition_set='A')
+
+                        with cross_bull_tab:
+                            st.markdown("""
+                            <p style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:#94A3B8; margin:0.5rem 0 1rem 0;">
+                                Set B · Composite Line crosses below Signal Line while both are in oversold zone (&lt;−40)
+                            </p>
+                            """, unsafe_allow_html=True)
+                            if not longs_b_df.empty:
+                                _, lb_stats, _, _ = _bucket_signals_by_age(longs_b_df, side='long', condition_set='B')
+                                lb_html = _build_signal_table_html(lb_stats, side='long')
+                                _g = sum(1 for a in _age_order if lb_stats[a]['count'] > 0)
+                                _r = sum(lb_stats[a]['count'] for a in _age_order)
+                                st.components.v1.html(lb_html, height=70 + _g * 46 + _r * 44)
+                            else:
+                                st.info("No Crossover bullish signals in the last 5 sessions.")
+                            _render_signal_legend(side='long', condition_set='B')
+
+                        with thresh_bull_tab:
+                            st.markdown("""
+                            <p style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:#94A3B8; margin:0.5rem 0 1rem 0;">
+                                Set C · Composite Line enters oversold zone (&lt;−40) from above, Signal Line still above −40
+                            </p>
+                            """, unsafe_allow_html=True)
+                            if not longs_c_df.empty:
+                                _, lc_stats, _, _ = _bucket_signals_by_age(longs_c_df, side='long', condition_set='C')
+                                lc_html = _build_signal_table_html(lc_stats, side='long')
+                                _g = sum(1 for a in _age_order if lc_stats[a]['count'] > 0)
+                                _r = sum(lc_stats[a]['count'] for a in _age_order)
+                                st.components.v1.html(lc_html, height=70 + _g * 46 + _r * 44)
+                            else:
+                                st.info("No Threshold bullish signals in the last 5 sessions.")
+                            _render_signal_legend(side='long', condition_set='C')
 
                     with bear_tab:
-                        if not shorts_df.empty:
-                            _, short_stats, _, _ = _bucket_signals_by_age(shorts_df, side='short')
-                            short_table_html = _build_signal_table_html(short_stats, side='short')
-                            _groups = sum(1 for a in _age_order if short_stats[a]['count'] > 0)
-                            _rows = sum(short_stats[a]['count'] for a in _age_order)
-                            st.components.v1.html(short_table_html, height=70 + _groups * 46 + _rows * 44)
-                        else:
-                            st.info("No bearish signals detected.")
-                        _render_signal_legend(side='short')
+                        # Level-2 nested tabs: Momentum | Crossover | Threshold
+                        mom_bear_tab, cross_bear_tab, thresh_bear_tab = st.tabs(["Momentum", "Crossover", "Threshold"])
+
+                        with mom_bear_tab:
+                            st.markdown("""
+                            <p style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:#94A3B8; margin:0.5rem 0 1rem 0;">
+                                Set A · Composite Line crosses below Signal Line anywhere — broad momentum crossover, no zone filter
+                            </p>
+                            """, unsafe_allow_html=True)
+                            if not shorts_a_df.empty:
+                                _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A')
+                                sa_html = _build_signal_table_html(sa_stats, side='short')
+                                _g = sum(1 for a in _age_order if sa_stats[a]['count'] > 0)
+                                _r = sum(sa_stats[a]['count'] for a in _age_order)
+                                st.components.v1.html(sa_html, height=70 + _g * 46 + _r * 44)
+                            else:
+                                st.info("No Momentum bearish signals in the last 5 sessions.")
+                            _render_signal_legend(side='short', condition_set='A')
+
+                        with cross_bear_tab:
+                            st.markdown("""
+                            <p style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:#94A3B8; margin:0.5rem 0 1rem 0;">
+                                Set B · Composite Line crosses above Signal Line while both are in overbought zone (&gt;+40)
+                            </p>
+                            """, unsafe_allow_html=True)
+                            if not shorts_b_df.empty:
+                                _, sb_stats, _, _ = _bucket_signals_by_age(shorts_b_df, side='short', condition_set='B')
+                                sb_html = _build_signal_table_html(sb_stats, side='short')
+                                _g = sum(1 for a in _age_order if sb_stats[a]['count'] > 0)
+                                _r = sum(sb_stats[a]['count'] for a in _age_order)
+                                st.components.v1.html(sb_html, height=70 + _g * 46 + _r * 44)
+                            else:
+                                st.info("No Crossover bearish signals in the last 5 sessions.")
+                            _render_signal_legend(side='short', condition_set='B')
+
+                        with thresh_bear_tab:
+                            st.markdown("""
+                            <p style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:#94A3B8; margin:0.5rem 0 1rem 0;">
+                                Set C · Composite Line enters overbought zone (&gt;+40) from below, Signal Line still below +40
+                            </p>
+                            """, unsafe_allow_html=True)
+                            if not shorts_c_df.empty:
+                                _, sc_stats, _, _ = _bucket_signals_by_age(shorts_c_df, side='short', condition_set='C')
+                                sc_html = _build_signal_table_html(sc_stats, side='short')
+                                _g = sum(1 for a in _age_order if sc_stats[a]['count'] > 0)
+                                _r = sum(sc_stats[a]['count'] for a in _age_order)
+                                st.components.v1.html(sc_html, height=70 + _g * 46 + _r * 44)
+                            else:
+                                st.info("No Threshold bearish signals in the last 5 sessions.")
+                            _render_signal_legend(side='short', condition_set='C')
 
                 else:
                     st.info("No signals detected in the specified universe and timeframe.")
 
 
-            # ════ TAB 3: SIGNAL STRENGTH ANALYSIS ════════════════════════════════════════
+            # ════ TAB 2: SIGNAL STRENGTH ANALYSIS ════════════════════════════════════════
             with tab_strength:
                 ui.render_section_header(
                     "Signal Strength Analysis",
-                    "Top momentum signals ranked by magnitude, with zone and trend context",
+                    "Top signals ranked by magnitude — Momentum (A) · Crossover (B) · Threshold (C)",
                     icon="target",
                     accent="emerald"
                 )
@@ -2364,35 +2561,123 @@ def main():
 
                 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-                # Top conviction signals — side-by-side tables (long vs short)
-                top_longs = longs_df.head(10)
-                top_shorts = shorts_df.head(10)
+                # Pre-compute top-10 slices for all three sets
+                top_longs_a  = longs_a_df.head(10)
+                top_shorts_a = shorts_a_df.head(10)
+                top_longs_b  = longs_b_df.head(10)
+                top_shorts_b = shorts_b_df.head(10)
+                top_longs_c  = longs_c_df.head(10)
+                top_shorts_c = shorts_c_df.head(10)
 
-                col_l, col_s = st.columns(2)
+                # Kept for System Data exports
+                top_longs  = top_longs_a
+                top_shorts = top_shorts_a
 
-                with col_l:
-                    st.markdown(f"""
-                    <h4 style="font-family: var(--display); font-size: 0.9rem; color: var(--emerald); margin: 1.5rem 0 1rem 0; text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 0.5rem;">
-                        {SVGS['LONG'].replace('currentColor', 'var(--emerald)')} Strongest Bullish Signals
-                    </h4>
-                    """, unsafe_allow_html=True)
-                    if not top_longs.empty:
-                        long_conviction_html = _build_signal_strength_table_html(top_longs, side='long')
-                        st.components.v1.html(long_conviction_html, height=94 + len(top_longs) * 40)
-                    else:
-                        st.info("No bullish signals detected in this period.")
+                # ── shared height helper — both columns in a pair always same height ──
+                def _pair_height(df_l, df_r):
+                    n = max(len(df_l), len(df_r), 1)
+                    return 58 + n * 42
 
-                with col_s:
-                    st.markdown(f"""
-                    <h4 style="font-family: var(--display); font-size: 0.9rem; color: var(--rose); margin: 1.5rem 0 1rem 0; text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 0.5rem;">
-                        {SVGS['SHORT'].replace('currentColor', 'var(--rose)')} Strongest Bearish Signals
-                    </h4>
-                    """, unsafe_allow_html=True)
-                    if not top_shorts.empty:
-                        short_conviction_html = _build_signal_strength_table_html(top_shorts, side='short')
-                        st.components.v1.html(short_conviction_html, height=94 + len(top_shorts) * 40)
-                    else:
-                        st.info("No bearish signals detected in this period.")
+                # ── column label renderer ─────────────────────────────────────────────
+                def _col_label(side_label, side):
+                    arrow = SVGS['LONG'].replace('currentColor', 'var(--emerald)') if side == 'long' else SVGS['SHORT'].replace('currentColor', 'var(--rose)')
+                    color = 'var(--emerald)' if side == 'long' else 'var(--rose)'
+                    return f"""
+                    <p style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600;
+                               text-transform:uppercase; letter-spacing:0.1em; color:{color};
+                               margin:0 0 0.4rem 0; display:flex; align-items:center; gap:0.35rem;">
+                        {arrow} {side_label}
+                    </p>"""
+
+                # ─────────────────────────────────────────────────────────────────────
+                # SET A · MOMENTUM
+                # ─────────────────────────────────────────────────────────────────────
+                st.markdown(f"""
+                <div style="display:flex; align-items:baseline; gap:0.65rem; margin:1.75rem 0 0.9rem 0;
+                             padding-bottom:0.6rem; border-bottom:1px solid rgba(212,168,83,0.2);">
+                    <span style="font-family:var(--display); font-size:0.62rem; font-weight:700;
+                                 letter-spacing:0.12em; text-transform:uppercase; color:#D4A853;
+                                 padding:0.18rem 0.5rem; background:rgba(212,168,83,0.1);
+                                 border:1px solid rgba(212,168,83,0.3); border-radius:4px;">Set A</span>
+                    <span style="font-family:var(--display); font-size:1rem; font-weight:700;
+                                 color:#F1F5F9; letter-spacing:0.04em;">Momentum</span>
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:0.75rem; color:#6B7280;">
+                        Broad crossover — no zone filter
+                    </span>
+                    <span style="margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
+                                 color:#34D399;">↑ {len(top_longs_a)}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
+                                 color:#FB7185; margin-left:0.5rem;">↓ {len(top_shorts_a)}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                _h_a = _pair_height(top_longs_a, top_shorts_a)
+                _col_al, _col_as = st.columns(2)
+                with _col_al:
+                    st.markdown(_col_label("Top 10 Longs", "long"), unsafe_allow_html=True)
+                    st.components.v1.html(_build_signal_strength_table_html(top_longs_a, side='long'), height=_h_a)
+                with _col_as:
+                    st.markdown(_col_label("Top 10 Shorts", "short"), unsafe_allow_html=True)
+                    st.components.v1.html(_build_signal_strength_table_html(top_shorts_a, side='short'), height=_h_a)
+
+                # ─────────────────────────────────────────────────────────────────────
+                # SET B · CROSSOVER
+                # ─────────────────────────────────────────────────────────────────────
+                st.markdown(f"""
+                <div style="display:flex; align-items:baseline; gap:0.65rem; margin:2rem 0 0.9rem 0;
+                             padding-bottom:0.6rem; border-bottom:1px solid rgba(148,163,184,0.15);">
+                    <span style="font-family:var(--display); font-size:0.62rem; font-weight:700;
+                                 letter-spacing:0.12em; text-transform:uppercase; color:#94A3B8;
+                                 padding:0.18rem 0.5rem; background:rgba(148,163,184,0.08);
+                                 border:1px solid rgba(148,163,184,0.2); border-radius:4px;">Set B</span>
+                    <span style="font-family:var(--display); font-size:1rem; font-weight:700;
+                                 color:#F1F5F9; letter-spacing:0.04em;">Crossover</span>
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:0.75rem; color:#6B7280;">
+                        Line crosses signal inside extreme zone
+                    </span>
+                    <span style="margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
+                                 color:#34D399;">↑ {len(top_longs_b)}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
+                                 color:#FB7185; margin-left:0.5rem;">↓ {len(top_shorts_b)}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                _h_b = _pair_height(top_longs_b, top_shorts_b)
+                _col_bl, _col_bs = st.columns(2)
+                with _col_bl:
+                    st.markdown(_col_label("Top 10 Longs", "long"), unsafe_allow_html=True)
+                    st.components.v1.html(_build_signal_strength_table_html(top_longs_b, side='long'), height=_h_b)
+                with _col_bs:
+                    st.markdown(_col_label("Top 10 Shorts", "short"), unsafe_allow_html=True)
+                    st.components.v1.html(_build_signal_strength_table_html(top_shorts_b, side='short'), height=_h_b)
+
+                # ─────────────────────────────────────────────────────────────────────
+                # SET C · THRESHOLD
+                # ─────────────────────────────────────────────────────────────────────
+                st.markdown(f"""
+                <div style="display:flex; align-items:baseline; gap:0.65rem; margin:2rem 0 0.9rem 0;
+                             padding-bottom:0.6rem; border-bottom:1px solid rgba(56,189,248,0.15);">
+                    <span style="font-family:var(--display); font-size:0.62rem; font-weight:700;
+                                 letter-spacing:0.12em; text-transform:uppercase; color:#38BDF8;
+                                 padding:0.18rem 0.5rem; background:rgba(56,189,248,0.07);
+                                 border:1px solid rgba(56,189,248,0.2); border-radius:4px;">Set C</span>
+                    <span style="font-family:var(--display); font-size:1rem; font-weight:700;
+                                 color:#F1F5F9; letter-spacing:0.04em;">Threshold</span>
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:0.75rem; color:#6B7280;">
+                        Freshly entering OS / OB zone
+                    </span>
+                    <span style="margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
+                                 color:#34D399;">↑ {len(top_longs_c)}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
+                                 color:#FB7185; margin-left:0.5rem;">↓ {len(top_shorts_c)}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                _h_c = _pair_height(top_longs_c, top_shorts_c)
+                _col_cl, _col_cs = st.columns(2)
+                with _col_cl:
+                    st.markdown(_col_label("Top 10 Longs", "long"), unsafe_allow_html=True)
+                    st.components.v1.html(_build_signal_strength_table_html(top_longs_c, side='long'), height=_h_c)
+                with _col_cs:
+                    st.markdown(_col_label("Top 10 Shorts", "short"), unsafe_allow_html=True)
+                    st.components.v1.html(_build_signal_strength_table_html(top_shorts_c, side='short'), height=_h_c)
 
             # ════ TAB 4: SYSTEM DATA ════════════════════════════════════════════════════
             with tab_raw:
