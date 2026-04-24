@@ -5,6 +5,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v2.0.0] — April 2026
+
+Major engine upgrade from legacy WRCI to the UMA v6 Unified Market Analytics framework.
+
+### UMA v6 Analysis Engine
+
+- **MSF (Momentum Structure Flow)** — Multi-component composite signal combining ROC momentum, microstructure (price-volume variance), composite trend (Hurst-adjusted), and accumulation/distribution metrics.
+- **MMR (Macro Multiple Regression)** — Integrated macro context awareness using Gram-Schmidt orthogonalization across a 3-variable top-ranked macro basket (Global Macro, Commodities, Currency).
+- **Adaptive HMM (Hidden Markov Model)** — Real-time regime state discovery (Bullish/Neutral/Bearish) for signal classification and noise reduction.
+- **Enhanced Signal Flags** — New read-only context flags for top symbols:
+    - **Conf Bull/Bear**: High signal agreement between MSF and MMR.
+    - **Bull/Bear Div**: Momentum divergence against price action.
+- **Volatility Structure Awareness** — Dynamic signal damping based on ATR-normalized volatility variance (VoV) and trend-structure ratios (VTS).
+
+### UI & Performance
+
+- **Institutional UI Refactor** — Absolute visual uniformity across all signal dashboard components.
+- **Enhanced Terminal Aesthetics** — Refined glassmorphism and amber accent system.
+- **Optimized Compute Pipeline** — Faster signal fusion and macro context caching.
+
+---
+
+## [v1.1.0] — April 2026
+
+Expanded market coverage and constituent reliability improvements.
+
+### Universes
+
+- **Global Indexes** — Integrated 56 primary equity benchmark indexes across Americas, Europe, Asia-Pacific, and Middle East/Africa.
+- **Global Macro** — Added 40+ macro instruments including US Treasuries (full curve), Direct Yield Indices, Inflation-Protected (TIPS), and Global Sovereign bonds.
+- **Benchmark Indexes Mode** — Dedicated mode for tracking index instruments as assets rather than their constituents.
+
+### Data & Reliability
+
+- **3-Source Cascade Fetch** — Improved reliability of India index constituents: NSE JSON API → NSE Archive CSV → Wikipedia fallback.
+- **Intraday Quote Injection** — Automated appending of live candles for same-day analysis when historical feeds are lagging.
+
+---
+
 ## [v1.0.0] — April 2026
 
 Initial production release of the SANKET WRCI Signal Screener.

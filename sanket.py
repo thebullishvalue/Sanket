@@ -1,6 +1,6 @@
 """
 Sanket - Market Signal Screener | A Pragyam Product Family Member
-WRCI Engine (Wave-Regime Composite Index) Quantitative Signal Scanner
+UMA v6 Engine (Unified Market Analytics) Quantitative Signal Screener Terminal
 """
 
 import html
@@ -55,7 +55,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v1.0.0"
+VERSION = "v2.0.0"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE INITIALIZATION
@@ -175,7 +175,7 @@ WIKI_URL_MAP = {
     "NIFTY FIN SERVICE": "https://en.wikipedia.org/wiki/Nifty_Financial_Services_Index",
 }
 
-UNIVERSE_OPTIONS = ["India Indexes", "US Indexes", "ETF Index", "Commodities", "Currency", "Crypto", "Global Macro"]
+UNIVERSE_OPTIONS = ["India Indexes", "Global Indexes", "US Indexes", "ETF Index", "Commodities", "Currency", "Crypto", "Global Macro"]
 TIMEFRAME_OPTIONS = ["Daily", "Weekly"]
 
 # ETF Universe (from Pragyam)
@@ -365,14 +365,87 @@ GLOBAL_MACRO_MAP = {
     "Long-Term Broad Bond":              "BLV",
 }
 
+# Global Benchmark Indexes Universe — primary national equity index per country.
+# Futures proxies used where the cash index is not available on Yahoo Finance.
+GLOBAL_INDEXES_MAP = {
+    # ── North America ──────────────────────────────────────────────────────────
+    "S&P 500 (USA)":                     "^GSPC",
+    "Dow Jones (USA)":                   "^DJI",
+    "NASDAQ 100 (USA)":                  "^NDX",
+    "Russell 2000 (USA)":                "^RUT",
+    "TSX Composite (Canada)":            "^GSPTSE",
+    "IPC (Mexico)":                      "^MXX",
+    "Bovespa (Brazil)":                  "^BVSP",
+    "Merval (Argentina)":                "^MERV",
+    "IPSA (Chile)":                      "^IPSA",
+    "COLCAP (Colombia)":                 "^COLCAP",
+    # ── Europe ─────────────────────────────────────────────────────────────────
+    "FTSE 100 (UK)":                     "^FTSE",
+    "DAX (Germany)":                     "^GDAXI",
+    "CAC 40 (France)":                   "^FCHI",
+    "IBEX 35 (Spain)":                   "^IBEX",
+    "FTSE MIB (Italy)":                  "FTSEMIB.MI",
+    "AEX (Netherlands)":                 "^AEX",
+    "SMI (Switzerland)":                 "^SSMI",
+    "OMX Stockholm 30 (Sweden)":         "^OMXS30",
+    "Oslo Bors All-Share (Norway)":      "^OSEAX",
+    "OMX Copenhagen 25 (Denmark)":       "^OMXC25",
+    "ATX (Austria)":                     "^ATX",
+    "BEL 20 (Belgium)":                  "^BFX",
+    "WIG 20 (Poland)":                   "^WIG20",
+    "BIST 100 (Turkey)":                 "XU100.IS",
+    "PSI 20 (Portugal)":                 "^PSI20",
+    "ASE General (Greece)":              "^ATG",
+    "OMX Helsinki 25 (Finland)":         "^OMXH25",
+    "PX (Czech Republic)":               "^PX",
+    "BUX (Hungary)":                     "^BUX",
+    "MOEX (Russia)":                     "IMOEX.ME",
+    # ── Asia-Pacific ───────────────────────────────────────────────────────────
+    "Nikkei 225 (Japan)":                "^N225",
+    "TOPIX (Japan)":                     "^TOPX",
+    "Shanghai Composite (China)":        "000001.SS",
+    "CSI 300 (China)":                   "000300.SS",
+    "Hang Seng (Hong Kong)":             "^HSI",
+    "KOSPI (South Korea)":               "^KS11",
+    "KOSDAQ (South Korea)":              "^KQ11",
+    "TAIEX (Taiwan)":                    "^TWII",
+    "Nifty 50 (India)":                  "^NSEI",
+    "Sensex (India)":                    "^BSESN",
+    "ASX 200 (Australia)":               "^AXJO",
+    "All Ordinaries (Australia)":        "^AORD",
+    "STI (Singapore)":                   "^STI",
+    "KLCI (Malaysia)":                   "^KLSE",
+    "SET Composite (Thailand)":          "^SET",
+    "Jakarta Composite (Indonesia)":     "^JKSE",
+    "PSEi (Philippines)":                "PSEi.PS",
+    "NZX 50 (New Zealand)":              "^NZ50",
+    "VN-Index (Vietnam)":                "^VNINDEX",
+    "KSE 100 (Pakistan)":                "^KSE",
+    # ── Middle East & Africa ───────────────────────────────────────────────────
+    "TA-125 (Israel)":                   "^TA125.TA",
+    "Tadawul (Saudi Arabia)":            "^TASI.SR",
+    "DFM General (UAE)":                 "^DFMGI",
+    "QE Index (Qatar)":                  "^QSI",
+    "JSE All-Share (South Africa)":      "J203.JO",
+    "EGX 30 (Egypt)":                    "^CASE",
+}
+
 # Asset Name Lookup for friendly display (Reverse map tickers to names)
-ASSET_NAME_LOOKUP = {v: k for k, v in {**COMMODITY_MAP, **CURRENCY_MAP, **CRYPTO_MAP, **GLOBAL_MACRO_MAP}.items()}
+ASSET_NAME_LOOKUP = {v: k for k, v in {**COMMODITY_MAP, **CURRENCY_MAP, **CRYPTO_MAP, **GLOBAL_MACRO_MAP, **GLOBAL_INDEXES_MAP}.items()}
+
+# Ordered, deduplicated list of all macro context symbols used by UMA MMR regression.
+# Defined once here so both fetch_macro_context_data and run_screener_analysis share the same set.
+_MACRO_SYM_ORDERED = list(dict.fromkeys(
+    list(GLOBAL_MACRO_MAP.values()) +
+    list(COMMODITY_MAP.values()) +
+    list(CURRENCY_MAP.values())
+))
+_MACRO_SYM_SET = set(_MACRO_SYM_ORDERED)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA FETCHING FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=3600, show_spinner=False)
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_fno_stock_list():
     """Fetch F&O eligible stocks from NSE with multiple fallback sources."""
@@ -590,6 +663,12 @@ def get_global_macro_symbols():
     """Return the Global Macro bond ETF universe."""
     symbols = list(GLOBAL_MACRO_MAP.values())
     return symbols, f"✓ Loaded {len(symbols)} Global Macro instruments"
+
+
+def get_global_index_symbols():
+    """Return the Global Indexes universe — one benchmark index per country."""
+    symbols = list(GLOBAL_INDEXES_MAP.values())
+    return symbols, f"✓ Loaded {len(symbols)} global benchmark indexes"
 
 
 def get_commodity_symbols(commodity_type=None):
@@ -957,12 +1036,18 @@ def fetch_macro_context_data(end_date=None, days_back=350):
     """
     if end_date is None:
         end_date = datetime.date.today()
-    syms = list(dict.fromkeys(
-        list(GLOBAL_MACRO_MAP.values()) +
-        list(COMMODITY_MAP.values()) +
-        list(CURRENCY_MAP.values())
-    ))
-    data, _ = fetch_batch_data(syms, end_date=end_date, days_back=days_back)
+    data, _ = fetch_batch_data(_MACRO_SYM_ORDERED, end_date=end_date, days_back=days_back)
+    return {sym: df['Close'] for sym, df in data.items()} if data else {}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_remaining_macro_context(syms_tuple, end_date, days_back=350):
+    """Fetch close series for macro symbols not already present in the screener data_dict.
+    Accepts a tuple (hashable) so Streamlit can cache the result per unique symbol subset.
+    """
+    if not syms_tuple:
+        return {}
+    data, _ = fetch_batch_data(list(syms_tuple), end_date=end_date, days_back=days_back)
     return {sym: df['Close'] for sym, df in data.items()} if data else {}
 
 
@@ -1294,7 +1379,7 @@ def render_landing_page():
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                 SIGNAL ENGINE
             </h3>
-            <p>Wave Trend Composite Index (WRCI) identifies momentum signals and trend strength across your universe with daily updates.</p>
+            <p>UMA v6 (Unified Market Analytics) identifies momentum signals and trend strength across your universe with macro-context awareness.</p>
             <div class='spec'>
                 <span>Detection:</span> Wave Trend signals (bullish/bearish)<br>
                 <span>Scoring:</span> Signal magnitude + trend direction<br>
@@ -1484,6 +1569,8 @@ def render_sidebar():
 
         if universe == "India Indexes":
             selected_index = st.selectbox("Index", INDEX_LIST, index=INDEX_LIST.index("Benchmark Indexes"), label_visibility="collapsed")
+        elif universe == "Global Indexes":
+            selected_index = "Global Benchmark Indexes"
         elif universe == "US Indexes":
             selected_index = st.selectbox("Index", US_INDEX_LIST, index=US_INDEX_LIST.index("DOW JONES"), label_visibility="collapsed")
         elif universe == "ETF Index":
@@ -1528,6 +1615,9 @@ def render_sidebar():
             if universe == "India Indexes" and selected_index:
                 symbols_count = len(get_index_stock_list(selected_index)[0] or [])
                 universe_display = selected_index
+            elif universe == "Global Indexes":
+                symbols_count = len(GLOBAL_INDEXES_MAP)
+                universe_display = "Global Benchmark Indexes"
             elif universe == "US Indexes" and selected_index:
                 symbols_count = len(get_us_index_symbols(selected_index)[0] or [])
                 universe_display = selected_index
@@ -1577,7 +1667,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     obLevel1, obLevel2, osLevel1, osLevel2 = levels
     progress_slot = st.empty()
 
-    progress_bar(progress_slot, 5, "Initializing WRCI engine", f"Universe: {universe}")
+    progress_bar(progress_slot, 5, "Initializing UMA v6 engine", f"Universe: {universe}")
     
     console.start_phase("DATA ACQUISITION", 1, 2)
     console.section("Universe Configuration")
@@ -1587,6 +1677,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     if universe == "India Indexes":
         stock_list, msg = get_index_stock_list(selected_index)
+    elif universe == "Global Indexes":
+        stock_list, msg = get_global_index_symbols()
     elif universe == "US Indexes":
         stock_list, msg = get_us_index_symbols(selected_index)
     elif universe == "Commodities":
@@ -1620,20 +1712,41 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.success(f"Successfully downloaded data for {len(data_dict)} stocks")
     console.end_phase("DATA ACQUISITION")
 
-    console.start_phase("WRCI MOMENTUM ANALYSIS", 2, 2)
-    console.section("Technical Diagnostics")
-    progress_bar(progress_slot, 20, "Analyzing WRCI momentum", f"{len(data_dict)} stocks")
+    console.start_phase("UMA v6 MOMENTUM ANALYSIS", 2, 2)
 
-    # Pre-fetch macro context once for UMA MMR (cached; reused across all symbols)
-    console.section("UMA v6 Macro Context Pre-Fetch")
+    console.section("Analysis Parameters")
+    console.item("Timeframe", timeframe)
+    console.item("Regression Length", reg_len)
+    console.item("Wave Trend", f"N1={wt_n1}  N2={wt_n2}")
+    console.item("OB Levels", f"{obLevel1} / {obLevel2}")
+    console.item("OS Levels", f"{osLevel1} / {osLevel2}")
+    console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
+    progress_bar(progress_slot, 20, "Analyzing UMA v6 momentum", f"{len(data_dict)} stocks")
+
+    # Pre-fetch macro context once for UMA MMR (cached; reused across all symbols).
+    # Symbols already downloaded for the screener universe are reused directly from
+    # data_dict to avoid a redundant network round-trip (e.g. when universe is
+    # Commodities, Currency, or Global Macro all those tickers are already in data_dict).
+    _from_dict = {sym: data_dict[sym]['Close'] for sym in _MACRO_SYM_SET if sym in data_dict}
+    _missing = tuple(sym for sym in _MACRO_SYM_ORDERED if sym not in data_dict)
+    console.section("UMA v6 Macro Context")
     console.item("Universes", "Global Macro + Commodities + Currency")
-    macro_context = fetch_macro_context_data(end_date=analysis_date)
+    console.item("Reused from screener data", f"{len(_from_dict)} symbols")
+    console.item("Fetching fresh", f"{len(_missing)} symbols")
+    if _missing:
+        _fetched = _fetch_remaining_macro_context(_missing, analysis_date)
+        macro_context = {**_fetched, **_from_dict}
+    else:
+        macro_context = _from_dict
     if macro_context:
-        console.success(f"Macro context loaded: {len(macro_context)} instruments available for MMR regression")
+        console.success(f"Macro context ready: {len(macro_context)} instruments available for MMR regression")
     else:
         console.warning("Macro context empty — UMA MMR will fall back to MSF-only scoring")
 
     results = []
+
+    _tf_label = "weekly" if timeframe == "Weekly" else "daily"
+    console.section(f"Signal Analysis — {len(data_dict)} {_tf_label} instruments")
 
     for i, (ticker, df) in enumerate(data_dict.items()):
         try:
@@ -1820,6 +1933,8 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
     if universe == "India Indexes":
         stock_list, _ = get_index_stock_list(selected_index)
+    elif universe == "Global Indexes":
+        stock_list, _ = get_global_index_symbols()
     elif universe == "US Indexes":
         stock_list, _ = get_us_index_symbols(selected_index)
     elif universe == "Commodities":
@@ -1852,7 +1967,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     console.success(f"Downloaded depth for {len(data_dict)} entities")
     console.end_phase("HISTORICAL ACQUISITION")
 
-    progress_bar(progress_slot, 15, "Processing WRCI + Regime Intelligence", f"{len(data_dict)} stocks")
+    progress_bar(progress_slot, 15, "Processing UMA v6 + Regime Intelligence", f"{len(data_dict)} stocks")
     all_results = []
 
     for i, (ticker, df) in enumerate(data_dict.items()):
@@ -2297,13 +2412,13 @@ def _render_signal_legend(side: str = 'long', condition_set: str = 'A') -> None:
     """
     if condition_set == 'A':
         if side == 'long':
-            signal_desc  = "Positive WRCI value — the oscillator has crossed upward, indicating building bullish momentum. Higher magnitude = stronger push."
+            signal_desc  = "Positive UMA value — the oscillator has crossed upward, indicating building bullish momentum. Higher magnitude = stronger push."
             trend_desc   = "Positive = uptrend confirming the signal. Negative = downtrend still in place despite the bullish cross."
             timing_desc  = "Older bullish signals are more reliable — the upside shift has had time to prove itself. Today&rsquo;s signal is fresh and may still be developing."
             together_good = "Signal &#x2B; | Trend &#x2B; = high conviction long — momentum and direction fully aligned."
             together_mixed = "Signal &#x2B; | Trend &#x2212; = bullish cross against a downtrend. Likely a counter-trend bounce — wait for Trend to turn positive before committing."
         else:
-            signal_desc  = "Negative WRCI value — the oscillator has crossed downward, indicating building selling pressure. Higher magnitude (more negative) = stronger push."
+            signal_desc  = "Negative UMA value — the oscillator has crossed downward, indicating building selling pressure. Higher magnitude (more negative) = stronger push."
             trend_desc   = "Negative = downtrend confirming the signal. Positive = uptrend still in place despite the bearish cross."
             timing_desc  = "Older bearish signals are more reliable — the downside shift has confirmed over time. Today&rsquo;s signal is fresh and may still be developing."
             together_good = "Signal &#x2212; | Trend &#x2212; = high conviction short — momentum and direction fully aligned."
@@ -2706,7 +2821,7 @@ def main():
 
     # Show landing page if no results yet AND not in time-series display mode
     if st.session_state["results_df"] is None and not st.session_state.get("run_screener_flag") and not st.session_state.get("timeseries_done"):
-        ui.render_header("SANKET", "Market Signal Screener · संकेत · WRCI Engine")
+        ui.render_header("SANKET", "Market Signal Screener · संकेत · UMA v6 Engine")
         if st.session_state.get("run_error"):
             st.error(st.session_state["run_error"])
         render_landing_page()
@@ -3097,7 +3212,7 @@ def main():
 
                 st.markdown("""
                 <p style="font-family: var(--data); font-size: 0.8rem; color: var(--ink-secondary); margin-bottom: 1rem;">
-                    All WRCI engine outputs including oscillator values, trend metrics, zones, and historical signal history.
+                    All UMA v6 engine outputs including oscillator values, trend metrics, macro context, and historical signal history.
                 </p>
                 """, unsafe_allow_html=True)
 

@@ -1,4 +1,4 @@
-# Nishkarsh v1.1.0 — Unified Nifty 50 Convergence Analysis System
+# Sanket v2.0.0 — Unified Market Signal Screener System
 # @thebullishvalue Product
 
 # Core Framework
