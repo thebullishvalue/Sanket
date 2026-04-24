@@ -782,6 +782,240 @@ def run_full_analysis(df, reg_len=20, wt_n1=10, wt_n2=21, obLevel1=80, obLevel2=
     return df
 
 # ══════════════════════════════════════════════════════════════════════════════
+# UMA v6 ENGINE — Unified Market Analysis (Python Port)
+# Signals: Conf Bull / Conf Bear / Bull Div / Bear Div — info flag only
+# MMR macro context: Global Macro + Commodities + Currency universes
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _uma_zscore(series, length, clip=3.0):
+    mean = series.rolling(length).mean()
+    std  = series.rolling(length).std(ddof=0).replace(0.0, np.nan)
+    return ((series - mean) / std).clip(-clip, clip).fillna(0.0)
+
+def _uma_sigmoid(z, scale=1.5):
+    return 2.0 / (1.0 + np.exp((-z / scale).clip(-20, 20))) - 1.0
+
+def _uma_atr(df, n):
+    prev = df['Close'].shift(1)
+    tr   = pd.concat([df['High'] - df['Low'],
+                      (df['High'] - prev).abs(),
+                      (df['Low']  - prev).abs()], axis=1).max(axis=1)
+    return tr.ewm(span=n, adjust=False).mean()
+
+def _compute_msf(df, length=20, roc_len=14, wt_ch=10, wt_avg=21,
+                 ent_lb=50, ent_damp=0.25,
+                 h_short=10, h_long=50, h_sample=100, h_inf=0.3,
+                 vol_s=5, vol_l=20, vol_damp=0.15, clip=3.0):
+    """MSF — Momentum Structure Flow.  Returns (msf_signal, wt1) as pd.Series."""
+    close  = df['Close']
+    high   = df['High']
+    low    = df['Low']
+    volume = df['Volume'].copy().fillna(0)
+    # Guard: instruments with no volume (yield indices, some ETFs)
+    med_v = volume.median()
+    volume = volume.replace(0, med_v if med_v > 0 else 1.0)
+
+    # Momentum (ROC)
+    mom_norm = _uma_sigmoid(_uma_zscore(close.pct_change(roc_len).fillna(0) * 100, length, clip))
+
+    # Microstructure
+    vol_ma    = volume.rolling(length).mean().replace(0, np.nan)
+    vol_ratio = (volume / vol_ma).fillna(1.0)
+    micro_raw = (((high + low) / 2 - df['Open']) * vol_ratio).rolling(length).mean() \
+              - ((close - close.shift(5)).fillna(0) * vol_ratio).rolling(length).mean()
+    micro_norm = _uma_sigmoid(_uma_zscore(micro_raw, length, clip))
+
+    # Composite Trend (4-component)
+    t_slow = close.rolling(length).mean()
+    atr14  = _uma_atr(df, 14).replace(0, np.nan)
+    ct_z   = ((_uma_zscore(close.rolling(5).mean() - t_slow, length, clip)
+              + _uma_zscore(close.diff(5).diff(5).fillna(0), length, clip)
+              + _uma_zscore((close.diff(5).fillna(0) / atr14).fillna(0), length, clip)
+              + _uma_zscore(close - t_slow, length, clip)) / np.sqrt(4))
+    ct_norm = _uma_sigmoid(ct_z)
+
+    # Accumulation / Distribution
+    mf    = ((high + low + close) / 3) * volume
+    mf_p  = mf.where(close > close.shift(), 0.0).rolling(length).mean()
+    mft   = (mf_p + mf.where(close < close.shift(), 0.0).rolling(length).mean()).replace(0, np.nan)
+    accum = 2.0 * (mf_p / mft).fillna(0.5) - 1.0
+
+    # Regime Counter (cumulative directional count, de-trended)
+    pct  = close.pct_change().fillna(0) * 100
+    rcnt = ((pct > 0.33).astype(float) - (pct < -0.33).astype(float)).cumsum()
+    reg_norm = _uma_sigmoid(_uma_zscore(rcnt - rcnt.rolling(length).mean(), length, clip))
+
+    # WaveTrend Cycle
+    ap  = (high + low + close) / 3
+    esa = ap.ewm(span=wt_ch, adjust=False).mean()
+    d   = (ap - esa).abs().ewm(span=wt_ch, adjust=False).mean().replace(0, np.nan)
+    wt1 = ((ap - esa) / (0.015 * d)).ewm(span=wt_avg, adjust=False).mean()
+    wt_norm = _uma_sigmoid(_uma_zscore(wt1, length, clip))
+
+    # Permutation Entropy (order-3 patterns)
+    d_old = close.shift(2) - close.shift(3)
+    d_mid = close.shift(1) - close.shift(2)
+    d_new = close           - close.shift(1)
+    pats  = [
+        ((d_old < d_mid) & (d_mid < d_new)).astype(float),
+        ((d_old < d_new) & (d_new < d_mid)).astype(float),
+        ((d_mid < d_old) & (d_old < d_new)).astype(float),
+        ((d_mid < d_new) & (d_new < d_old)).astype(float),
+        ((d_new < d_old) & (d_old < d_mid)).astype(float),
+        ((d_new < d_mid) & (d_mid < d_old)).astype(float),
+    ]
+    freqs    = [p.rolling(ent_lb).mean().clip(1e-12, None) for p in pats]
+    ent_norm = (-sum(f * np.log(f) for f in freqs) / np.log(6)).clip(0, 1)
+    ent_mod  = 1.0 - ent_damp * _uma_sigmoid(_uma_zscore(ent_norm, length, clip))
+
+    # Hurst Regime (variance-ratio approach)
+    std_s = np.log((close / close.shift(h_short)).replace(0, np.nan)).rolling(h_sample).std().replace(0, np.nan)
+    std_l = np.log((close / close.shift(h_long)).replace(0, np.nan)).rolling(h_sample).std()
+    h_raw = (np.log(std_l / std_s) / np.log(h_long / h_short)).fillna(0.5)
+    h_smo = h_raw.ewm(span=10, adjust=False).mean().clip(0.1, 0.9)
+    h_tilt = ((h_smo - h_smo.rolling(length * 5).mean().fillna(0.5)) * 2.5).clip(-1, 1)
+    hw_m = 1.0 + h_tilt * h_inf;  hw_s = 1.0 + h_tilt * h_inf
+    hw_f = 1.0 - h_tilt * h_inf * 0.5
+    hw_c = 1.0 - h_tilt * h_inf
+    hw_d = np.sqrt(hw_m**2 + hw_s**2 + hw_f**2 + hw_c**2).replace(0, np.nan)
+
+    # Volatility Structure
+    vov = (_uma_atr(df, 14).rolling(length).std() / _uma_atr(df, 14).rolling(length).mean().replace(0, np.nan)).fillna(0)
+    vts = (_uma_atr(df, vol_s) / _uma_atr(df, vol_l).replace(0, np.nan)).fillna(1)
+    vol_mod = 1.0 - vol_damp * _uma_sigmoid(
+        (_uma_zscore(vov, length, clip) + _uma_zscore(vts, length, clip)) / np.sqrt(2)).clip(lower=0)
+
+    # MSF Composite
+    msf_raw = ((hw_m * mom_norm + hw_s * (micro_norm + ct_norm) / np.sqrt(2)
+                + hw_f * (accum + reg_norm) / np.sqrt(2) + hw_c * wt_norm) / hw_d)
+    msf_sig = (_uma_sigmoid(msf_raw.fillna(0) * 2.0, scale=1.0) * ent_mod * vol_mod).clip(-1, 1)
+
+    return msf_sig.fillna(0.0), wt1.fillna(0.0)
+
+
+def _compute_mmr(close_y, macro_dict, length_reg=20, lookback_corr=200):
+    """MMR — Macro Multiple Regression (Gram-Schmidt orthogonalized, top-3 vars).
+    Returns (mmr_signal, model_r2) as pd.Series.
+    """
+    if len(close_y) < lookback_corr + length_reg or not macro_dict:
+        return pd.Series(0.0, index=close_y.index), pd.Series(0.0, index=close_y.index)
+
+    # Scalar correlations over last lookback_corr bars to rank macro variables
+    tail_y = close_y.dropna().iloc[-lookback_corr:]
+    ranked = []
+    for sym, mac in macro_dict.items():
+        aligned = mac.reindex(tail_y.index).ffill().bfill()
+        if aligned.isna().mean() > 0.4:
+            continue
+        mask = ~(np.isnan(tail_y.values) | np.isnan(aligned.values))
+        if mask.sum() < 30:
+            continue
+        c = float(np.corrcoef(tail_y.values[mask], aligned.values[mask])[0, 1])
+        if not np.isnan(c):
+            ranked.append((abs(c), mac))
+
+    if not ranked:
+        return pd.Series(0.0, index=close_y.index), pd.Series(0.0, index=close_y.index)
+
+    xs = [s.reindex(close_y.index).ffill().bfill()
+          for _, s in sorted(ranked, reverse=True)[:3]]
+
+    def _var(s):    return s.rolling(length_reg).var(ddof=0).replace(0, np.nan)
+    def _cov(a, b): return ((a * b).rolling(length_reg).mean()
+                             - a.rolling(length_reg).mean() * b.rolling(length_reg).mean())
+
+    # Gram-Schmidt orthogonalization
+    u1 = xs[0]
+    u2 = (xs[1] - (_cov(xs[1], u1) / _var(u1)) * u1).fillna(0) if len(xs) > 1 else pd.Series(0.0, index=close_y.index)
+    if len(xs) > 2:
+        var_u2 = _var(u2)
+        u3 = (xs[2] - (_cov(xs[2], u1) / _var(u1)) * u1
+                     - (_cov(xs[2], u2) / var_u2) * u2).fillna(0)
+    else:
+        u3 = pd.Series(0.0, index=close_y.index)
+
+    def _beta(u, y): return (_cov(u, y) / _var(u)).fillna(0)
+    b1, b2, b3 = _beta(u1, close_y), _beta(u2, close_y), _beta(u3, close_y)
+
+    mean_y    = close_y.rolling(length_reg).mean()
+    intercept = mean_y - b1 * u1.rolling(length_reg).mean() \
+                       - b2 * u2.rolling(length_reg).mean() \
+                       - b3 * u3.rolling(length_reg).mean()
+    y_pred    = intercept + b1 * u1 + b2 * u2 + b3 * u3
+
+    r2  = (((y_pred - mean_y)**2).rolling(length_reg).mean()
+           / _var(close_y)).clip(0, 1).fillna(0)
+    mmr = _uma_sigmoid(_uma_zscore(close_y - y_pred, length_reg)).fillna(0.0)
+
+    return mmr, r2
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_macro_context_data(end_date=None, days_back=350):
+    """Pre-fetch close series for Global Macro + Commodities + Currency universes.
+    Cached 5 min; called once per screener run, reused for all symbols.
+    """
+    if end_date is None:
+        end_date = datetime.date.today()
+    syms = list(dict.fromkeys(
+        list(GLOBAL_MACRO_MAP.values()) +
+        list(COMMODITY_MAP.values()) +
+        list(CURRENCY_MAP.values())
+    ))
+    data, _ = fetch_batch_data(syms, end_date=end_date, days_back=days_back)
+    return {sym: df['Close'] for sym, df in data.items()} if data else {}
+
+
+def compute_uma_flags(df, macro_dict, ticker=''):
+    """Compute UMA v6 info flags for the latest bar.
+
+    Priority: Conf Bull > Conf Bear > Bull Div > Bear Div > —
+    Definitions (direct port from Pine Script Section 10):
+      bull_div      = osc_rising  AND price_falling AND unified_osc < -5
+      bear_div      = osc_falling AND price_rising  AND unified_osc >  5
+      conf_bull     = signal_agreement > 0.3        AND unified_osc < -5
+      conf_bear     = signal_agreement > 0.3        AND unified_osc >  5
+    """
+    try:
+        if len(df) < 50:
+            return "—"
+
+        macro_filtered = {k: v for k, v in macro_dict.items() if k != ticker}
+
+        msf, _  = _compute_msf(df)
+        mmr, r2 = _compute_mmr(df['Close'], macro_filtered)
+
+        # Adaptive signal integration
+        msf_c = msf.abs() ** 1.5
+        mmr_c = (mmr.abs() * r2.clip(0) ** 0.5) ** 1.5
+        c_sum = msf_c + mmr_c + 1e-6
+        w_msf = 0.5 * 0.5 + 0.5 * msf_c / c_sum
+        w_mmr = 0.5 * 0.5 + 0.5 * mmr_c / c_sum
+        w_tot = w_msf + w_mmr
+        unified   = (w_msf / w_tot) * msf + (w_mmr / w_tot) * mmr
+        agreement = msf * mmr
+        osc       = unified * 10.0
+
+        # Latest and previous bar reads
+        uo, uo_p = float(osc.iloc[-1]), float(osc.iloc[-2])
+        sa        = float(agreement.iloc[-1])
+        pr, pr_p  = float(df['Close'].iloc[-1]), float(df['Close'].iloc[-2])
+
+        conf_bull = sa > 0.3  and uo < -5
+        conf_bear = sa > 0.3  and uo >  5
+        bull_div  = uo > uo_p and pr < pr_p and uo < -5
+        bear_div  = uo < uo_p and pr > pr_p and uo >  5
+
+        if conf_bull: return "Conf Bull"
+        if conf_bear: return "Conf Bear"
+        if bull_div:  return "Bull Div"
+        if bear_div:  return "Bear Div"
+        return "—"
+
+    except Exception:
+        return "—"
+
+# ══════════════════════════════════════════════════════════════════════════════
 # REGIME INTELLIGENCE ENGINE (NIRNAY FEATURES)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1389,6 +1623,16 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.start_phase("WRCI MOMENTUM ANALYSIS", 2, 2)
     console.section("Technical Diagnostics")
     progress_bar(progress_slot, 20, "Analyzing WRCI momentum", f"{len(data_dict)} stocks")
+
+    # Pre-fetch macro context once for UMA MMR (cached; reused across all symbols)
+    console.section("UMA v6 Macro Context Pre-Fetch")
+    console.item("Universes", "Global Macro + Commodities + Currency")
+    macro_context = fetch_macro_context_data(end_date=analysis_date)
+    if macro_context:
+        console.success(f"Macro context loaded: {len(macro_context)} instruments available for MMR regression")
+    else:
+        console.warning("Macro context empty — UMA MMR will fall back to MSF-only scoring")
+
     results = []
 
     for i, (ticker, df) in enumerate(data_dict.items()):
@@ -1438,6 +1682,9 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 signal_type = "Short Momentum"
             elif last_row['Condition'] != 'Neutral':
                 signal_type = last_row['Condition']
+
+            # UMA v6 info flag (pure read-only signal context, not screener logic)
+            uma_flag = compute_uma_flags(df.iloc[:idx_pos + 1].tail(300), macro_context, ticker=ticker)
 
             # Clean display names
             simple_name = ticker.replace(".NS", "").lstrip("^")
@@ -1505,13 +1752,15 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "SC_2d": "●" if sample_range.iloc[-3]['short_cond_wt'] else "—",
                 "SC_3d": "●" if sample_range.iloc[-4]['short_cond_wt'] else "—",
                 "SC_5d": "●" if sample_range.tail(5)['short_cond_wt'].any() else "—",
+                # UMA v6 info flag
+                "UMAFlag": uma_flag,
                 # Additional fields for detail cards
                 "Osc_Value": round(last_row.get('Unified_Osc', 0), 2),
                 "MA_Alignment": 5,  # Placeholder
                 "ZScore_Value": 0,  # Placeholder
             })
             
-            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: Signal={last_row['Unified_Osc']:+.2f} Zone={last_row['Condition']} Status={signal_type}")
+            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: Signal={last_row['Unified_Osc']:+.2f}  Zone={last_row['Condition']}  UMA={uma_flag}  Status={signal_type}")
             
         except Exception as e:
             console.failure(f"Analysis Failed: {ticker}", str(e))
@@ -1542,7 +1791,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             "LA_Today", "LA_1d", "LA_2d", "LA_3d", "LA_5d", "SA_Today", "SA_1d", "SA_2d", "SA_3d", "SA_5d",
             "LB_Today", "LB_1d", "LB_2d", "LB_3d", "LB_5d", "SB_Today", "SB_1d", "SB_2d", "SB_3d", "SB_5d",
             "LC_Today", "LC_1d", "LC_2d", "LC_3d", "LC_5d", "SC_Today", "SC_1d", "SC_2d", "SC_3d", "SC_5d",
-            "Osc_Value", "MA_Alignment", "ZScore_Value",
+            "UMAFlag", "Osc_Value", "MA_Alignment", "ZScore_Value",
         ]
         return pd.DataFrame(columns=expected_cols)
 
@@ -2167,12 +2416,20 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
         """)
 
         # Data rows for this age group
+        _uma_colors  = {"Conf Bull": "#34D399", "Conf Bear": "#FB7185",
+                        "Bull Div":  "#86EFAC", "Bear Div":  "#FCA5A5"}
+        _zone_colors = {"OB Extreme": "#FB7185", "OB": "#FCA5A5",
+                        "OS Extreme": "#34D399", "OS": "#86EFAC"}
         for row in stats[age]['rows']:
             symbol = html_module.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
             price = float(row.get('Price', 0))
             signal = float(row.get('Signal', 0))
             trend = float(row.get('Trend', 0))
-            zone = html_module.escape(str(row.get('Zone', '—')))
+            zone_raw = str(row.get('Zone', 'Neutral'))
+            zone_disp = html_module.escape("—" if zone_raw == "Neutral" else zone_raw)
+            zone_color = _zone_colors.get(zone_raw, '#374151')
+            uma  = html_module.escape(str(row.get('UMAFlag', '—')))
+            uma_color = _uma_colors.get(uma, '#374151')
 
             table_rows.append(f"""
             <tr>
@@ -2180,14 +2437,15 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
                 <td class="numeric currency">₹{price:,.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
-                <td class="numeric">{zone}</td>
+                <td class="numeric" style="color:{uma_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em;">{uma}</td>
+                <td class="numeric" style="color:{zone_color}; font-weight:600; font-size:0.68rem;">{zone_disp}</td>
             </tr>
             """)
 
     if not table_rows:
         table_rows.append(f"""
         <tr>
-            <td colspan="5" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="6" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
                 — no signals detected —
             </td>
@@ -2265,6 +2523,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
                     <th class="numeric">Price (₹)</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
+                    <th class="numeric">UMA</th>
                     <th class="numeric">Zone</th>
                 </tr>
             </thead>
@@ -2296,7 +2555,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="6" style="
+            <td colspan="7" style="
                 text-align: center;
                 color: #374151;
                 font-family: 'IBM Plex Mono', monospace;
@@ -2307,12 +2566,20 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
         </tr>
         """)
     else:
+        _uma_colors  = {"Conf Bull": "#34D399", "Conf Bear": "#FB7185",
+                        "Bull Div":  "#86EFAC", "Bear Div":  "#FCA5A5"}
+        _zone_colors = {"OB Extreme": "#FB7185", "OB": "#FCA5A5",
+                        "OS Extreme": "#34D399", "OS": "#86EFAC"}
         for idx, (_, row) in enumerate(df.iterrows(), 1):
             symbol = html_module.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
             price = float(row.get('Price', 0))
             signal = float(row.get('Signal', 0))
             trend = float(row.get('Trend', 0))
-            zone = html_module.escape(str(row.get('Zone', '—')))
+            zone_raw = str(row.get('Zone', 'Neutral'))
+            zone_disp = html_module.escape("—" if zone_raw == "Neutral" else zone_raw)
+            zone_color = _zone_colors.get(zone_raw, '#374151')
+            uma = html_module.escape(str(row.get('UMAFlag', '—')))
+            uma_color = _uma_colors.get(uma, '#374151')
 
             rank_str = f"{idx:02d}"
 
@@ -2323,7 +2590,8 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                 <td class="numeric currency">₹{price:,.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
-                <td class="numeric">{zone}</td>
+                <td class="numeric" style="color:{uma_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em;">{uma}</td>
+                <td class="numeric" style="color:{zone_color}; font-weight:600; font-size:0.68rem;">{zone_disp}</td>
             </tr>
             """)
 
@@ -2400,6 +2668,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                     <th class="numeric">Price (₹)</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
+                    <th class="numeric">UMA</th>
                     <th class="numeric">Zone</th>
                 </tr>
             </thead>
@@ -2834,7 +3103,7 @@ def main():
 
                 # Show all data with historical signals
                 display_df = results_df[[
-                    "DisplayName", "Price", "Signal", "Trend", "Wave", "Zone",
+                    "DisplayName", "Price", "Signal", "Trend", "Wave", "UMAFlag", "Zone",
                     "SignalType", "L_Today", "L_1d", "L_2d", "L_3d", "L_5d",
                     "S_Today", "S_1d", "S_2d", "S_3d", "S_5d"
                 ]].sort_values("Signal", ascending=False)
