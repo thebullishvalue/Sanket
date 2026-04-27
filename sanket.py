@@ -2929,8 +2929,12 @@ def main():
                 shorts_df = results_df[results_df['S_5d'] != "—"].copy().sort_values('Signal', ascending=True)
 
                 # Set A: Momentum — broad crossover anywhere
-                longs_a_df = results_df[results_df['LA_5d'] != "—"].copy().sort_values('Signal', ascending=False)
-                shorts_a_df = results_df[results_df['SA_5d'] != "—"].copy().sort_values('Signal', ascending=True)
+                # Crossover signals take priority: exclude momentum signals that conflict with crossovers
+                has_bullish_crossover = (results_df[['LB_Today', 'LB_1d', 'LB_2d', 'LB_3d', 'LB_5d']] != "—").any(axis=1)
+                has_bearish_crossover = (results_df[['SB_Today', 'SB_1d', 'SB_2d', 'SB_3d', 'SB_5d']] != "—").any(axis=1)
+
+                longs_a_df = results_df[(results_df['LA_5d'] != "—") & ~has_bearish_crossover].copy().sort_values('Signal', ascending=False)
+                shorts_a_df = results_df[(results_df['SA_5d'] != "—") & ~has_bullish_crossover].copy().sort_values('Signal', ascending=True)
 
                 # Set B: Crossover — line crosses signal inside extreme zone
                 longs_b_df = results_df[results_df['LB_5d'] != "—"].copy().sort_values('Signal', ascending=False)
