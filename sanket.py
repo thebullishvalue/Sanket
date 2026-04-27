@@ -1,6 +1,13 @@
 """
-Sanket - Market Signal Screener | A Pragyam Product Family Member
-UMA v6 Engine (Unified Market Analytics) Quantitative Signal Screener Terminal
+Sanket v2.1.0 — Market Signal Screener
+A Pragyam Product Family Member
+
+Primary entry point for the Streamlit application. Responsible for:
+  · Universe definitions and data fetching (yfinance + NSE APIs)
+  · WRCI signal computation via run_full_analysis()
+  · UMA v6 intelligence layer (MSF + MMR + Adaptive HMM)
+  · Snapshot and Range Study analysis modes
+  · Signal dashboard, timing tables, and strength tabs
 """
 
 import html
@@ -18,11 +25,11 @@ import logging
 from nsepython import nse_get_advances_declines
 from logger import console
 
-# UI — Obsidian Quant Terminal System
+# UI — Obsidian Quant Terminal design system
 from ui.theme import inject_css, apply_chart_theme, progress_bar
 import ui.components as ui
 
-# ── SVG ICON SYSTEM ────────────────────────────────────────────────────────
+# ── SVG ICON SYSTEM — inline icons, no external dependencies ────────────────
 SVGS = {
     "CHECK": '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
     "LONG": '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>',
@@ -36,10 +43,10 @@ SVGS = {
     "SETTINGS": '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>'
 }
 
-# Disable SSL warnings
+# Suppress insecure-request warnings emitted by NSE archive CSV fetches (verify=False)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Silence noisy warnings
+# Silence low-signal runtime and FutureWarning noise from pandas/numpy internals
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 np.seterr(divide="ignore", invalid="ignore")
@@ -55,7 +62,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v1.1.0"
+VERSION = "v2.1.0"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE INITIALIZATION
@@ -80,6 +87,8 @@ ui.render_theme_toggle()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS & UNIVERSE DEFINITIONS
+# All ticker maps, constituent lists, and sidebar option arrays live here.
+# Add new universes by extending the relevant *_MAP and wiring dispatch below.
 # ══════════════════════════════════════════════════════════════════════════════
 
 INDEX_LIST = [
@@ -100,7 +109,8 @@ INDEX_LIST = [
     "Benchmark Indexes",
 ]
 
-# Broad-market + sectoral index instruments (traded as tickers, not constituents)
+# Broad-market + sectoral NSE/BSE indexes traded as tickers, used when "Benchmark Indexes" is selected.
+# These are the indexes themselves — not their constituent stocks.
 BENCHMARK_INDEXES_LIST = [
     # Broad market — NSE
     "^NSEI",           # Nifty 50
@@ -178,7 +188,7 @@ WIKI_URL_MAP = {
 UNIVERSE_OPTIONS = ["India Indexes", "Global Indexes", "US Indexes", "ETF Index", "Commodities", "Currency", "Crypto", "Global Macro"]
 TIMEFRAME_OPTIONS = ["Daily", "Weekly"]
 
-# ETF Universe (from Pragyam)
+# NSE-listed ETF universe — sectoral, factor, and thematic funds
 ETF_LIST = [
     "CHEMICAL.NS", "NIFTYIETF.NS", "MON100.NS", "MAKEINDIA.NS", "SILVERIETF.NS",
     "HEALTHIETF.NS", "CONSUMIETF.NS", "GOLDIETF.NS", "INFRAIETF.NS", "CPSEETF.NS",
@@ -188,17 +198,17 @@ ETF_LIST = [
     "ECAPINSURE.NS", "MIDCAPIETF.NS", "MOSMALL250.NS", "OILIETF.NS", "METALIETF.NS"
 ]
 
-# US Index list
+# US index selector values — each maps to a Wikipedia-scraped constituent list
 US_INDEX_LIST = ["S&P 500", "DOW JONES", "NASDAQ 100"]
 
-# Hardcoded DOW 30 fallback (as of late 2024 — used only when Wikipedia is unreachable)
+# Static DOW 30 fallback (as of late 2024) — used only when the Wikipedia scrape fails
 _DOW30_FALLBACK = [
     "AAPL", "AMGN", "AMZN", "AXP", "BA",  "CAT", "CRM", "CSCO", "CVX", "DIS",
     "DOW",  "GS",   "HD",   "HON", "IBM",  "JNJ", "JPM", "KO",   "MCD", "MRK",
     "MSFT", "NKE",  "NVDA", "PG",  "SHW",  "TRV", "UNH", "V",    "VZ",  "WMT",
 ]
 
-# Commodities list (Yahoo Finance) — Expanded from Pragyam
+# Commodity futures universe — precious metals, energy complex, agricultural softs, livestock
 COMMODITY_MAP = {
     "Gold": "GC=F",
     "Silver": "SI=F",
@@ -227,7 +237,7 @@ COMMODITY_MAP = {
 }
 COMMODITY_LIST = list(COMMODITY_MAP.keys())
 
-# Currency pairs (Yahoo Finance) — Expanded from Pragyam
+# FX pairs universe — G10 majors and key EM crosses
 CURRENCY_MAP = {
     "EUR/USD": "EURUSD=X",
     "GBP/USD": "GBPUSD=X",
@@ -256,7 +266,7 @@ CURRENCY_MAP = {
 }
 CURRENCY_LIST = list(CURRENCY_MAP.keys())
 
-# Crypto universe (Yahoo Finance)
+# Digital asset universe — top 21 cryptocurrencies by market cap via Yahoo Finance
 CRYPTO_MAP = {
     "Bitcoin": "BTC-USD",
     "Ethereum": "ETH-USD",
@@ -282,7 +292,8 @@ CRYPTO_MAP = {
 }
 CRYPTO_LIST = list(CRYPTO_MAP.keys())
 
-# Global Macro Bond ETF Universe — proxy for global yield dynamics via yfinance-available instruments
+# Global Macro universe — bond ETFs, Treasury yield indices, credit instruments, and EM sovereign debt.
+# Serves dual purpose: screener universe AND macro context basket for UMA MMR regression.
 GLOBAL_MACRO_MAP = {
     # ── US Treasuries (Full Curve) ─────────────────────────────────────────────
     "US Treasury 1-3 Month":             "BIL",
@@ -365,8 +376,8 @@ GLOBAL_MACRO_MAP = {
     "Long-Term Broad Bond":              "BLV",
 }
 
-# Global Benchmark Indexes Universe — primary national equity index per country.
-# Futures proxies used where the cash index is not available on Yahoo Finance.
+# Global Indexes universe — the primary national equity benchmark for each country.
+# Futures proxies are used where the cash index has no yfinance ticker.
 GLOBAL_INDEXES_MAP = {
     # ── North America ──────────────────────────────────────────────────────────
     "S&P 500 (USA)":                     "^GSPC",
@@ -430,25 +441,35 @@ GLOBAL_INDEXES_MAP = {
     "EGX 30 (Egypt)":                    "^CASE",
 }
 
-# Asset Name Lookup for friendly display (Reverse map tickers to names)
+# Reverse-map: ticker → friendly name for display in results tables.
+# Covers Commodities, Currencies, Crypto, Global Macro, and Global Indexes.
 ASSET_NAME_LOOKUP = {v: k for k, v in {**COMMODITY_MAP, **CURRENCY_MAP, **CRYPTO_MAP, **GLOBAL_MACRO_MAP, **GLOBAL_INDEXES_MAP}.items()}
 
-# Ordered, deduplicated list of all macro context symbols used by UMA MMR regression.
-# Defined once here so both fetch_macro_context_data and run_screener_analysis share the same set.
+# Ordered, deduplicated symbol list for UMA MMR macro context (Global Macro + Commodities + Currencies).
+# Defined at module level so fetch_macro_context_data() and run_screener_analysis() share the same basket.
 _MACRO_SYM_ORDERED = list(dict.fromkeys(
     list(GLOBAL_MACRO_MAP.values()) +
     list(COMMODITY_MAP.values()) +
     list(CURRENCY_MAP.values())
 ))
-_MACRO_SYM_SET = set(_MACRO_SYM_ORDERED)
+_MACRO_SYM_SET = set(_MACRO_SYM_ORDERED)  # O(1) membership test during screener run
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DATA FETCHING FUNCTIONS
+# DATA FETCHING — UNIVERSE CONSTITUENT RESOLUTION
+# 3-source cascade: NSE JSON API → NSE Archive CSV → Wikipedia fallback
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_fno_stock_list():
-    """Fetch F&O eligible stocks from NSE with multiple fallback sources."""
+    """Fetch NSE F&O-eligible stock symbols via a 3-source fallback cascade.
+
+    Sources attempted in order:
+      1. NSE JSON API  (nseindia.com/api/equity-stockIndices)
+      2. nsepython    (nse_get_advances_declines)
+      3. NIFTY 500 CSV (archives fallback)
+
+    Returns: (list[str], str) — symbol list with .NS suffix, and a status message.
+    """
     try:
         url = "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O"
         headers = {
@@ -507,14 +528,21 @@ def get_fno_stock_list():
     return None, "Failed to fetch F&O list from all sources"
 
 
-def get_index_stock_list(index):
+def get_index_stock_list(index: str):
+    """Resolve constituent symbols for a named India index.
+
+    Short-circuits for F&O Stocks and Benchmark Indexes; all NIFTY indices
+    use the 3-source cascade (NSE API → NSE Archive CSV → Wikipedia).
+
+    Returns: (list[str], str) — symbol list with .NS suffix, and a status message.
+    """
     if index == "F&O Stocks":
         return get_fno_stock_list()
 
     if index == "Benchmark Indexes":
         return BENCHMARK_INDEXES_LIST, f"✓ Loaded {len(BENCHMARK_INDEXES_LIST)} benchmark index instruments"
 
-    # --- Source 1: NSE JSON API (most reliable, same endpoint as F&O) ---
+    # Source 1: NSE JSON API — session-warmed (same endpoint as F&O), most reliable for sectoral indices
     try:
         import urllib.parse
         api_url = f"https://www.nseindia.com/api/equity-stockIndices?index={urllib.parse.quote(index)}"
@@ -531,7 +559,7 @@ def get_index_stock_list(index):
             data = response.json()
             if 'data' in data:
                 symbols = [item['symbol'] for item in data['data'] if 'symbol' in item]
-                # Skip the first entry — it's always the index itself, not a constituent
+                # NSE API always returns the index itself as the first entry — skip it
                 symbols = [s for s in symbols[1:] if s and str(s).strip()]
                 if symbols:
                     symbols_ns = [str(s) + ".NS" for s in symbols]
@@ -539,7 +567,7 @@ def get_index_stock_list(index):
     except Exception:
         pass
 
-    # --- Source 2: NSE archives CSV ---
+    # Source 2: NSE Archive CSV — reliable for most broad-market and mid/smallcap indices
     url = INDEX_URL_MAP.get(index)
     if url:
         try:
@@ -566,7 +594,7 @@ def get_index_stock_list(index):
         except Exception:
             pass
 
-    # --- Source 3: Wikipedia fallback ---
+    # Source 3: Wikipedia — available for NIFTY 50, NEXT 50, BANK, IT, FIN SERVICE
     wiki_result = _fetch_index_from_wikipedia(index)
     if wiki_result[0]:
         return wiki_result
@@ -574,7 +602,14 @@ def get_index_stock_list(index):
     return None, f"Could not fetch constituents for '{index}'. NSE API, archive CSV, and Wikipedia all failed."
 
 
-def _fetch_index_from_wikipedia(index):
+def _fetch_index_from_wikipedia(index: str):
+    """Scrape index constituent symbols from Wikipedia as a last-resort fallback.
+
+    Searches all tables on the page for a column named 'symbol', 'ticker',
+    'nse code', or 'code', then appends .NS to each value found.
+
+    Returns: (list[str] | None, str) — symbol list or None, and a status message.
+    """
     wiki_url = WIKI_URL_MAP.get(index)
     if not wiki_url:
         return None, f"No Wikipedia fallback for {index}"
@@ -604,8 +639,14 @@ def _fetch_index_from_wikipedia(index):
         return None, f"Wikipedia fallback error: {e}"
 
 
-def _fetch_us_index_from_wikipedia(index_name):
-    """Scrape constituent tickers for a US index from Wikipedia."""
+def _fetch_us_index_from_wikipedia(index_name: str):
+    """Scrape constituent tickers for a US index from Wikipedia.
+
+    Normalises BRK.B-style dots to BRK-B (Yahoo Finance format) and drops
+    header echoes and non-ticker rows. Requires ≥ 10 symbols to be accepted.
+
+    Returns: (list[str] | None, str) — ticker list or None, and a status message.
+    """
     wiki_urls = {
         "S&P 500":    "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
         "NASDAQ 100": "https://en.wikipedia.org/wiki/Nasdaq-100",
@@ -632,7 +673,7 @@ def _fetch_us_index_from_wikipedia(index_name):
             if symbol_col is None:
                 continue
             raw = [str(s).strip() for s in table[symbol_col].dropna().tolist()]
-            # Normalise BRK.B → BRK-B style; drop header echoes and junk rows
+            # Normalise BRK.B → BRK-B (Yahoo Finance convention); strip header echoes and junk rows
             symbols = []
             for s in raw:
                 s = s.replace('.', '-')
@@ -671,8 +712,12 @@ def get_global_index_symbols():
     return symbols, f"✓ Loaded {len(symbols)} global benchmark indexes"
 
 
-def get_commodity_symbols(commodity_type=None):
-    """Get commodity futures symbols."""
+def get_commodity_symbols(commodity_type: str | None = None):
+    """Return commodity futures symbols from COMMODITY_MAP.
+
+    Pass None to get the full universe; pass a name key to get a single ticker.
+    Returns: (list[str], str) — symbol list and a status message.
+    """
     if commodity_type is None:
         return list(COMMODITY_MAP.values()), f"✓ Fetched {len(COMMODITY_MAP)} commodities"
     symbol = COMMODITY_MAP.get(commodity_type)
@@ -681,8 +726,12 @@ def get_commodity_symbols(commodity_type=None):
     return None, f"Unknown commodity: {commodity_type}"
 
 
-def get_currency_symbols(currency_pair=None):
-    """Get currency pair symbols."""
+def get_currency_symbols(currency_pair: str | None = None):
+    """Return FX pair symbols from CURRENCY_MAP.
+
+    Pass None to get the full universe; pass a pair key (e.g. 'EUR/USD') for one ticker.
+    Returns: (list[str], str) — symbol list and a status message.
+    """
     if currency_pair is None:
         return list(CURRENCY_MAP.values()), f"✓ Fetched {len(CURRENCY_MAP)} currency pairs"
     symbol = CURRENCY_MAP.get(currency_pair)
@@ -691,8 +740,12 @@ def get_currency_symbols(currency_pair=None):
     return None, f"Unknown currency pair: {currency_pair}"
 
 
-def get_crypto_symbols(crypto_name=None):
-    """Get cryptocurrency symbols."""
+def get_crypto_symbols(crypto_name: str | None = None):
+    """Return cryptocurrency symbols from CRYPTO_MAP.
+
+    Pass None to get the full universe; pass an asset name for a single ticker.
+    Returns: (list[str], str) — symbol list and a status message.
+    """
     if crypto_name is None:
         return list(CRYPTO_MAP.values()), f"✓ Fetched {len(CRYPTO_MAP)} digital assets"
     symbol = CRYPTO_MAP.get(crypto_name)
@@ -702,12 +755,31 @@ def get_crypto_symbols(crypto_name=None):
 
 
 def get_etf_symbols():
-    """Return the fixed ETF universe for analysis"""
+    """Return the fixed NSE ETF universe (30 instruments)."""
     return ETF_LIST, f"✓ Loaded {len(ETF_LIST)} ETFs"
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True):
+def fetch_batch_data(
+    stock_list: list[str],
+    end_date=None,
+    days_back: int = 300,
+    include_live: bool = True,
+) -> tuple[dict | None, str]:
+    """Download OHLCV history for a list of tickers via yfinance batch download.
+
+    If today's candle is missing from the historic feed (i.e. market is open or
+    yfinance hasn't updated yet), a live 1-day quote is appended automatically.
+
+    Args:
+        stock_list:   List of Yahoo Finance ticker strings.
+        end_date:     Last date to include (defaults to today).
+        days_back:    Number of calendar days to fetch before end_date.
+        include_live: Whether to attempt a live-quote append for today.
+
+    Returns:
+        (dict[str, DataFrame] | None, str) — per-ticker DataFrames and a status message.
+    """
     if end_date is None:
         end_date = datetime.date.today()
     
@@ -773,6 +845,11 @@ def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True
 
 
 def resample_to_weekly(df):
+    """Resample a daily OHLCV DataFrame to weekly bars (Friday close).
+
+    Uses pandas W-FRI anchor: Open = first, High = max, Low = min,
+    Close = last, Volume = sum over the week. Empty rows are dropped.
+    """
     if df is None or df.empty:
         return df
     df = df.copy()
@@ -787,17 +864,24 @@ def resample_to_weekly(df):
     return weekly
 
 # ══════════════════════════════════════════════════════════════════════════════
-# WRCI ENGINE: WAVE-REGIME COMPOSITE INDEX CALCULATION
+# WRCI ENGINE — WAVE-REGIME COMPOSITE INDEX
+# Composite oscillator: WaveTrend cycle + HMA-normalized trend count.
+# Outputs Unified_Osc, Signal_Line, WT1, Norm_Trend, and three signal condition sets.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def calculate_wma(series, length):
+def calculate_wma(series, length: int):
+    """Linearly-weighted moving average (WMA) of a pandas Series."""
     if length <= 1:
         return series
     weights = np.arange(1, length + 1)
-    return series.rolling(window=length).apply(lambda vars: np.dot(vars, weights) / weights.sum(), raw=True)
+    return series.rolling(window=length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
 
 
-def calculate_hma(series, length):
+def calculate_hma(series, length: int):
+    """Hull Moving Average — reduces WMA lag via a square-root-length final smoothing pass.
+
+    HMA(n) = WMA(2 * WMA(n/2) − WMA(n), sqrt(n))
+    """
     if length <= 1:
         return series
     half_length = int(length / 2)
@@ -808,14 +892,45 @@ def calculate_hma(series, length):
     return calculate_wma(diff, sqrt_length)
 
 
-def calculate_trend_count(series, length):
+def calculate_trend_count(series, length: int):
+    """Directional trend count over `length` lookback bars.
+
+    For each lag i in [1, length]: adds +1 if series[t] > series[t-i], else -1.
+    Result ranges from -length to +length, normalised to ±100 downstream (Norm_Trend).
+    """
     trend = pd.Series(0.0, index=series.index)
     for i in range(1, length + 1):
         trend += np.where(series > series.shift(i), 1, -1)
     return trend
 
 
-def run_full_analysis(df, reg_len=20, wt_n1=10, wt_n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40):
+def run_full_analysis(
+    df,
+    reg_len: int = 20,
+    wt_n1: int = 10,
+    wt_n2: int = 21,
+    obLevel1: float = 80,
+    obLevel2: float = 40,
+    osLevel1: float = -80,
+    osLevel2: float = -40,
+):
+    """Compute the WRCI composite oscillator and all signal condition columns.
+
+    Adds the following columns to `df` (in place via assignment):
+      Unified_Osc   — composite line: (WT1 + Norm_Trend) / 2
+      Signal_Line   — 4-period rolling mean of Unified_Osc
+      WT1           — raw WaveTrend cycle value
+      Norm_Trend    — HMA-based directional count normalised to ±100
+      long_cond     — Set A: composite crosses above signal line (anywhere)
+      short_cond    — Set A: composite crosses below signal line (anywhere)
+      long_cond_comp  — Set B: upward crossover inside oversold zone (< osLevel2)
+      short_cond_comp — Set B: downward crossover inside overbought zone (> obLevel2)
+      long_cond_wt    — Set C: composite freshly enters OS zone with signal-line above
+      short_cond_wt   — Set C: composite freshly enters OB zone with signal-line below
+      Condition     — zone label: OB Extreme / OB / OS / OS Extreme / Neutral
+
+    Returns: df with new columns added.
+    """
     hlc3 = (df['High'] + df['Low'] + df['Close']) / 3.0
     hma_p = calculate_hma(hlc3, 15)
     hma_v = calculate_hma(df['Volume'], 15)
@@ -840,15 +955,15 @@ def run_full_analysis(df, reg_len=20, wt_n1=10, wt_n2=21, obLevel1=80, obLevel2=
     df['WT1'] = wt1
     df['Norm_Trend'] = norm_trend
     
-    # Set A: Momentum — crossover anywhere (used by Range Study)
+    # Set A — Momentum Crossover: composite crosses signal line anywhere in the oscillator range
     df['long_cond'] = (composite_line > composite_signal) & (composite_line.shift(1) <= composite_signal.shift(1))
     df['short_cond'] = (composite_line < composite_signal) & (composite_line.shift(1) >= composite_signal.shift(1))
 
-    # Set B: Crossover — line crosses signal inside an extreme zone
+    # Set B — Crossover-in-Zone: composite crosses signal line while inside an OB/OS extreme zone
     df['long_cond_comp'] = (composite_line < composite_signal) & (composite_line.shift(1) >= composite_signal.shift(1)) & (composite_line < osLevel2)
     df['short_cond_comp'] = (composite_line > composite_signal) & (composite_line.shift(1) <= composite_signal.shift(1)) & (composite_line > obLevel2)
 
-    # Set C: Threshold — freshly entering OS/OB zone with signal-line validation
+    # Set C — Threshold Entry: composite freshly crosses the ±40 boundary; signal line stays outside the zone
     df['long_cond_wt'] = (composite_line < osLevel2) & (composite_line.shift(1) >= osLevel2) & (composite_signal > osLevel2)
     df['short_cond_wt'] = (composite_line > obLevel2) & (composite_line.shift(1) <= obLevel2) & (composite_signal < obLevel2)
 
@@ -861,20 +976,26 @@ def run_full_analysis(df, reg_len=20, wt_n1=10, wt_n2=21, obLevel1=80, obLevel2=
     return df
 
 # ══════════════════════════════════════════════════════════════════════════════
-# UMA v6 ENGINE — Unified Market Analysis (Python Port)
-# Signals: Conf Bull / Conf Bear / Bull Div / Bear Div — info flag only
-# MMR macro context: Global Macro + Commodities + Currency universes
+# UMA v6 ENGINE — Unified Market Analytics
+# Three-pillar intelligence layer (read-only context flags, not screener ranking):
+#   MSF  Momentum Structure Flow — 6-component composite oscillator
+#   MMR  Macro Multiple Regression — Gram-Schmidt top-3 macro factor regression
+#   HMM  Adaptive Hidden Markov Model — Bullish / Neutral / Bearish regime state
+# Output: compute_uma_flags() → "Conf Bull" | "Conf Bear" | "Bull Div" | "Bear Div" | "—"
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _uma_zscore(series, length, clip=3.0):
+    """Rolling z-score, population std, clipped to ±`clip` and NaN-filled to 0."""
     mean = series.rolling(length).mean()
     std  = series.rolling(length).std(ddof=0).replace(0.0, np.nan)
     return ((series - mean) / std).clip(-clip, clip).fillna(0.0)
 
 def _uma_sigmoid(z, scale=1.5):
+    """Scaled sigmoid mapping: maps z → (−1, +1) with configurable slope."""
     return 2.0 / (1.0 + np.exp((-z / scale).clip(-20, 20))) - 1.0
 
 def _uma_atr(df, n):
+    """EMA-smoothed Average True Range over `n` spans."""
     prev = df['Close'].shift(1)
     tr   = pd.concat([df['High'] - df['Low'],
                       (df['High'] - prev).abs(),
@@ -885,12 +1006,24 @@ def _compute_msf(df, length=20, roc_len=14, wt_ch=10, wt_avg=21,
                  ent_lb=50, ent_damp=0.25,
                  h_short=10, h_long=50, h_sample=100, h_inf=0.3,
                  vol_s=5, vol_l=20, vol_damp=0.15, clip=3.0):
-    """MSF — Momentum Structure Flow.  Returns (msf_signal, wt1) as pd.Series."""
+    """MSF — Momentum Structure Flow. Computes a 6-component composite signal.
+
+    Components:
+      1. ROC Momentum       — z-scored rate-of-change, sigmoid-mapped
+      2. Microstructure     — volume-weighted open-to-midpoint vs. 5-bar drift
+      3. Composite Trend    — 4-sub-component normalised trend (MA spread, acceleration, ATR, price-to-MA)
+      4. Accum/Distribution — rolling money-flow partitioned by up/down closes
+      5. Permutation Entropy — order-3 pattern entropy dampener (reduces weight in choppy regimes)
+      6. Hurst Regime Weight — variance-ratio Hurst exponent tilts component weights
+      + Volatility Damper   — ATR VoV + VTS dampen signal amplitude during noisy periods
+
+    Returns: (msf_signal, wt1) as a tuple of pd.Series, both clipped to [−1, +1].
+    """
     close  = df['Close']
     high   = df['High']
     low    = df['Low']
     volume = df['Volume'].copy().fillna(0)
-    # Guard: instruments with no volume (yield indices, some ETFs)
+    # Guard: some yield indices and ETFs report zero volume — replace with the median to avoid division errors
     med_v = volume.median()
     volume = volume.replace(0, med_v if med_v > 0 else 1.0)
 
@@ -973,8 +1106,19 @@ def _compute_msf(df, length=20, roc_len=14, wt_ch=10, wt_avg=21,
 
 
 def _compute_mmr(close_y, macro_dict, length_reg=20, lookback_corr=200):
-    """MMR — Macro Multiple Regression (Gram-Schmidt orthogonalized, top-3 vars).
-    Returns (mmr_signal, model_r2) as pd.Series.
+    """MMR — Macro Multiple Regression with Gram-Schmidt orthogonalization.
+
+    Selects the top 3 macro factors by absolute correlation with `close_y` over
+    the last `lookback_corr` bars, orthogonalizes them via Gram-Schmidt, then
+    fits a rolling OLS regression to extract the idiosyncratic residual signal.
+
+    Args:
+        close_y:       Target asset close price series.
+        macro_dict:    Dict of {symbol: close_series} for macro context instruments.
+        length_reg:    Rolling regression window length.
+        lookback_corr: Lookback for correlation ranking.
+
+    Returns: (mmr_signal, model_r2) as pd.Series — both indexed to close_y.
     """
     if len(close_y) < lookback_corr + length_reg or not macro_dict:
         return pd.Series(0.0, index=close_y.index), pd.Series(0.0, index=close_y.index)
@@ -999,6 +1143,7 @@ def _compute_mmr(close_y, macro_dict, length_reg=20, lookback_corr=200):
     xs = [s.reindex(close_y.index).ffill().bfill()
           for _, s in sorted(ranked, reverse=True)[:3]]
 
+    # Rolling variance and covariance helpers for the Gram-Schmidt orthogonalization step
     def _var(s):    return s.rolling(length_reg).var(ddof=0).replace(0, np.nan)
     def _cov(a, b): return ((a * b).rolling(length_reg).mean()
                              - a.rolling(length_reg).mean() * b.rolling(length_reg).mean())
@@ -1031,8 +1176,13 @@ def _compute_mmr(close_y, macro_dict, length_reg=20, lookback_corr=200):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_macro_context_data(end_date=None, days_back=350):
-    """Pre-fetch close series for Global Macro + Commodities + Currency universes.
-    Cached 5 min; called once per screener run, reused for all symbols.
+    """Pre-fetch Close series for the full UMA MMR macro context basket.
+
+    Covers Global Macro + Commodities + Currency (_MACRO_SYM_ORDERED).
+    Cached for 5 minutes; intended to be called once per screener run and
+    reused across all symbols to avoid redundant network requests.
+
+    Returns: dict[str, pd.Series] — ticker → Close series.
     """
     if end_date is None:
         end_date = datetime.date.today()
@@ -1041,9 +1191,14 @@ def fetch_macro_context_data(end_date=None, days_back=350):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _fetch_remaining_macro_context(syms_tuple, end_date, days_back=350):
-    """Fetch close series for macro symbols not already present in the screener data_dict.
-    Accepts a tuple (hashable) so Streamlit can cache the result per unique symbol subset.
+def _fetch_remaining_macro_context(syms_tuple: tuple, end_date, days_back: int = 350):
+    """Fetch Close series for macro symbols absent from the current screener data_dict.
+
+    Called once per run after reusing overlapping symbols already downloaded for
+    the screener universe (e.g. Commodities, Currency, Global Macro universes).
+    Accepts a tuple (not list) so Streamlit's cache can hash the argument.
+
+    Returns: dict[str, pd.Series] — ticker → Close series for missing symbols only.
     """
     if not syms_tuple:
         return {}
@@ -1051,26 +1206,31 @@ def _fetch_remaining_macro_context(syms_tuple, end_date, days_back=350):
     return {sym: df['Close'] for sym, df in data.items()} if data else {}
 
 
-def compute_uma_flags(df, macro_dict, ticker=''):
-    """Compute UMA v6 info flags for the latest bar.
+def compute_uma_flags(df, macro_dict: dict, ticker: str = '') -> str:
+    """Compute the UMA v6 read-only context flag for the latest bar.
 
-    Priority: Conf Bull > Conf Bear > Bull Div > Bear Div > —
-    Definitions (direct port from Pine Script Section 10):
-      bull_div      = osc_rising  AND price_falling AND unified_osc < -5
-      bear_div      = osc_falling AND price_rising  AND unified_osc >  5
-      conf_bull     = signal_agreement > 0.3        AND unified_osc < -5
-      conf_bear     = signal_agreement > 0.3        AND unified_osc >  5
+    Runs MSF + MMR on a sliding window of up to 300 bars, then evaluates four
+    signal conditions in priority order: Conf Bull > Conf Bear > Bull Div > Bear Div.
+
+    Condition definitions:
+      Conf Bull  — MSF × MMR agreement > 0.3  AND  unified_osc < −5
+      Conf Bear  — MSF × MMR agreement > 0.3  AND  unified_osc >  +5
+      Bull Div   — oscillator rising AND price falling AND unified_osc < −5
+      Bear Div   — oscillator falling AND price rising AND unified_osc >  +5
+
+    Returns: One of "Conf Bull", "Conf Bear", "Bull Div", "Bear Div", or "—".
     """
     try:
         if len(df) < 50:
             return "—"
 
+        # Exclude the ticker itself from its own macro regression to avoid look-ahead circularity
         macro_filtered = {k: v for k, v in macro_dict.items() if k != ticker}
 
         msf, _  = _compute_msf(df)
         mmr, r2 = _compute_mmr(df['Close'], macro_filtered)
 
-        # Adaptive signal integration
+        # Adaptive signal integration — weight MSF and MMR by confidence-scaled evidence strength
         msf_c = msf.abs() ** 1.5
         mmr_c = (mmr.abs() * r2.clip(0) ** 0.5) ** 1.5
         c_sum = msf_c + mmr_c + 1e-6
@@ -1081,7 +1241,7 @@ def compute_uma_flags(df, macro_dict, ticker=''):
         agreement = msf * mmr
         osc       = unified * 10.0
 
-        # Latest and previous bar reads
+        # Snapshot latest and previous bar for momentum direction and zone checks
         uo, uo_p = float(osc.iloc[-1]), float(osc.iloc[-2])
         sa        = float(agreement.iloc[-1])
         pr, pr_p  = float(df['Close'].iloc[-1]), float(df['Close'].iloc[-2])
@@ -1101,11 +1261,19 @@ def compute_uma_flags(df, macro_dict, ticker=''):
         return "—"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REGIME INTELLIGENCE ENGINE (NIRNAY FEATURES)
+# REGIME INTELLIGENCE ENGINE
+# Used by Range Study mode to classify the market environment over time.
+# Components: AdaptiveHMM · GARCHDetector · CUSUMDetector · AdaptiveKalmanFilter
+# Output columns: Regime, HMM_Bull, HMM_Bear, Vol_Regime, Change_Point, Confidence
 # ══════════════════════════════════════════════════════════════════════════════
 
 class AdaptiveHMM:
-    """Hidden Markov Model for regime state discovery - classifies WRCI signals"""
+    """Online Gaussian Hidden Markov Model for market regime classification.
+
+    Three states: 0 = Bullish, 1 = Neutral, 2 = Bearish.
+    Emission parameters (means and stds) are updated incrementally from recent
+    observations to adapt to changing market volatility distributions.
+    """
     
     def __init__(self):
         self.n_states = 3
@@ -1158,7 +1326,12 @@ class AdaptiveHMM:
 
 
 class GARCHDetector:
-    """GARCH-inspired volatility regime detection for WRCI signal variance"""
+    """GARCH(1,1)-inspired incremental volatility regime detector.
+
+    Tracks current conditional variance and classifies it into:
+    LOW (< 0.6×long-term), NORMAL, HIGH (1.0–1.4×), EXTREME (> 1.4×).
+    Each regime returns a corresponding signal-scaling multiplier.
+    """
     
     def __init__(self):
         self.current_variance = 0.04
@@ -1200,7 +1373,11 @@ class GARCHDetector:
 
 
 class CUSUMDetector:
-    """CUSUM change point detection for WRCI signal regime shifts"""
+    """CUSUM (Cumulative Sum) change-point detector for regime-shift identification.
+
+    Maintains two running sums (positive and negative deviations from the mean);
+    a change point is flagged and both accumulators reset when either exceeds `threshold`.
+    """
     
     def __init__(self, threshold=4.0, drift=0.5):
         self.threshold = threshold
@@ -1238,7 +1415,11 @@ class CUSUMDetector:
 
 
 class AdaptiveKalmanFilter:
-    """Kalman filter for WRCI signal smoothing"""
+    """Scalar adaptive Kalman filter for real-time signal smoothing.
+
+    Measurement variance is updated online from the rolling innovation history,
+    allowing the filter to adapt its responsiveness to changing signal noise levels.
+    """
     
     def __init__(self, process_var=0.01, measurement_var=0.1):
         self.estimate = 0.0
@@ -1272,7 +1453,14 @@ class AdaptiveKalmanFilter:
 
 
 def run_regime_analysis(df):
-    """Apply Regime Intelligence to WRCI-computed dataframe"""
+    """Run the full Regime Intelligence pipeline on a WRCI-computed DataFrame.
+
+    Applies AdaptiveHMM + GARCHDetector + CUSUMDetector + AdaptiveKalmanFilter
+    bar-by-bar across the full history. Adds columns:
+      Regime, HMM_Bull, HMM_Bear, Vol_Regime, Change_Point, Confidence.
+
+    Used exclusively by the Range Study mode (not the Snapshot screener).
+    """
     hmm = AdaptiveHMM()
     garch = GARCHDetector()
     cusum = CUSUMDetector()
@@ -1334,7 +1522,12 @@ def run_regime_analysis(df):
 
 
 def calculate_divergences(df):
-    """Calculate bullish and bearish divergences for WRCI signals"""
+    """Add bar-by-bar divergence flags to a WRCI-computed DataFrame.
+
+    Bullish Div: oscillator rising while price falls AND oscillator < −5.
+    Bearish Div: oscillator falling while price rises AND oscillator > +5.
+    Used by the Range Study mode alongside run_regime_analysis().
+    """
     osc_rising = df['Unified_Osc'] > df['Unified_Osc'].shift(1)
     price_falling = df['Close'] < df['Close'].shift(1)
     osc_falling = df['Unified_Osc'] < df['Unified_Osc'].shift(1)
@@ -1346,12 +1539,7 @@ def calculate_divergences(df):
     return df
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DATA HANDLING & UTILITIES
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# UI HELPER FUNCTIONS
+# UI HELPER FUNCTIONS — FOOTER, LANDING PAGE, SIGNAL CARDS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def render_footer():
@@ -1438,10 +1626,14 @@ def render_landing_page():
     """, unsafe_allow_html=True)
 
 
-def get_signal_strength_score(row):
-    """Calculate signal strength from magnitude with diminishing returns above 50.
+def get_signal_strength_score(row: dict) -> float:
+    """Map raw oscillator magnitude to a 0–100 strength score.
 
-    Returns: Strength score (0-100) where magnitude 0-50 = linear, >50 = diminishing returns.
+    Linear up to magnitude 50; diminishing returns above 50 (each additional
+    unit of magnitude contributes 0.5 instead of 1.0) to prevent outliers from
+    dominating sorted rankings.
+
+    Returns: float in [0, 100].
     """
     base_score = abs(row.get('Signal', 0))
     if base_score > 50:
@@ -1449,17 +1641,27 @@ def get_signal_strength_score(row):
     return min(100, base_score)
 
 
-def render_signal_detail_card(symbol, price, signal_val, trend_val, zone, signal_type, rsi_val, osc_val, zscore_val, ma_count):
-    """Render detailed signal card with strength indicator and technical confirmations.
+def render_signal_detail_card(
+    symbol: str,
+    price: float,
+    signal_val: float,
+    trend_val: float,
+    zone: str,
+    signal_type: str,
+    rsi_val,
+    osc_val: float,
+    zscore_val: float,
+    ma_count,
+) -> None:
+    """Render a glassmorphism signal card for a single asset.
 
-    Displays signal magnitude, trend direction, zone status, and technical confirmations
-    (RSI levels, oscillator state) to provide comprehensive signal context.
-
-    Returns: Renders to Streamlit; no return value.
+    Displays signal strength badge, signal type, trend label, zone, MA alignment,
+    and raw oscillator + RSI chips. Strength is derived via get_signal_strength_score().
+    Renders directly to Streamlit; returns None.
     """
     signal_strength = get_signal_strength_score({'Signal': signal_val})
 
-    # Determine signal quality
+    # Map strength score to a quality label and colored dot icon
     if signal_strength >= 65:
         icon = SVGS["DOT"].replace('currentColor', 'var(--emerald)')
         label = "Strong"
@@ -1473,7 +1675,7 @@ def render_signal_detail_card(symbol, price, signal_val, trend_val, zone, signal
         icon = SVGS["DOT"].replace('currentColor', 'var(--rose)')
         label = "Very Weak"
 
-    # Technical confirmation indicators
+    # Build RSI confirmation chip (Overbought / Oversold / Neutral)
     confirmations = []
     if pd.notna(rsi_val):
         if rsi_val > 70:
@@ -1542,12 +1744,20 @@ def render_signal_detail_card(symbol, price, signal_val, trend_val, zone, signal
     """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# UI COMPONENTS & SIDEBAR
+# SIDEBAR — CONTROLS & SYSTEM SPEC CARD
 # ══════════════════════════════════════════════════════════════════════════════
 
 def render_sidebar():
+    """Render the full sidebar: masthead, timeframe, universe, date controls, and run button.
+
+    WRCI engine parameters (reg_len, wt_n1, wt_n2, OB/OS levels) are hardcoded
+    here rather than exposed to the user — change defaults in the body below.
+
+    Returns: tuple of (universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2,
+             levels_tuple, timeframe, analysis_mode, start_date_hist, end_date_hist, run_clicked).
+    """
     with st.sidebar:
-        # Centered Masthead
+        # ── Masthead ─────────────────────────────────────────────────────────
         st.markdown("""
         <div style="text-align:center; padding:0.75rem 0 1.5rem 0;">
             <div style="font-family:var(--display); font-size:1.5rem; font-weight:800; color:var(--amber); letter-spacing:-0.02em;">SANKET</div>
@@ -1556,13 +1766,13 @@ def render_sidebar():
         """, unsafe_allow_html=True)
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-        # Analysis Depth
+        # ── Analysis Depth — Daily or Weekly candle resolution ───────────────
         st.markdown('<div class="sidebar-title">Analysis Depth</div>', unsafe_allow_html=True)
         timeframe = st.radio("Timeframe", TIMEFRAME_OPTIONS, horizontal=True, label_visibility="collapsed")
         
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-        # Universe Selection
+        # ── Universe Selection ────────────────────────────────────────────────
         st.markdown('<div class="sidebar-title">Universe Selection</div>', unsafe_allow_html=True)
         universe = st.selectbox("Universe", UNIVERSE_OPTIONS, label_visibility="collapsed")
         selected_index = None
@@ -1586,7 +1796,7 @@ def render_sidebar():
 
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-        # Temporal Range Section
+        # ── Temporal Range — Snapshot (single date) or Range Study ─────────────
         st.markdown('<div class="sidebar-title">Temporal Range</div>', unsafe_allow_html=True)
         analysis_mode = st.radio("Mode", ["Snapshot", "Range Study"], horizontal=True, label_visibility="collapsed")
 
@@ -1599,18 +1809,18 @@ def render_sidebar():
             with col_date1: start_date_hist = st.date_input("Start", datetime.date.today() - datetime.timedelta(days=300), label_visibility="collapsed")
             with col_date2: end_date_hist = st.date_input("End", datetime.date.today(), label_visibility="collapsed")
 
-        # WRCI Engine — hardcoded defaults
+        # ── WRCI Engine parameters — hardcoded defaults (not user-exposed) ──────
         reg_len, wt_n1, wt_n2 = 20, 10, 21
         obLevel1, obLevel2, osLevel1, osLevel2 = 80, 40, -80, -40
 
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-        # Run Button
+        # ── Run Button ────────────────────────────────────────────────────────
         run_clicked = st.button("◈ RUN SCREENER", type="primary", width='stretch', use_container_width=True)
 
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-        # System Spec Card
+        # ── System Spec Card — shows selected configuration summary ─────────────
         try:
             if universe == "India Indexes" and selected_index:
                 symbols_count = len(get_index_stock_list(selected_index)[0] or [])
@@ -1653,16 +1863,32 @@ def render_sidebar():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN SCREENER FUNCTION
+# SNAPSHOT SCREENER — run_screener_analysis()
+# Executes the full WRCI + UMA v6 pipeline for a single date across all symbols.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe):
-    """Execute WRCI momentum analysis on universe symbols and return ranked signals.
+def run_screener_analysis(
+    universe: str,
+    selected_index: str,
+    analysis_date,
+    reg_len: int,
+    wt_n1: int,
+    wt_n2: int,
+    levels: tuple,
+    timeframe: str,
+):
+    """Run the full WRCI + UMA v6 pipeline for a single analysis date.
 
-    Fetches market data for universe, computes Wave Trend oscillations, calculates
-    signal magnitude and trend values, detects overbought/oversold zones.
+    Phases:
+      1. Data Acquisition  — fetch OHLCV for the selected universe
+      2. UMA v6 Analysis   — WRCI computation → UMA flags → signal classification
 
-    Returns: DataFrame with signals ranked by magnitude, or None on error.
+    Macro context (for UMA MMR) is assembled by reusing already-downloaded series
+    where possible, then fetching only the missing symbols via _fetch_remaining_macro_context().
+
+    Returns: pd.DataFrame with one row per symbol (ranked by |Signal|), or None on error.
+    Signals are ranked by magnitude; an empty DataFrame (correct columns) is returned
+    when no symbols meet the minimum data requirement.
     """
     obLevel1, obLevel2, osLevel1, osLevel2 = levels
     progress_slot = st.empty()
@@ -1723,10 +1949,9 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
     progress_bar(progress_slot, 20, "Analyzing UMA v6 momentum", f"{len(data_dict)} stocks")
 
-    # Pre-fetch macro context once for UMA MMR (cached; reused across all symbols).
-    # Symbols already downloaded for the screener universe are reused directly from
-    # data_dict to avoid a redundant network round-trip (e.g. when universe is
-    # Commodities, Currency, or Global Macro all those tickers are already in data_dict).
+    # Assemble UMA MMR macro context — reuse already-fetched symbols from data_dict,
+    # then fetch only what's missing. Avoids up to 113 redundant downloads when the
+    # screener universe overlaps with the macro basket (Commodities, Currency, Global Macro).
     _from_dict = {sym: data_dict[sym]['Close'] for sym in _MACRO_SYM_SET if sym in data_dict}
     _missing = tuple(sym for sym in _MACRO_SYM_ORDERED if sym not in data_dict)
     console.section("UMA v6 Macro Context")
@@ -1762,7 +1987,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
             df = run_full_analysis(df, reg_len, wt_n1, wt_n2, obLevel1, obLevel2, osLevel1, osLevel2)
 
-            # Sample at analysis_date or last available
+            # Locate the target date row; fall back to the most recent bar if exact date is absent
             df.index = pd.to_datetime(df.index)
             target_dt = pd.to_datetime(analysis_date)
 
@@ -1774,32 +1999,32 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             if idx_pos < 5:
                 continue
 
-            # Get historical signals for tracking (Today, 1d, 2d, 3d, Within 5d)
+            # Grab the last 5 bars up to and including the target date for age-bucket tracking
             sample_range = df.iloc[max(0, idx_pos - 5) : idx_pos + 1]
 
             last_row = df.iloc[idx_pos]
 
-            # Build Signal String — priority: Set B > Set C > Set A > Zone
+            # Build Signal String — priority: Set B > Set A > Set C > Zone
             signal_type = "Neutral"
             if last_row['long_cond_comp']:
                 signal_type = "Long Crossover"
             elif last_row['short_cond_comp']:
                 signal_type = "Short Crossover"
-            elif last_row['long_cond_wt']:
-                signal_type = "Long Threshold"
-            elif last_row['short_cond_wt']:
-                signal_type = "Short Threshold"
             elif last_row['long_cond']:
                 signal_type = "Long Momentum"
             elif last_row['short_cond']:
                 signal_type = "Short Momentum"
+            elif last_row['long_cond_wt']:
+                signal_type = "Long Threshold"
+            elif last_row['short_cond_wt']:
+                signal_type = "Short Threshold"
             elif last_row['Condition'] != 'Neutral':
                 signal_type = last_row['Condition']
 
-            # UMA v6 info flag (pure read-only signal context, not screener logic)
+            # UMA v6 flag — read-only context annotation; does not influence signal ranking or sort order
             uma_flag = compute_uma_flags(df.iloc[:idx_pos + 1].tail(300), macro_context, ticker=ticker)
 
-            # Clean display names
+            # Build display name: friendly name from ASSET_NAME_LOOKUP if available, else stripped ticker
             simple_name = ticker.replace(".NS", "").lstrip("^")
             friendly_name = ASSET_NAME_LOOKUP.get(ticker)
             if friendly_name:
@@ -1807,7 +2032,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             else:
                 display_name = simple_name
 
-            # Calculate % change from previous close (day-over-day)
+            # Day-over-day % change from the immediately preceding close bar
             prev_close = df.iloc[idx_pos - 1]['Close'] if idx_pos > 0 else last_row['Close']
             pct_change = ((last_row['Close'] - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
 
@@ -1822,57 +2047,57 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "SignalType": signal_type,
                 "Price": round(last_row['Close'], 2),
                 "PctChange": round(pct_change, 2),
-                # Set C: Momentum — Historical Long Signals (kept for Range Study compat)
+                # Set A columns — Momentum Crossover history (long): kept for Range Study compatibility
                 "L_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
                 "L_1d": "●" if sample_range.iloc[-2]['long_cond'] else "—",
                 "L_2d": "●" if sample_range.iloc[-3]['long_cond'] else "—",
                 "L_3d": "●" if sample_range.iloc[-4]['long_cond'] else "—",
                 "L_5d": "●" if sample_range.tail(5)['long_cond'].any() else "—",
-                # Set C: Momentum — Historical Short Signals
+                # Set A columns — Momentum Crossover history (short)
                 "S_Today": "●" if sample_range.iloc[-1]['short_cond'] else "—",
                 "S_1d": "●" if sample_range.iloc[-2]['short_cond'] else "—",
                 "S_2d": "●" if sample_range.iloc[-3]['short_cond'] else "—",
                 "S_3d": "●" if sample_range.iloc[-4]['short_cond'] else "—",
                 "S_5d": "●" if sample_range.tail(5)['short_cond'].any() else "—",
-                # Set A: Momentum — Historical Long Signals
+                # Set A (LA_) — Momentum Crossover long history
                 "LA_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
                 "LA_1d": "●" if sample_range.iloc[-2]['long_cond'] else "—",
                 "LA_2d": "●" if sample_range.iloc[-3]['long_cond'] else "—",
                 "LA_3d": "●" if sample_range.iloc[-4]['long_cond'] else "—",
                 "LA_5d": "●" if sample_range.tail(5)['long_cond'].any() else "—",
-                # Set A: Momentum — Historical Short Signals
+                # Set A (SA_) — Momentum Crossover short history
                 "SA_Today": "●" if sample_range.iloc[-1]['short_cond'] else "—",
                 "SA_1d": "●" if sample_range.iloc[-2]['short_cond'] else "—",
                 "SA_2d": "●" if sample_range.iloc[-3]['short_cond'] else "—",
                 "SA_3d": "●" if sample_range.iloc[-4]['short_cond'] else "—",
                 "SA_5d": "●" if sample_range.tail(5)['short_cond'].any() else "—",
-                # Set B: Crossover — Historical Long Signals
+                # Set B (LB_) — Crossover-in-Zone long history
                 "LB_Today": "●" if sample_range.iloc[-1]['long_cond_comp'] else "—",
                 "LB_1d": "●" if sample_range.iloc[-2]['long_cond_comp'] else "—",
                 "LB_2d": "●" if sample_range.iloc[-3]['long_cond_comp'] else "—",
                 "LB_3d": "●" if sample_range.iloc[-4]['long_cond_comp'] else "—",
                 "LB_5d": "●" if sample_range.tail(5)['long_cond_comp'].any() else "—",
-                # Set B: Crossover — Historical Short Signals
+                # Set B (SB_) — Crossover-in-Zone short history
                 "SB_Today": "●" if sample_range.iloc[-1]['short_cond_comp'] else "—",
                 "SB_1d": "●" if sample_range.iloc[-2]['short_cond_comp'] else "—",
                 "SB_2d": "●" if sample_range.iloc[-3]['short_cond_comp'] else "—",
                 "SB_3d": "●" if sample_range.iloc[-4]['short_cond_comp'] else "—",
                 "SB_5d": "●" if sample_range.tail(5)['short_cond_comp'].any() else "—",
-                # Set C: Threshold — Historical Long Signals
+                # Set C (LC_) — Threshold Entry long history
                 "LC_Today": "●" if sample_range.iloc[-1]['long_cond_wt'] else "—",
                 "LC_1d": "●" if sample_range.iloc[-2]['long_cond_wt'] else "—",
                 "LC_2d": "●" if sample_range.iloc[-3]['long_cond_wt'] else "—",
                 "LC_3d": "●" if sample_range.iloc[-4]['long_cond_wt'] else "—",
                 "LC_5d": "●" if sample_range.tail(5)['long_cond_wt'].any() else "—",
-                # Set C: Threshold — Historical Short Signals
+                # Set C (SC_) — Threshold Entry short history
                 "SC_Today": "●" if sample_range.iloc[-1]['short_cond_wt'] else "—",
                 "SC_1d": "●" if sample_range.iloc[-2]['short_cond_wt'] else "—",
                 "SC_2d": "●" if sample_range.iloc[-3]['short_cond_wt'] else "—",
                 "SC_3d": "●" if sample_range.iloc[-4]['short_cond_wt'] else "—",
                 "SC_5d": "●" if sample_range.tail(5)['short_cond_wt'].any() else "—",
-                # UMA v6 info flag
+                # UMA v6 context flag (Conf Bull | Conf Bear | Bull Div | Bear Div | —)
                 "UMAFlag": uma_flag,
-                # Additional fields for detail cards
+                # Auxiliary fields for signal detail cards
                 "Osc_Value": round(last_row.get('Unified_Osc', 0), 2),
                 "MA_Alignment": 5,  # Placeholder
                 "ZScore_Value": 0,  # Placeholder
@@ -1902,7 +2127,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     if not results:
         st.warning("No stocks met the analysis criteria.")
-        # Return empty DataFrame with expected columns to prevent downstream KeyErrors
+        # Return a correctly-shaped empty DataFrame so downstream tab rendering never hits KeyErrors
         expected_cols = [
             "Symbol", "DisplayName", "SimpleName", "Signal", "Trend", "Wave", "Zone", "SignalType", "Price", "PctChange",
             "L_Today", "L_1d", "L_2d", "L_3d", "L_5d", "S_Today", "S_1d", "S_2d", "S_3d", "S_5d",
@@ -1917,13 +2142,26 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     return results_df
 
 
-def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe):
-    """Execute WRCI analysis across historical date range for signal evolution tracking.
+def run_timeseries_analysis(
+    universe: str,
+    selected_index: str,
+    start_date,
+    end_date,
+    reg_len: int,
+    wt_n1: int,
+    wt_n2: int,
+    levels: tuple,
+    timeframe: str,
+):
+    """Run the WRCI + Regime Intelligence pipeline across a multi-date range.
 
-    Differs from run_screener_analysis: processes 500+ days of history to detect
-    signal emergence, persistence, and fade patterns over time for timeline visualization.
+    Unlike run_screener_analysis (single date), this function processes 500+ days
+    of history per symbol to track signal emergence, persistence, divergences, and
+    regime transitions over time. Results are aggregated and rendered as four tabs:
+      Signal Dashboard · Transaction Dynamics · Regime Analysis · Data Terminal.
 
-    Returns: Dict with per-date results for historical signal tracking.
+    Outputs regime intelligence columns (HMM_Bull, HMM_Bear, Vol_Regime, etc.) via
+    run_regime_analysis() and calculate_divergences().  Renders directly into Streamlit.
     """
     progress_slot = st.empty()
     progress_bar(progress_slot, 5, "Fetching historical depth", f"Date range: {start_date} to {end_date}")
@@ -1998,7 +2236,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'Zone': row['Condition'],
                     'LongSignal': row['long_cond'],
                     'ShortSignal': row['short_cond'],
-                    # Regime Intelligence columns
+                    # Regime Intelligence columns — only populated for Range Study mode
                     'Regime': row.get('Regime', 'NEUTRAL'),
                     'HMM_Bull': row.get('HMM_Bull', 0),
                     'HMM_Bear': row.get('HMM_Bear', 0),
@@ -2026,7 +2264,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     ts_df['Date'] = pd.to_datetime(ts_df['Date'])
     ts_df = ts_df.sort_values('Date')
 
-    # Aggregate daily metrics - WRCI + Regime Intelligence
+    # Aggregate per-symbol daily rows into universe-level daily metrics
     daily_agg = ts_df.groupby('Date').agg({
         'Signal': 'mean',
         'Trend': 'mean',
@@ -2049,14 +2287,14 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     daily_agg['L_S_Ratio'] = daily_agg['LongSignal'] / (daily_agg['ShortSignal'] + 0.01)
     daily_agg['Conviction'] = daily_agg['Signal'].abs()
 
-    # Compute zone percentages
+    # Compute OB/OS zone exposure as % of universe per day
     zone_counts = ts_df.groupby('Date')['Zone'].apply(lambda x: (x.isin(['OB Extreme', 'OB'])).sum())
     os_counts = ts_df.groupby('Date')['Zone'].apply(lambda x: (x.isin(['OS Extreme', 'OS'])).sum())
     total_per_day = ts_df.groupby('Date').size()
     daily_agg['Oversold_Pct'] = (zone_counts / total_per_day * 100).fillna(0)
     daily_agg['Overbought_Pct'] = (os_counts / total_per_day * 100).fillna(0)
 
-    # Compute regime percentages
+    # Compute HMM regime distribution (Bull % / Bear % / Transition %) per day
     regime_bull = ts_df.groupby('Date')['Regime'].apply(lambda x: x.str.contains('BULL', na=False).sum())
     regime_bear = ts_df.groupby('Date')['Regime'].apply(lambda x: x.str.contains('BEAR', na=False).sum())
     regime_trans = ts_df.groupby('Date')['Regime'].apply(lambda x: (x == 'TRANSITION').sum())
@@ -2064,7 +2302,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     daily_agg['Regime_Bear_Pct'] = (regime_bear / total_per_day * 100).fillna(0)
     daily_agg['Regime_Transition_Pct'] = (regime_trans / total_per_day * 100).fillna(0)
 
-    # Summary metrics
+    # Compute period-level summary statistics for the metric card row
     total_signals = daily_agg['TotalSignals'].sum()
     avg_signal = daily_agg['Signal'].mean()
     overall_ratio = daily_agg['LongSignal'].sum() / max(daily_agg['ShortSignal'].sum(), 1)
@@ -2115,7 +2353,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-    # Create 4 tabs like NIRNAY
+    # Four-tab layout: Signal Dashboard · Transaction Dynamics · Regime Analysis · Data Terminal
     tab1, tab2, tab3, tab4 = st.tabs([
         "Signal Dashboard",
         "Transaction Dynamics", 
@@ -2261,7 +2499,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("Volatility Dynamics", "Volatility Regime & Change Points Over Time", icon="shield", accent="amber")
         
-        # Compute high vol percentage
+        # Compute the % of universe in HIGH or EXTREME volatility regime per day
         vol_high = ts_df.groupby('Date')['Vol_Regime'].apply(lambda x: (x.isin(['HIGH', 'EXTREME'])).sum() / len(x) * 100)
         
         fig_vol = go.Figure()
@@ -2315,7 +2553,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         display_ts.index = display_ts.index.strftime('%Y-%m-%d')
         display_ts = display_ts.reset_index().rename(columns={'Date': 'Date'})
         
-        # Select columns to display
+        # Trim to display-safe columns and rename for readability in the dataframe widget
         display_cols = ['Date', 'LongSignal', 'ShortSignal', 'Signal', 'Oversold_Pct', 'Overbought_Pct', 
                       'Regime_Bull_Pct', 'Regime_Bear_Pct', 'Change_Point']
         display_ts = display_ts[display_cols]
@@ -2338,13 +2576,33 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HELPER FUNCTIONS FOR TAB RENDERING
+# TAB RENDERING HELPERS — SIGNAL TABLES & LEGENDS
+# _bucket_signals_by_age()   : groups results into Today / 1D / 2D / 3D / 5D buckets
+# _render_signal_legend()    : context-aware reading guide below each timing table
+# _build_signal_table_html() : produces the age-grouped styled HTML timing table
+# _build_signal_strength_table_html(): produces the ranked-by-magnitude top-N table
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'C') -> dict:
-    """Bucket signals by age (Today, 1d, 2d, 3d, 5d) with stats for timeline display.
+def _bucket_signals_by_age(
+    results_df: pd.DataFrame,
+    side: str = 'long',
+    condition_set: str = 'C',
+) -> tuple:
+    """Group screener results into age buckets with per-bucket statistics.
 
-    condition_set: 'A' = Momentum (LA_/SA_), 'B' = Crossover (LB_/SB_), 'C' = Threshold (LC_/SC_)
+    Each symbol is placed in the earliest bucket where its signal fired — a symbol
+    that fired today is NOT also counted in the 5-day bucket (de-duplication via `seen`).
+
+    Args:
+        results_df:    Full screener results DataFrame.
+        side:          'long' or 'short'.
+        condition_set: 'A' = Momentum (LA_/SA_), 'B' = Crossover (LB_/SB_), 'C' = Threshold (LC_/SC_).
+
+    Returns: (buckets, stats, trend_label, trend_color)
+      buckets — dict[age → list[row]]
+      stats   — dict[age → {count, avg_signal, avg_pct_change, rows}]
+      trend_label  — "Strengthening" / "Weakening" / "Stable" with arrow SVG
+      trend_color  — hex color for trend label
     """
     if condition_set == 'A':
         prefix = 'LA' if side == 'long' else 'SA'
@@ -2378,7 +2636,7 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
             buckets[age].append(r)
             seen.add(r['Symbol'])
 
-    # Compute stats for each bucket
+    # Compute per-bucket summary stats (count, avg signal magnitude, avg % change)
     stats = {}
     for age, rows in buckets.items():
         if rows:
@@ -2396,7 +2654,7 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
         else:
             stats[age] = {'count': 0, 'avg_signal': 0, 'avg_pct_change': 0, 'rows': []}
 
-    # Calculate trend: are signals strengthening (newer) or weakening (older)?
+    # Compare today's average signal against older buckets to determine signal momentum trend
     today_avg = stats["Today"]['avg_signal'] if stats["Today"]['count'] > 0 else 0
     older_avg = np.mean([stats[age]['avg_signal'] for age in ["1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"] if stats[age]['count'] > 0]) if any(stats[age]['count'] for age in ["1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]) else 0
 
@@ -2414,9 +2672,14 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
 
 
 def _render_signal_legend(side: str = 'long', condition_set: str = 'A') -> None:
-    """Render context-aware interpretation legend below a timing table.
+    """Render the context-aware reading guide panel below a timing table.
 
-    condition_set: 'A' = Momentum, 'B' = Crossover, 'C' = Threshold
+    Generates three copy blocks (Signal, Trend, Timing) and a combined-reading block
+    tailored to the specific condition set and direction being displayed.
+
+    Args:
+        side:          'long' or 'short'.
+        condition_set: 'A' = Momentum Crossover, 'B' = Crossover-in-Zone, 'C' = Threshold Entry.
     """
     if condition_set == 'A':
         if side == 'long':
@@ -2513,7 +2776,19 @@ def _render_signal_legend(side: str = 'long', condition_set: str = 'A') -> None:
 
 
 def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
-    """Build organized HTML table for signals grouped by age with section headers."""
+    """Build a self-contained HTML timing table with age-group section headers.
+
+    Renders a complete HTML document (with inline CSS and Google Fonts) for use
+    inside st.components.v1.html(). Each age group (Today → Within 5D) is separated
+    by a colored section header row showing count and average signal/% stats.
+    Empty symbol indicator is rendered for sections with no signals.
+
+    Args:
+        stats: Output from _bucket_signals_by_age() — dict of age → stat dict.
+        side:  'long' (emerald accent) or 'short' (rose accent).
+
+    Returns: Complete HTML document string.
+    """
     import html as html_module
 
     accent_light = "#34D399" if side == 'long' else "#FB7185"
@@ -2527,7 +2802,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
         if stats[age]['count'] == 0:
             continue
 
-        # Section header for this age group
+        # Age-group section header row — shows bucket name, count, and averages
         avg_signal = stats[age]['avg_signal']
         avg_pct = stats[age].get('avg_pct_change', 0)
         count = stats[age]['count']
@@ -2539,7 +2814,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
         </tr>
         """)
 
-        # Data rows for this age group
+        # Individual symbol data rows for this age bucket
         _uma_colors  = {"Conf Bull": "#34D399", "Conf Bear": "#FB7185",
                         "Bull Div":  "#86EFAC", "Bear Div":  "#FCA5A5"}
         _zone_colors = {"OB Extreme": "#FB7185", "OB": "#FCA5A5",
@@ -2556,7 +2831,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
             uma  = html_module.escape(str(row.get('UMAFlag', '—')))
             uma_color = _uma_colors.get(uma, '#374151')
 
-            # Color % change: green for positive, red for negative
+            # Day-over-day % change coloring: emerald positive, rose negative
             pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
 
             table_rows.append(f"""
@@ -2669,10 +2944,15 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
 
 
 def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> str:
-    """Build ranked HTML table for top signals by magnitude.
+    """Build a ranked HTML table of top signals sorted by absolute magnitude.
 
-    Creates styled HTML table with colored accent for side (long=green, short=red),
-    displaying symbol, price, signal magnitude, trend direction, and zone status.
+    Used in the Signal Strength tab to display top 8 bullish / top 8 bearish.
+    Shares the same CSS design language as _build_signal_table_html() but uses
+    a flat ranked list rather than age-group section headers.
+
+    Args:
+        df:   Pre-filtered and sorted results DataFrame slice.
+        side: 'long' (emerald accent) or 'short' (rose accent).
 
     Returns: Complete HTML document string ready for st.components.v1.html().
     """
