@@ -138,4 +138,4 @@ Built as part of the **Sanket** product family.
 
 ---
 
-*SANKET v2.0.0 · @thebullishvalue · Obsidian Quant Terminal*
+*SANKET v1.1.0 · @thebullishvalue · Pragyam / Antigravity*

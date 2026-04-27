@@ -29,18 +29,31 @@ Major engine upgrade from legacy WRCI to the UMA v6 Unified Market Analytics fra
 
 ## [v1.1.0] — April 2026
 
-Expanded market coverage and constituent reliability improvements.
+Expanded market coverage, optimized data fetching, and improved Phase 2 analysis logging.
 
 ### Universes
 
-- **Global Indexes** — Integrated 56 primary equity benchmark indexes across Americas, Europe, Asia-Pacific, and Middle East/Africa.
-- **Global Macro** — Added 40+ macro instruments including US Treasuries (full curve), Direct Yield Indices, Inflation-Protected (TIPS), and Global Sovereign bonds.
-- **Benchmark Indexes Mode** — Dedicated mode for tracking index instruments as assets rather than their constituents.
+- **Global Indexes** — Comprehensive 56-instrument universe of primary equity benchmark indexes spanning Americas (10), Europe (20), Asia-Pacific (20), and Middle East/Africa (6). Includes S&P 500, Dow Jones, NASDAQ 100, DAX, CAC 40, FTSE 100, Nikkei 225, Hang Seng, ASX 200, Nifty 50, and all major global country indexes with automatic fallback to local futures where cash indexes unavailable on yfinance.
 
-### Data & Reliability
+### Data Fetching Optimization
 
-- **3-Source Cascade Fetch** — Improved reliability of India index constituents: NSE JSON API → NSE Archive CSV → Wikipedia fallback.
-- **Intraday Quote Injection** — Automated appending of live candles for same-day analysis when historical feeds are lagging.
+- **Smart Macro Context Assembly** — When screener universe overlaps with macro context symbols (Commodities, Currency, Global Macro universes), already-downloaded Close series are reused directly from `data_dict` instead of re-fetching via yfinance. Eliminates up to 113 redundant symbol downloads on cold cache for overlapping universes.
+- **New `_fetch_remaining_macro_context()` Helper** — Cached function fetches only the missing macro symbols not already in the screener dataset, reducing network calls and improving cold-start performance for Commodities/Currency/Global Macro universe selections.
+- **Module-Level Macro Symbol Constants** — `_MACRO_SYM_ORDERED` and `_MACRO_SYM_SET` consolidate macro symbol definitions, ensuring consistency across `fetch_macro_context_data()` and screener logic while simplifying future maintenance.
+
+### Phase 2 Logging Enhancements
+
+- **Structured Analysis Parameters Section** — Phase 2 now clearly displays configuration details: Timeframe, Regression Length, Wave Trend parameters (N1/N2), OB/OS Levels, and instrument fetch success count (e.g., "487 of 500 fetched successfully").
+- **UMA v6 Macro Context Reuse Statistics** — Terminal output now shows exactly how many macro context symbols are reused from `data_dict` vs. freshly fetched, providing transparency on the optimization in action.
+- **Signal Analysis Section Header** — Clear section header before the per-instrument analysis loop, labeled with instrument count and timeframe context (e.g., "Signal Analysis — 487 daily instruments"), replacing the orphaned "Technical Diagnostics" section.
+- **Removed Duplicate Cache Decorator** — Fixed `get_fno_stock_list()` which had a duplicate `@st.cache_data` decorator wrapping the function twice through Streamlit's cache machinery.
+
+### UI & Infrastructure
+
+- **Global Indexes in Sidebar** — Universe dropdown now includes "Global Indexes" positioned between India Indexes and US Indexes.
+- **Symbol Count Display** — Sidebar spec card now shows both total and successfully-fetched instrument counts for transparency (e.g., "Global Benchmark Indexes · 56 instruments").
+- **ASSET_NAME_LOOKUP Expansion** — Includes `GLOBAL_INDEXES_MAP` for friendly name display in results tables.
+- **Universe Dispatch Tables** — `render_sidebar()`, `run_screener_analysis()`, and `run_timeseries_analysis()` updated to seamlessly handle Global Indexes alongside existing universes.
 
 ---
 

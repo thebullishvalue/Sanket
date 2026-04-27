@@ -55,7 +55,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v2.0.0"
+VERSION = "v1.1.0"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE INITIALIZATION
@@ -1807,6 +1807,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             else:
                 display_name = simple_name
 
+            # Calculate % change from previous close (day-over-day)
+            prev_close = df.iloc[idx_pos - 1]['Close'] if idx_pos > 0 else last_row['Close']
+            pct_change = ((last_row['Close'] - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+
             results.append({
                 "Symbol": ticker,
                 "DisplayName": display_name,
@@ -1817,6 +1821,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "Zone": last_row['Condition'],
                 "SignalType": signal_type,
                 "Price": round(last_row['Close'], 2),
+                "PctChange": round(pct_change, 2),
                 # Set C: Momentum — Historical Long Signals (kept for Range Study compat)
                 "L_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
                 "L_1d": "●" if sample_range.iloc[-2]['long_cond'] else "—",
@@ -1899,7 +1904,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         st.warning("No stocks met the analysis criteria.")
         # Return empty DataFrame with expected columns to prevent downstream KeyErrors
         expected_cols = [
-            "Symbol", "DisplayName", "SimpleName", "Signal", "Trend", "Wave", "Zone", "SignalType", "Price",
+            "Symbol", "DisplayName", "SimpleName", "Signal", "Trend", "Wave", "Zone", "SignalType", "Price", "PctChange",
             "L_Today", "L_1d", "L_2d", "L_3d", "L_5d", "S_Today", "S_1d", "S_2d", "S_3d", "S_5d",
             "LA_Today", "LA_1d", "LA_2d", "LA_3d", "LA_5d", "SA_Today", "SA_1d", "SA_2d", "SA_3d", "SA_5d",
             "LB_Today", "LB_1d", "LB_2d", "LB_3d", "LB_5d", "SB_Today", "SB_1d", "SB_2d", "SB_3d", "SB_5d",
@@ -2378,15 +2383,18 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
     for age, rows in buckets.items():
         if rows:
             signals = [r['Signal'] for r in rows]
+            pct_changes = [r.get('PctChange', 0) for r in rows]
             avg_signal = np.mean(signals)
+            avg_pct_change = np.mean(pct_changes)
             count = len(rows)
             stats[age] = {
                 'count': count,
                 'avg_signal': avg_signal,
+                'avg_pct_change': avg_pct_change,
                 'rows': rows
             }
         else:
-            stats[age] = {'count': 0, 'avg_signal': 0, 'rows': []}
+            stats[age] = {'count': 0, 'avg_signal': 0, 'avg_pct_change': 0, 'rows': []}
 
     # Calculate trend: are signals strengthening (newer) or weakening (older)?
     today_avg = stats["Today"]['avg_signal'] if stats["Today"]['count'] > 0 else 0
@@ -2521,11 +2529,12 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
 
         # Section header for this age group
         avg_signal = stats[age]['avg_signal']
+        avg_pct = stats[age].get('avg_pct_change', 0)
         count = stats[age]['count']
         table_rows.append(f"""
         <tr style="background: {header_bg}; border-bottom: 2px solid {border_color};">
-            <td colspan="6" style="padding: 0.75rem 1rem; font-family: var(--display); font-size: 0.8rem; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
-                {age} · {count} signal{'s' if count != 1 else ''} · Avg: {avg_signal:+.1f}
+            <td colspan="7" style="padding: 0.75rem 1rem; font-family: var(--display); font-size: 0.8rem; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
+                {age} · {count} signal{'s' if count != 1 else ''} · Avg Signal: {avg_signal:+.1f} · Avg %: {avg_pct:+.1f}
             </td>
         </tr>
         """)
@@ -2538,6 +2547,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
         for row in stats[age]['rows']:
             symbol = html_module.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
             price = float(row.get('Price', 0))
+            pct_change = float(row.get('PctChange', 0))
             signal = float(row.get('Signal', 0))
             trend = float(row.get('Trend', 0))
             zone_raw = str(row.get('Zone', 'Neutral'))
@@ -2546,10 +2556,14 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
             uma  = html_module.escape(str(row.get('UMAFlag', '—')))
             uma_color = _uma_colors.get(uma, '#374151')
 
+            # Color % change: green for positive, red for negative
+            pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
+
             table_rows.append(f"""
             <tr>
                 <td class="symbol">{symbol}</td>
                 <td class="numeric currency">₹{price:,.2f}</td>
+                <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
                 <td class="numeric" style="color:{uma_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em;">{uma}</td>
@@ -2560,7 +2574,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
     if not table_rows:
         table_rows.append(f"""
         <tr>
-            <td colspan="6" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="7" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
                 — no signals detected —
             </td>
@@ -2636,6 +2650,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
                 <tr>
                     <th>Symbol</th>
                     <th class="numeric">Price (₹)</th>
+                    <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
                     <th class="numeric">UMA</th>
@@ -2688,6 +2703,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
         for idx, (_, row) in enumerate(df.iterrows(), 1):
             symbol = html_module.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
             price = float(row.get('Price', 0))
+            pct_change = float(row.get('PctChange', 0))
             signal = float(row.get('Signal', 0))
             trend = float(row.get('Trend', 0))
             zone_raw = str(row.get('Zone', 'Neutral'))
@@ -2697,12 +2713,14 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
             uma_color = _uma_colors.get(uma, '#374151')
 
             rank_str = f"{idx:02d}"
+            pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
 
             table_rows.append(f"""
             <tr>
                 <td class="numeric" style="color: #D4A853; font-weight: 700;">{rank_str}</td>
                 <td class="symbol">{symbol}</td>
                 <td class="numeric currency">₹{price:,.2f}</td>
+                <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
                 <td class="numeric" style="color:{uma_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em;">{uma}</td>
@@ -2781,6 +2799,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                     <th class="numeric">Rank</th>
                     <th>Symbol</th>
                     <th class="numeric">Price (₹)</th>
+                    <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
                     <th class="numeric">UMA</th>
