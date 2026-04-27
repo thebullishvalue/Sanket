@@ -1,7 +1,7 @@
 """
-Pragyam v7.0.5 — Reusable UI components: metric cards, signal badges, headers, section headers.
+Sanket v2.1.0 — Reusable UI components: metric cards, signal badges, section headers.
 
-UI — Obsidian Quant Terminal design language.
+Design language: Obsidian Quant Terminal (dark glassmorphism, amber accent).
 """
 
 from __future__ import annotations
@@ -232,7 +232,7 @@ def render_header(title: str, tagline: str) -> None:
 
 
 def render_info_box(title: str, content: str, color: str = "cyan") -> None:
-    """Render an info box."""
+    """Render a themed informational callout box."""
     st.markdown(
         f'<div class="info-box">'
         f"<h4>{html_mod.escape(title)}</h4>"
@@ -274,7 +274,7 @@ def render_system_card(
 
 
 def render_warning_box(title: str, content: str) -> None:
-    """Render a themed alert/warning box."""
+    """Render a themed amber warning/alert box with icon."""
     st.markdown(
         f"""
         <div class="warning-box">
@@ -394,7 +394,7 @@ def render_theme_toggle() -> None:
         <script>
         (function() {
             var html = document.documentElement;
-            var saved = localStorage.getItem('pragyam-theme');
+            var saved = localStorage.getItem('sanket-theme');
             var theme = saved || 'dark';
             html.setAttribute('data-theme', theme);
             updateUI(theme);
@@ -403,7 +403,7 @@ def render_theme_toggle() -> None:
                 var current = html.getAttribute('data-theme');
                 var next = current === 'dark' ? 'light' : 'dark';
                 html.setAttribute('data-theme', next);
-                localStorage.setItem('pragyam-theme', next);
+                localStorage.setItem('sanket-theme', next);  // persist across reloads
                 updateUI(next);
             };
 
