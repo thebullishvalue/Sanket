@@ -5,55 +5,89 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v2.1.0] — April 2026
+
+Signal classification priority correction and documentation overhaul.
+
+### Changed
+
+- **Signal String Priority Order** — Corrected the signal type evaluation chain in `run_screener_analysis()`. Order is now `Set B → Set A → Set C → Zone` (previously was `Set B → Set C → Set A → Zone`). This ensures broad momentum crossovers (Set A) take precedence over threshold-entry events (Set C), aligning displayed `SignalType` with analytical intent: a composite/signal-line crossover anywhere is a more significant event than freshly crossing the ±40 zone boundary.
+  - **Set B** (Crossover in Zone): `long_cond_comp` / `short_cond_comp` — highest priority
+  - **Set A** (Momentum Crossover): `long_cond` / `short_cond` — second priority *(moved up)*
+  - **Set C** (Threshold Entry): `long_cond_wt` / `short_cond_wt` — third priority *(moved down)*
+  - **Zone**: Fallback label when no signal condition is active
+
+### Documentation
+
+- **README** — Full rewrite from scratch: accurate engine descriptions, signal set priority table, MSF/MMR/HMM pillar details, universe coverage table, project structure, and development guide.
+- **CHANGELOG** — Overhauled; all entries back-filled with precise technical detail.
+- **Version Synchronisation** — `VERSION` constant in `sanket.py`, `logger.py` docstring, `requirements.txt` header, `README.md`, and `CHANGELOG.md` all unified to `v2.1.0`.
+
+---
+
 ## [v2.0.0] — April 2026
 
-Major engine upgrade from legacy WRCI to the UMA v6 Unified Market Analytics framework.
+Major engine upgrade from the legacy WRCI screener to the UMA v6 Unified Market Analytics framework.
 
-### UMA v6 Analysis Engine
+### Added — UMA v6 Engine
 
-- **MSF (Momentum Structure Flow)** — Multi-component composite signal combining ROC momentum, microstructure (price-volume variance), composite trend (Hurst-adjusted), and accumulation/distribution metrics.
-- **MMR (Macro Multiple Regression)** — Integrated macro context awareness using Gram-Schmidt orthogonalization across a 3-variable top-ranked macro basket (Global Macro, Commodities, Currency).
-- **Adaptive HMM (Hidden Markov Model)** — Real-time regime state discovery (Bullish/Neutral/Bearish) for signal classification and noise reduction.
-- **Enhanced Signal Flags** — New read-only context flags for top symbols:
-    - **Conf Bull/Bear**: High signal agreement between MSF and MMR.
-    - **Bull/Bear Div**: Momentum divergence against price action.
-- **Volatility Structure Awareness** — Dynamic signal damping based on ATR-normalized volatility variance (VoV) and trend-structure ratios (VTS).
+- **MSF (Momentum Structure Flow)** — Six-component composite oscillator replacing single-oscillator WRCI for the UMA flag layer:
+  - ROC Momentum (Z-scored, sigmoid-mapped rate of change)
+  - Microstructure (volume-weighted open-to-midpoint vs. 5-bar drift)
+  - Composite Trend (four-sub-component: MA spread, double-diff acceleration, ATR normalisation, price-to-MA)
+  - Accumulation / Distribution (rolling money-flow split by up/down closes)
+  - Permutation Entropy dampener (reduces weight in high-entropy / choppy regimes)
+  - Hurst Regime Weighting (variance-ratio Hurst exponent tilts component weights)
+  - Volatility Structure Damper (ATR VoV + VTS amplitude reduction)
+- **MMR (Macro Multiple Regression)** — Gram-Schmidt orthogonalized top-3 macro factor regression using Global Macro + Commodities + Currency universes; outputs Macro Context Score and rolling R².
+- **Adaptive HMM Regime Discovery** — Hidden Markov Model (Gaussian emissions, 3 states: Bullish / Neutral / Bearish) for real-time signal environment classification.
+- **UMA Flags** — Read-only, per-symbol context annotations: `Conf Bull`, `Conf Bear`, `Bull Div`, `Bear Div`. Surfaced in the results table as the `UMAFlag` column.
+- **Volatility Awareness** — ATR-normalised VoV and VTS dampen signals during structurally noisy or whipsaw periods.
+- **`compute_uma_flags()`** — Entry point for the UMA v6 information layer; runs MSF + MMR + HMM together on a sliding window of up to 300 most recent bars per symbol.
 
-### UI & Performance
+### Changed
 
-- **Institutional UI Refactor** — Absolute visual uniformity across all signal dashboard components.
-- **Enhanced Terminal Aesthetics** — Refined glassmorphism and amber accent system.
-- **Optimized Compute Pipeline** — Faster signal fusion and macro context caching.
+- **Macro Context Caching** — `_MACRO_SYM_ORDERED` and `_MACRO_SYM_SET` defined at module level; macro context is pre-fetched once per run and reused across all symbols.
+- **Smart Context Reuse** — When the screener universe overlaps macro context symbols (Commodities, Currency, Global Macro), already-downloaded Close series are recycled from `data_dict`—up to 113 fewer re-fetches on overlapping universes.
+- **`_fetch_remaining_macro_context()`** — Cached helper that fetches only missing macro symbols not already in `data_dict`.
+- **Institutional UI Refactor** — Glassmorphism panels, amber accent system, and signal dashboard components visually unified.
+- **Optimised Compute Pipeline** — Signal fusion and macro context assembly vectorised; cold-start time reduced significantly on large universes.
 
 ---
 
 ## [v1.1.0] — April 2026
 
-Expanded market coverage, optimized data fetching, and improved Phase 2 analysis logging.
+Expanded universe coverage, fetch optimisation, and structured Phase 2 logging.
 
-### Universes
+### Added — Universes
 
-- **Global Indexes** — Comprehensive 56-instrument universe of primary equity benchmark indexes spanning Americas (10), Europe (20), Asia-Pacific (20), and Middle East/Africa (6). Includes S&P 500, Dow Jones, NASDAQ 100, DAX, CAC 40, FTSE 100, Nikkei 225, Hang Seng, ASX 200, Nifty 50, and all major global country indexes with automatic fallback to local futures where cash indexes unavailable on yfinance.
+- **Global Indexes** — 56-instrument universe of primary national equity benchmarks:
+  - Americas (10): S&P 500, Dow Jones, NASDAQ 100, Russell 2000, TSX, IPC, Bovespa, Merval, IPSA, COLCAP
+  - Europe (20): FTSE 100, DAX, CAC 40, IBEX 35, FTSE MIB, AEX, SMI, OMX Stockholm/Copenhagen/Helsinki, ATX, BEL 20, WIG 20, BIST 100, PSI 20, ASE, PX, BUX, MOEX
+  - Asia-Pacific (20+): Nikkei 225, TOPIX, Shanghai Composite, CSI 300, Hang Seng, KOSPI, KOSDAQ, TAIEX, Nifty 50, Sensex, ASX 200, All Ordinaries, STI, KLCI, SET, Jakarta Composite, PSEi, NZX 50, VN-Index, KSE 100
+  - Middle East & Africa (6): TA-125, Tadawul, DFM General, QE Index, JSE All-Share, EGX 30
+  - Futures proxies used where cash indexes are unavailable on Yahoo Finance.
 
-### Data Fetching Optimization
+### Added — Data Fetching
 
-- **Smart Macro Context Assembly** — When screener universe overlaps with macro context symbols (Commodities, Currency, Global Macro universes), already-downloaded Close series are reused directly from `data_dict` instead of re-fetching via yfinance. Eliminates up to 113 redundant symbol downloads on cold cache for overlapping universes.
-- **New `_fetch_remaining_macro_context()` Helper** — Cached function fetches only the missing macro symbols not already in the screener dataset, reducing network calls and improving cold-start performance for Commodities/Currency/Global Macro universe selections.
-- **Module-Level Macro Symbol Constants** — `_MACRO_SYM_ORDERED` and `_MACRO_SYM_SET` consolidate macro symbol definitions, ensuring consistency across `fetch_macro_context_data()` and screener logic while simplifying future maintenance.
+- **`_fetch_remaining_macro_context()`** — Fetches only macro symbols absent from the current `data_dict`; integrated with module-level `_MACRO_SYM_ORDERED` and `_MACRO_SYM_SET`.
+- **ASSET_NAME_LOOKUP expansion** — `GLOBAL_INDEXES_MAP` reverse-mapped into `ASSET_NAME_LOOKUP` for friendly name display in results tables.
 
-### Phase 2 Logging Enhancements
+### Fixed
 
-- **Structured Analysis Parameters Section** — Phase 2 now clearly displays configuration details: Timeframe, Regression Length, Wave Trend parameters (N1/N2), OB/OS Levels, and instrument fetch success count (e.g., "487 of 500 fetched successfully").
-- **UMA v6 Macro Context Reuse Statistics** — Terminal output now shows exactly how many macro context symbols are reused from `data_dict` vs. freshly fetched, providing transparency on the optimization in action.
-- **Signal Analysis Section Header** — Clear section header before the per-instrument analysis loop, labeled with instrument count and timeframe context (e.g., "Signal Analysis — 487 daily instruments"), replacing the orphaned "Technical Diagnostics" section.
-- **Removed Duplicate Cache Decorator** — Fixed `get_fno_stock_list()` which had a duplicate `@st.cache_data` decorator wrapping the function twice through Streamlit's cache machinery.
+- **Duplicate `@st.cache_data` decorator** on `get_fno_stock_list()` — removed the redundant wrapping that caused double-caching through Streamlit's machinery.
 
-### UI & Infrastructure
+### Changed — Logging
 
-- **Global Indexes in Sidebar** — Universe dropdown now includes "Global Indexes" positioned between India Indexes and US Indexes.
-- **Symbol Count Display** — Sidebar spec card now shows both total and successfully-fetched instrument counts for transparency (e.g., "Global Benchmark Indexes · 56 instruments").
-- **ASSET_NAME_LOOKUP Expansion** — Includes `GLOBAL_INDEXES_MAP` for friendly name display in results tables.
-- **Universe Dispatch Tables** — `render_sidebar()`, `run_screener_analysis()`, and `run_timeseries_analysis()` updated to seamlessly handle Global Indexes alongside existing universes.
+- **Phase 2 Structured Parameters Section** — Terminal now clearly shows: Timeframe, Regression Length, Wave Trend N1/N2, OB/OS Levels, and fetch success count (e.g., "487 of 500 fetched successfully").
+- **UMA v6 Macro Context Reuse Statistics** — Console output reports exact symbol counts reused vs. freshly fetched per run.
+- **Signal Analysis Section Header** — Replaces orphaned "Technical Diagnostics" label; now shows instrument count and timeframe context (e.g., "Signal Analysis — 487 daily instruments").
+
+### Changed — UI
+
+- **Global Indexes in Universe Dropdown** — Positioned between India Indexes and US Indexes.
+- **Sidebar Symbol Count** — Spec card shows both total configured and successfully-fetched instrument counts.
+- **Universe Dispatch** — `render_sidebar()`, `run_screener_analysis()`, and `run_timeseries_analysis()` updated for Global Indexes.
 
 ---
 
@@ -61,72 +95,81 @@ Expanded market coverage, optimized data fetching, and improved Phase 2 analysis
 
 Initial production release of the SANKET WRCI Signal Screener.
 
-### Core Engine
+### Added — Core Engine
 
-- **WRCI (Wave-Regime Composite Index)** — Combines Wave Trend oscillator (EMA-smoothed channel index) with a normalised HMA-based trend directional count into a single composite signal line
-- Signal detection via composite line / signal line crossovers (Long Cross, Short Cross)
-- Zone classification: OB Extreme (>80), OB (>40), OS (<-40), OS Extreme (<-80), Neutral
-- Signal strength scoring with diminishing returns above magnitude 50 (prevents outliers from dominating rankings)
-- Support for **Daily** and **Weekly** timeframes; weekly via Friday-close OHLCV resampling
+- **WRCI (Wave-Regime Composite Index)** — Composite oscillator combining:
+  - WaveTrend cycle (EMA-smoothed Channel Index, `wt_n1=10`, `wt_n2=21`)
+  - HMA-based normalised trend count over `reg_len=20` bars
+  - Composite Line = `(WT1 + Norm_Trend) / 2`
+  - Signal Line = 4-period rolling mean of Composite Line
+- **Zone Classification** — OB Extreme (> 80), OB (> 40), OS (< −40), OS Extreme (< −80), Neutral
+- **Signal Strength Scoring** — Magnitude-based score with diminishing returns above 50 (prevents outlier dominance in rankings)
+- **Daily and Weekly Timeframes** — Weekly via Friday-close OHLCV resampling (`resample_to_weekly()`)
 
-### Universes
+### Added — Signal Sets
 
-- **India Indexes** — 26 NIFTY indices (broad market, midcap, smallcap, sectoral) + F&O Stocks + Benchmark Indexes (34 instruments)
-- **Benchmark Indexes** — ^NSEI, ^NSMIDCP, ^INDIAVIX, ^BSESN, BSE-100/200/500, ^NSEBANK, ^CNXFIN, ^CNXIT, ^CNXAUTO, ^CNXFMCG, ^CNXPHARMA, ^CNXMETAL, ^CNXREALTY, ^CNXENERGY, ^CNXINFRA, ^CNXPSUBANK, NIFTY_PRIVATE_BANK.NS, ^CNXMEDIA, and full NSE midcap/smallcap suite — set as default universe
-- **ETF Index** — 30 NSE-listed ETFs
-- **US Indexes** — S&P 500, DOW JONES, NASDAQ 100
-- **Commodities** — 16 commodity futures (Gold, Silver, Crude WTI/Brent, Natural Gas, Copper, Wheat, Corn, etc.)
-- **Currency** — 25 FX pairs
-- **Crypto** — 21 cryptocurrencies
+- **Set A (Momentum Crossover)** — Composite line crosses signal line anywhere (`long_cond` / `short_cond`)
+- **Set B (Crossover in Zone)** — Composite crosses signal line inside OB/OS extreme zone (`long_cond_comp` / `short_cond_comp`)
+- **Set C (Threshold Entry)** — Composite freshly crosses ±40 threshold with signal-line validation (`long_cond_wt` / `short_cond_wt`)
 
-### India Index Constituent Fetching
+### Added — Universes
 
-3-source cascade with automatic fallthrough:
-1. **NSE JSON API** — `nseindia.com/api/equity-stockIndices?index={NAME}` (session-warmed, same endpoint as F&O)
-2. **NSE Archive CSV** — `archives.nseindia.com/content/indices/ind_{name}list.csv`
-3. **Wikipedia fallback** — Index-specific page for NIFTY 50, NEXT 50, BANK, IT, FIN SERVICE
+- **India Indexes** — 26 NIFTY indices (broad market, midcap, smallcap, 13 sectoral) + F&O Stocks + Benchmark Indexes (34 instruments)
+- **Benchmark Indexes** — ^NSEI, ^NSMIDCP, BSE/NSE broad indices, full sectoral NSE suite — set as default universe
+- **ETF Index** — 30 NSE-listed ETFs (sectoral, factor, thematic)
+- **US Indexes** — S&P 500 (Wikipedia), DOW JONES (Wikipedia + fallback hardcoded 30), NASDAQ 100 (Wikipedia)
+- **Commodities** — 24 commodity futures (precious metals, energy complex, agricultural softs, livestock)
+- **Currency** — 24 FX pairs (G10 + major EM)
+- **Crypto** — 21 cryptocurrencies by market cap
 
-Sectoral indices (AUTO, FMCG, PHARMA, METAL, ENERGY, INFRA, REALTY, MEDIA, PRIVATE BANK, PSU BANK) previously failed silently because NSE archive CSV was the only source; now resolved by NSE API as primary.
+### Added — India Constituent Fetching
 
-### Analysis Modes
+3-source cascade with automatic fallthrough per index:
+1. **NSE JSON API** (`nseindia.com/api/equity-stockIndices`) — session-warmed, same endpoint as F&O
+2. **NSE Archive CSV** (`archives.nseindia.com/content/indices/ind_{name}list.csv`)
+3. **Wikipedia fallback** — for NIFTY 50, NEXT 50, BANK, IT, FIN SERVICE
 
-- **Single Date (Point Screener)** — WRCI sampled at a specific date; live intraday quote appended if today's candle is absent from the feed
-- **Date Range (Range Study)** — Multi-date pass across a user-defined window; per-date results with heatmap and WRCI charts for representative symbols
+Resolves silent failures on all sectoral indices (AUTO, FMCG, PHARMA, METAL, ENERGY, INFRA, REALTY, MEDIA, PSU BANK, PRIVATE BANK) previously only sourced from the NSE Archive CSV.
 
-### Signal Display
+### Added — Analysis Modes
 
-- **Action Dashboard** — Signals grouped by age: Today / 1 Day Ago / 2 Days Ago / 3 Days Ago / Within 5 Days; each group shows count and average magnitude
+- **Snapshot (Single Date)** — WRCI sampled at a specific date; live intraday quote appended if today's candle is absent
+- **Range Study** — Multi-date pass across a user-defined window with per-date heatmap and signal trend charts
+
+### Added — Signal Display
+
+- **Action Dashboard** — Signals grouped by age: Today / 1D Ago / 2D Ago / 3D Ago / Within 5D; each group shows count and average magnitude
 - **Signal Strength Tab** — Top 8 bullish + top 8 bearish ranked by absolute magnitude
-- **Bullish / Bearish sub-tabs** — Separate tabs for long and short timing tables with per-tab accent colours (emerald / rose)
-- **Signal interpretation legend** — Inline guide below timing tables explaining Signal, Trend, Zone, and Timing columns; styled with system glass card + amber accent
+- **Bullish / Bearish sub-tabs** — Separate tabs with emerald / rose accent colours respectively
+- **Signal Interpretation Legend** — Inline guide explaining Signal, Trend, Zone, and Timing columns
 
-### Data Layer
+### Added — Data Layer
 
-- `fetch_batch_data()` — Parallel yfinance download with MultiIndex flattening; live 1-day append when today is absent
+- `fetch_batch_data()` — Parallel yfinance batch download with MultiIndex flattening; live 1-day append when today is absent
 - `resample_to_weekly()` — Friday-close OHLCV aggregation
-- NSE F&O list — 3-source fetch: NSE F&O API → nsepython advances/declines → NIFTY 500 CSV
+- NSE F&O list — 3-source fetch: NSE F&O API → nsepython advances/declines → NIFTY 500 CSV fallback
 
-### Error Handling
+### Added — UI
 
-- Fetch failures stored in `session_state["run_error"]` and displayed above the landing page — survives the `st.rerun()` cycle that previously swallowed error messages silently
-- `run_error` key initialised at startup; cleared on every new run
-
-### UI & Design
-
-- **Obsidian Quant Terminal** theme — dark glass panels, amber (#D4A853) accent system, IBM Plex Mono + Space Grotesk typefaces
-- Light mode toggle via `render_theme_toggle()`
+- **Obsidian Quant Terminal** — Dark glass panels, amber (#D4A853) accent, IBM Plex Mono + Space Grotesk typefaces
+- Light/dark mode toggle via `render_theme_toggle()`
 - Custom SVG icon system (CHECK, LONG, SHORT, DOT, UP, DOWN, ZAP, CHART, STRENGTH, SETTINGS)
-- Mobile-responsive HTML tables — `overflow-x: auto` + `min-width: 480px` + `touch-action: auto` prevents bottom-row clipping on narrow viewports
-- Dynamic iframe height formula: `120 + groups×46 + rows×44` (buffers for scrollbar chrome and section headers)
+- Mobile-responsive HTML tables (`overflow-x: auto` + `touch-action: auto`)
+- Dynamic iframe height formula: `120 + groups×46 + rows×44`
 - System spec card in sidebar (version, universe, timeframe, mode)
 - Landing page with three system cards: Signal Engine, Signal Types, Universe Coverage
 
-### Console Logger
+### Added — Console Logger (`logger.py`)
 
-- `ConsoleOutput` class in `logger.py` — direct stdout with ANSI colours; bypasses Python's logging module
-- Phase timers, section headers, run summaries, per-symbol detail lines
-- Compatible with Windows 10+ (colorama or manual VT100 enable)
+- `ConsoleOutput` class — direct stdout with ANSI colours; bypasses Python's `logging` module
+- Phase timers, section headers, per-symbol detail lines, run summaries
 - Unique run ID per analysis: `YYYYMMDD_HHMMSS_uuid8`
+- Windows 10+ ANSI compatibility via colorama or manual VT100 enable
+
+### Added — Error Handling
+
+- Fetch failures stored in `session_state["run_error"]` and displayed above the landing page — survives `st.rerun()` cycles that previously swallowed errors silently
+- `run_error` key initialized at startup; cleared on every new run
 
 ---
 
@@ -134,9 +177,11 @@ Sectoral indices (AUTO, FMCG, PHARMA, METAL, ENERGY, INFRA, REALTY, MEDIA, PRIVA
 
 `v[MAJOR].[MINOR].[PATCH]`
 
-- **MAJOR** — New universe, breaking change to output schema, or significant engine change
-- **MINOR** — New features, UI additions, additional index coverage
-- **PATCH** — Bug fixes, fetch reliability improvements, copy/documentation corrections
+| Segment | Trigger |
+|---|---|
+| **MAJOR** | New universe type, breaking output schema change, or significant engine architecture change |
+| **MINOR** | New features, signal logic changes, UI additions, additional index coverage |
+| **PATCH** | Bug fixes, fetch reliability improvements, copy/documentation corrections |
 
 ---
 
@@ -149,7 +194,7 @@ Sectoral indices (AUTO, FMCG, PHARMA, METAL, ENERGY, INFRA, REALTY, MEDIA, PRIVA
 - [ ] Alert export (email / Telegram on new signals)
 
 ### Medium-term
-- [ ] Signal backtesting module — historical hit-rate per zone type
+- [ ] Signal backtesting module — historical hit-rate per zone and signal type
 - [ ] Sector rotation heatmap
 - [ ] Correlation matrix for multi-asset confluence view
 
