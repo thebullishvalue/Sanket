@@ -1,7 +1,7 @@
 """
-Sanket v2.1.0 — Reusable UI components: metric cards, signal badges, section headers.
+Pragyam v7.0.5 — Reusable UI components: metric cards, signal badges, headers, section headers.
 
-Design language: Obsidian Quant Terminal (dark glassmorphism, amber accent).
+UI — Obsidian Quant Terminal design language.
 """
 
 from __future__ import annotations
@@ -232,7 +232,7 @@ def render_header(title: str, tagline: str) -> None:
 
 
 def render_info_box(title: str, content: str, color: str = "cyan") -> None:
-    """Render a themed informational callout box."""
+    """Render an info box."""
     st.markdown(
         f'<div class="info-box">'
         f"<h4>{html_mod.escape(title)}</h4>"
@@ -274,7 +274,7 @@ def render_system_card(
 
 
 def render_warning_box(title: str, content: str) -> None:
-    """Render a themed amber warning/alert box with icon."""
+    """Render a themed alert/warning box."""
     st.markdown(
         f"""
         <div class="warning-box">
@@ -394,7 +394,7 @@ def render_theme_toggle() -> None:
         <script>
         (function() {
             var html = document.documentElement;
-            var saved = localStorage.getItem('sanket-theme');
+            var saved = localStorage.getItem('pragyam-theme');
             var theme = saved || 'dark';
             html.setAttribute('data-theme', theme);
             updateUI(theme);
@@ -403,7 +403,7 @@ def render_theme_toggle() -> None:
                 var current = html.getAttribute('data-theme');
                 var next = current === 'dark' ? 'light' : 'dark';
                 html.setAttribute('data-theme', next);
-                localStorage.setItem('sanket-theme', next);  // persist across reloads
+                localStorage.setItem('pragyam-theme', next);
                 updateUI(next);
             };
 
@@ -477,5 +477,54 @@ def render_interpretation_card(
         f'<div class="interp-title">{html_mod.escape(str(title))}</div>'
         f'<div class="interp-body">{html_mod.escape(str(body))}</div>'
         f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_signal_guide() -> None:
+    """Render the Signal Interpretation Guide with three signal types.
+
+    Displays Momentum (A), Crossover (B), and Threshold (C) explanations
+    in a premium glassmorphic card matching the terminal design.
+    """
+    st.markdown(
+        '''
+        <div class="signal-guide">
+            <div class="signal-guide-header">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M12 6v6l4 2"></path>
+                </svg>
+                Signal Types Reference
+            </div>
+
+            <div class="signal-guide-grid">
+                <div class="signal-type momentum">
+                    <div class="signal-type-label">Set A: Momentum</div>
+                    <div class="signal-type-desc">Composite Line crosses Signal Line anywhere • No zone filter • Captures building momentum</div>
+                </div>
+
+                <div class="signal-type crossover">
+                    <div class="signal-type-label">Set B: Crossover</div>
+                    <div class="signal-type-desc">Lines cross in extreme zones (±40) • Momentum exhaustion • High precision timing</div>
+                </div>
+
+                <div class="signal-type threshold">
+                    <div class="signal-type-label">Set C: Threshold</div>
+                    <div class="signal-type-desc">Freshly enters OS/OB zone from neutral • First bar of entry • Earliest actionable signal</div>
+                </div>
+            </div>
+
+            <div class="signal-guide-metrics">
+                <div class="signal-guide-metrics-title">Key Metrics</div>
+                <div class="signal-guide-metrics-grid">
+                    <div class="metric-item"><span class="metric-label">Signal</span> · Momentum magnitude ±0 to ±100</div>
+                    <div class="metric-item"><span class="metric-label">Trend</span> · Price confirmation +1 to -1</div>
+                    <div class="metric-item"><span class="metric-label">UMA Flag</span> · MA crossover status</div>
+                    <div class="metric-item"><span class="metric-label">Zone</span> · Oscillator position (OB/OS)</div>
+                </div>
+            </div>
+        </div>
+        ''',
         unsafe_allow_html=True,
     )
