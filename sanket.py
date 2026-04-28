@@ -2322,7 +2322,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         display_ts.columns = ['Date', 'Long Sig', 'Short Sig', 'Avg Signal', 'Oversold %', 'Overbought %',
                            'Bull Regime %', 'Bear Regime %', 'Change Pts']
         
-        st.dataframe(display_ts, width='stretch', hide_index=True, height=500)
+        st.dataframe(display_ts, width='stretch', hide_index=True)
         
         st.markdown("<br>", unsafe_allow_html=True)
         csv_data = ts_df.to_csv(index=False).encode('utf-8')
@@ -2533,7 +2533,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
         count = stats[age]['count']
         table_rows.append(f"""
         <tr style="background: {header_bg}; border-bottom: 2px solid {border_color};">
-            <td colspan="7" style="padding: 0.75rem 1rem; font-family: var(--display); font-size: 0.8rem; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
+            <td colspan="7" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
                 {age} · {count} signal{'s' if count != 1 else ''} · Avg Signal: {avg_signal:+.1f} · Avg %: {avg_pct:+.1f}
             </td>
         </tr>
@@ -2592,6 +2592,12 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
             background: transparent;
             color: #F1F5F9;
             padding: 0.5rem 0.5rem 1.5rem 0.5rem;
+            font-size: 16px;
+        }}
+        @media (max-width: 768px) {{
+            body {{
+                font-size: 16px;
+            }}
         }}
         .portfolio-table {{
             width: 100%;
@@ -3246,7 +3252,7 @@ def main():
                     "S_Today", "S_1d", "S_2d", "S_3d", "S_5d"
                 ]].sort_values("Signal", ascending=False)
 
-                st.dataframe(display_df, width='stretch', height=500)
+                st.dataframe(display_df, width='stretch')
 
                 # ── EXPORT SECTION ─────────────────────────────────────────────────────────
                 st.markdown('<div class="section-divider" style="margin-top: 2rem;"></div>', unsafe_allow_html=True)
