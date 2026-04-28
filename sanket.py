@@ -3190,6 +3190,7 @@ def main():
 
             # ════ TAB 4: SYSTEM DATA ════════════════════════════════════════════════════
             with tab_raw:
+                # ── SYSTEM RAW DATA SECTION ────────────────────────────────────────────────
                 ui.render_section_header(
                     "System Raw Data",
                     "Complete underlying data for analysis and model validation",
@@ -3203,9 +3204,6 @@ def main():
                 </p>
                 """, unsafe_allow_html=True)
 
-                # Render Signal Interpretation Guide
-                ui.render_signal_guide()
-
                 # Show all data with historical signals
                 display_df = results_df[[
                     "DisplayName", "Price", "Signal", "Trend", "Wave", "UMAFlag", "Zone",
@@ -3213,7 +3211,26 @@ def main():
                     "S_Today", "S_1d", "S_2d", "S_3d", "S_5d"
                 ]].sort_values("Signal", ascending=False)
 
-                st.dataframe(display_df, width='stretch')
+                st.dataframe(display_df, width='stretch', height=600)
+
+                # ── SIGNAL TYPES REFERENCE SECTION ─────────────────────────────────────
+                st.markdown('<div class="section-divider" style="margin-top: 2rem;"></div>', unsafe_allow_html=True)
+
+                ui.render_section_header(
+                    "Signal Types Reference",
+                    "Three signal generation conditions — Momentum (A) · Crossover (B) · Threshold (C)",
+                    icon="layers",
+                    accent="amber"
+                )
+
+                st.markdown("""
+                <p style="font-family: var(--data); font-size: 0.8rem; color: var(--ink-secondary); margin-bottom: 1.5rem;">
+                    Reference guide for understanding the three signal generation methodologies and their key metrics.
+                </p>
+                """, unsafe_allow_html=True)
+
+                # Signal guide grid
+                st.markdown('<div class="signal-guide-grid"><div class="signal-type momentum"><div class="signal-type-label">Set A: Momentum</div><div class="signal-type-desc">Composite Line crosses Signal Line anywhere • No zone filter • Captures building momentum</div></div><div class="signal-type crossover"><div class="signal-type-label">Set B: Crossover</div><div class="signal-type-desc">Lines cross in extreme zones (±40) • Momentum exhaustion • High precision timing</div></div><div class="signal-type threshold"><div class="signal-type-label">Set C: Threshold</div><div class="signal-type-desc">Freshly enters OS/OB zone from neutral • First bar of entry • Earliest actionable signal</div></div></div>', unsafe_allow_html=True)
 
                 # ── EXPORT SECTION ─────────────────────────────────────────────────────────
                 st.markdown('<div class="section-divider" style="margin-top: 2rem;"></div>', unsafe_allow_html=True)
