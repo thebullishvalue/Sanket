@@ -3082,10 +3082,10 @@ def main():
                 top_longs  = top_longs_a
                 top_shorts = top_shorts_a
 
-                # ── shared height helper — both columns in a pair always same height ──
-                def _pair_height(df_l, df_r):
-                    n = max(len(df_l), len(df_r), 1)
-                    return 58 + n * 42
+                # ── dynamic height helper — per-table height calculation ──
+                def _table_height(df):
+                    n = max(len(df), 1)
+                    return 100 + n * 48
 
                 # ── column label renderer ─────────────────────────────────────────────
                 def _col_label(side_label, side):
@@ -3119,14 +3119,13 @@ def main():
                                  color:#FB7185; margin-left:0.5rem;">↓ {len(top_shorts_a)}</span>
                 </div>
                 """, unsafe_allow_html=True)
-                _h_a = _pair_height(top_longs_a, top_shorts_a)
                 _col_al, _col_as = st.columns(2)
                 with _col_al:
                     st.markdown(_col_label("Top 10 Longs", "long"), unsafe_allow_html=True)
-                    st.components.v1.html(_build_signal_strength_table_html(top_longs_a, side='long'), height=_h_a)
+                    st.components.v1.html(_build_signal_strength_table_html(top_longs_a, side='long'), height=_table_height(top_longs_a))
                 with _col_as:
                     st.markdown(_col_label("Top 10 Shorts", "short"), unsafe_allow_html=True)
-                    st.components.v1.html(_build_signal_strength_table_html(top_shorts_a, side='short'), height=_h_a)
+                    st.components.v1.html(_build_signal_strength_table_html(top_shorts_a, side='short'), height=_table_height(top_shorts_a))
 
                 # ─────────────────────────────────────────────────────────────────────
                 # SET B · CROSSOVER
@@ -3149,14 +3148,13 @@ def main():
                                  color:#FB7185; margin-left:0.5rem;">↓ {len(top_shorts_b)}</span>
                 </div>
                 """, unsafe_allow_html=True)
-                _h_b = _pair_height(top_longs_b, top_shorts_b)
                 _col_bl, _col_bs = st.columns(2)
                 with _col_bl:
                     st.markdown(_col_label("Top 10 Longs", "long"), unsafe_allow_html=True)
-                    st.components.v1.html(_build_signal_strength_table_html(top_longs_b, side='long'), height=_h_b)
+                    st.components.v1.html(_build_signal_strength_table_html(top_longs_b, side='long'), height=_table_height(top_longs_b))
                 with _col_bs:
                     st.markdown(_col_label("Top 10 Shorts", "short"), unsafe_allow_html=True)
-                    st.components.v1.html(_build_signal_strength_table_html(top_shorts_b, side='short'), height=_h_b)
+                    st.components.v1.html(_build_signal_strength_table_html(top_shorts_b, side='short'), height=_table_height(top_shorts_b))
 
                 # ─────────────────────────────────────────────────────────────────────
                 # SET C · THRESHOLD
@@ -3179,14 +3177,13 @@ def main():
                                  color:#FB7185; margin-left:0.5rem;">↓ {len(top_shorts_c)}</span>
                 </div>
                 """, unsafe_allow_html=True)
-                _h_c = _pair_height(top_longs_c, top_shorts_c)
                 _col_cl, _col_cs = st.columns(2)
                 with _col_cl:
                     st.markdown(_col_label("Top 10 Longs", "long"), unsafe_allow_html=True)
-                    st.components.v1.html(_build_signal_strength_table_html(top_longs_c, side='long'), height=_h_c)
+                    st.components.v1.html(_build_signal_strength_table_html(top_longs_c, side='long'), height=_table_height(top_longs_c))
                 with _col_cs:
                     st.markdown(_col_label("Top 10 Shorts", "short"), unsafe_allow_html=True)
-                    st.components.v1.html(_build_signal_strength_table_html(top_shorts_c, side='short'), height=_h_c)
+                    st.components.v1.html(_build_signal_strength_table_html(top_shorts_c, side='short'), height=_table_height(top_shorts_c))
 
             # ════ TAB 4: SYSTEM DATA ════════════════════════════════════════════════════
             with tab_raw:
