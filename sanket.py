@@ -3203,63 +3203,8 @@ def main():
                 </p>
                 """, unsafe_allow_html=True)
 
-                # Premium Signal Interpretation Guide — styled to match terminal design
-                st.markdown("""
-                <div style="
-                    position: relative;
-                    margin: 2rem 0;
-                    padding: 1.5rem;
-                    background: linear-gradient(145deg, rgba(17, 24, 39, 0.35) 0%, rgba(10, 14, 23, 0.25) 100%);
-                    border: 1px solid rgba(212, 168, 83, 0.2);
-                    border-radius: 10px;
-                    backdrop-filter: blur(6px);
-                ">
-                    <div style="
-                        display: flex;
-                        align-items: center;
-                        gap: 0.75rem;
-                        margin-bottom: 1.5rem;
-                        font-family: 'IBM Plex Mono', monospace;
-                        font-size: 0.85rem;
-                        font-weight: 600;
-                        letter-spacing: 0.08em;
-                        text-transform: uppercase;
-                        color: #D4A853;
-                    ">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm0-14c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6z"/>
-                        </svg>
-                        Signal Types Reference
-                    </div>
-
-                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem;">
-                        <div style="padding: 1rem; background: rgba(45, 212, 168, 0.08); border-left: 3px solid rgba(45, 212, 168, 0.4); border-radius: 6px;">
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; font-weight: 700; color: #2DD4A8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.75rem;">Set A: Momentum</div>
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8; line-height: 1.5;">Composite Line crosses Signal Line anywhere • No zone filter • Captures building momentum</div>
-                        </div>
-
-                        <div style="padding: 1rem; background: rgba(212, 168, 83, 0.08); border-left: 3px solid rgba(212, 168, 83, 0.4); border-radius: 6px;">
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; font-weight: 700; color: #D4A853; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.75rem;">Set B: Crossover</div>
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8; line-height: 1.5;">Lines cross in extreme zones (±40) • Momentum exhaustion • High precision timing</div>
-                        </div>
-
-                        <div style="padding: 1rem; background: rgba(148, 163, 184, 0.08); border-left: 3px solid rgba(148, 163, 184, 0.4); border-radius: 6px;">
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.75rem;">Set C: Threshold</div>
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8; line-height: 1.5;">Freshly enters OS/OB zone from neutral • First bar of entry • Earliest actionable signal</div>
-                        </div>
-                    </div>
-
-                    <div style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid rgba(255, 255, 255, 0.05);">
-                        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; font-weight: 600; color: #F1F5F9; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.75rem;">Key Metrics</div>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem;">
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8;"><span style="color: #F1F5F9; font-weight: 600;">Signal</span> · Momentum magnitude ±0 to ±100</div>
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8;"><span style="color: #F1F5F9; font-weight: 600;">Trend</span> · Price confirmation +1 to -1</div>
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8;"><span style="color: #F1F5F9; font-weight: 600;">UMA Flag</span> · MA crossover status</div>
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8;"><span style="color: #F1F5F9; font-weight: 600;">Zone</span> · Oscillator position (OB/OS)</div>
-                        </div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                # Render Signal Interpretation Guide
+                ui.render_signal_guide()
 
                 # Show all data with historical signals
                 display_df = results_df[[
