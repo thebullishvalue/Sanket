@@ -2486,7 +2486,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
         count = stats[age]['count']
         table_rows.append(f"""
         <tr style="background: {header_bg}; border-bottom: 2px solid {border_color};">
-            <td colspan="7" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
+            <td colspan="7" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
                 {age} · {count} signal{'s' if count != 1 else ''} · Avg Signal: {avg_signal:+.1f} · Avg %: {avg_pct:+.1f}
             </td>
         </tr>
@@ -2540,16 +2540,21 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
     <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        * {{
+            -webkit-text-size-adjust: 100%;
+            -moz-text-size-adjust: 100%;
+            text-size-adjust: 100%;
+        }}
         body {{
             font-family: 'IBM Plex Mono', monospace;
             background: transparent;
             color: #F1F5F9;
             padding: 0.5rem 0.5rem 1.5rem 0.5rem;
-            font-size: 16px;
+            font-size: 16px !important;
         }}
         @media (max-width: 768px) {{
             body {{
-                font-size: 16px;
+                font-size: 16px !important;
             }}
         }}
         .portfolio-table {{
@@ -2568,7 +2573,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
         .portfolio-table thead th {{
             background: linear-gradient(180deg, rgba(10, 14, 23, 0.95) 0%, rgba(10, 14, 23, 0.85) 100%);
             color: #4B5563;
-            font-size: 0.62rem;
+            font-size: 0.62rem !important;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.1em;
@@ -2588,7 +2593,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
             padding: 0.75rem 0.75rem;
             color: #F1F5F9;
             vertical-align: middle;
-            font-size: 0.75rem;
+            font-size: 0.75rem !important;
         }}
         .portfolio-table tbody td.symbol {{
             font-weight: 700;
@@ -2716,7 +2721,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
         .portfolio-table thead th {{
             background: linear-gradient(180deg, rgba(10, 14, 23, 0.95) 0%, rgba(10, 14, 23, 0.85) 100%);
             color: #4B5563;
-            font-size: 0.62rem;
+            font-size: 0.62rem !important;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.1em;
@@ -2736,7 +2741,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
             padding: 0.75rem 0.75rem;
             color: #F1F5F9;
             vertical-align: middle;
-            font-size: 0.75rem;
+            font-size: 0.75rem !important;
         }}
         .portfolio-table tbody td.symbol {{
             font-weight: 700;
@@ -2965,7 +2970,7 @@ def main():
                             la_html = _build_signal_table_html(la_stats, side='long')
                             _g = sum(1 for a in _age_order if la_stats[a]['count'] > 0)
                             _r = sum(la_stats[a]['count'] for a in _age_order)
-                            st.components.v1.html(la_html, height=max(70 + _g * 46 + _r * 44, 110))
+                            st.components.v1.html(la_html, height=max(120 + _g * 60 + _r * 56, 150))
                             _render_signal_legend(side='long', condition_set='A')
 
                         with cross_bull_tab:
@@ -3198,30 +3203,63 @@ def main():
                 </p>
                 """, unsafe_allow_html=True)
 
-                # Signal Interpretation Guide
-                with st.expander("📖 Signal Interpretation Guide", expanded=False):
-                    st.markdown("""
-                    ### Three Signal Types: Momentum (A), Crossover (B), Threshold (C)
+                # Premium Signal Interpretation Guide — styled to match terminal design
+                st.markdown("""
+                <div style="
+                    position: relative;
+                    margin: 2rem 0;
+                    padding: 1.5rem;
+                    background: linear-gradient(145deg, rgba(17, 24, 39, 0.35) 0%, rgba(10, 14, 23, 0.25) 100%);
+                    border: 1px solid rgba(212, 168, 83, 0.2);
+                    border-radius: 10px;
+                    backdrop-filter: blur(6px);
+                ">
+                    <div style="
+                        display: flex;
+                        align-items: center;
+                        gap: 0.75rem;
+                        margin-bottom: 1.5rem;
+                        font-family: 'IBM Plex Mono', monospace;
+                        font-size: 0.85rem;
+                        font-weight: 600;
+                        letter-spacing: 0.08em;
+                        text-transform: uppercase;
+                        color: #D4A853;
+                    ">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm0-14c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6z"/>
+                        </svg>
+                        Signal Types Reference
+                    </div>
 
-                    **Momentum (A)** — Broad oscillator crosses
-                    - Composite Line crosses above/below Signal Line anywhere
-                    - Less restrictive, captures building momentum
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem;">
+                        <div style="padding: 1rem; background: rgba(45, 212, 168, 0.08); border-left: 3px solid rgba(45, 212, 168, 0.4); border-radius: 6px;">
+                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; font-weight: 700; color: #2DD4A8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.75rem;">Set A: Momentum</div>
+                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8; line-height: 1.5;">Composite Line crosses Signal Line anywhere • No zone filter • Captures building momentum</div>
+                        </div>
 
-                    **Crossover (B)** — Precise zone crossovers
-                    - Crosses occur while both lines are in extreme zones (±40)
-                    - Marks momentum exhaustion — high precision reversal timing
+                        <div style="padding: 1rem; background: rgba(212, 168, 83, 0.08); border-left: 3px solid rgba(212, 168, 83, 0.4); border-radius: 6px;">
+                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; font-weight: 700; color: #D4A853; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.75rem;">Set B: Crossover</div>
+                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8; line-height: 1.5;">Lines cross in extreme zones (±40) • Momentum exhaustion • High precision timing</div>
+                        </div>
 
-                    **Threshold (C)** — Zone entries
-                    - Composite Line freshly enters oversold/overbought from neutral
-                    - Signal Line still outside the extreme zone
-                    - Earliest entry point into extremes
+                        <div style="padding: 1rem; background: rgba(148, 163, 184, 0.08); border-left: 3px solid rgba(148, 163, 184, 0.4); border-radius: 6px;">
+                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.75rem;">Set C: Threshold</div>
+                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8; line-height: 1.5;">Freshly enters OS/OB zone from neutral • First bar of entry • Earliest actionable signal</div>
+                        </div>
+                    </div>
 
-                    **Key Metrics:**
-                    - **Signal**: Momentum magnitude (±0 to ±100)
-                    - **Trend**: Price trend confirmation (+1 to -1)
-                    - **UMA Flag**: MA crossover status (Conf Bull/Bear, Bull/Bear Div)
-                    - **Zone**: Oscillator position (OB/OS Extreme, OB/OS, Neutral)
-                    """)
+                    <div style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid rgba(255, 255, 255, 0.05);">
+                        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; font-weight: 600; color: #F1F5F9; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.75rem;">Key Metrics</div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem;">
+                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8;"><span style="color: #F1F5F9; font-weight: 600;">Signal</span> · Momentum magnitude ±0 to ±100</div>
+                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8;"><span style="color: #F1F5F9; font-weight: 600;">Trend</span> · Price confirmation +1 to -1</div>
+                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8;"><span style="color: #F1F5F9; font-weight: 600;">UMA Flag</span> · MA crossover status</div>
+                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: #94A3B8;"><span style="color: #F1F5F9; font-weight: 600;">Zone</span> · Oscillator position (OB/OS)</div>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
                 # Show all data with historical signals
                 display_df = results_df[[
