@@ -2458,58 +2458,11 @@ def _render_signal_legend(side: str = 'long', condition_set: str = 'A') -> None:
             together_good = "Signal &gt;&#x2B;40 | Trend &#x2B; = confirmed overbought in an uptrend — strongest Threshold short context."
             together_mixed = "Signal &gt;&#x2B;40 | Trend &minus; = overbought in a downtrend. Likely a counter-trend rally — fade quickly or wait for re-entry below &#x2B;40."
 
-    st.markdown(f"""
-    <div style="
-        position: relative;
-        margin-top: 1.25rem;
-        padding: 0.85rem 1rem 0.85rem 1rem;
-        background: rgba(255, 255, 255, 0.015);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 8px;
-        overflow: hidden;
-    ">
-        <div style="
-            position: absolute; top: 0; left: 0; right: 0; height: 1px;
-            background: linear-gradient(90deg, #D4A853 0%, rgba(212,168,83,0.25) 60%, transparent 100%);
-            opacity: 0.55;
-        "></div>
-        <div style="
-            display: flex; align-items: center; gap: 0.45rem;
-            margin-bottom: 0.65rem;
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.78rem; font-weight: 600;
-            letter-spacing: 0.12em; text-transform: uppercase;
-            color: #D4A853;
-        ">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#D4A853" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-            How to read this table
-        </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.45rem 1.5rem;">
-            <div>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.82rem; font-weight:600; color:#F1F5F9;">Timing</span>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#4B5563;"> · </span>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#94A3B8;">{timing_desc}</span>
-            </div>
-            <div>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.82rem; font-weight:600; color:#F1F5F9;">Signal</span>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#4B5563;"> · </span>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#94A3B8;">{signal_desc}</span>
-            </div>
-            <div>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.82rem; font-weight:600; color:#F1F5F9;">Trend</span>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#4B5563;"> · </span>
-                <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#94A3B8;">{trend_desc}</span>
-            </div>
-        </div>
-        <div style="margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid rgba(255,255,255,0.05);">
-            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.82rem; font-weight:600; color:#F1F5F9;">Reading Signal &amp; Trend together</span>
-            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#4B5563;"> · </span>
-            <span style="font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:#94A3B8;">{together_good} &nbsp;&nbsp;{together_mixed}</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Removed "How to read this table" section from signal tabs to free up mobile space
+    # This content will be moved to System Data tab for reference
+    # signal_desc, trend_desc, timing_desc, together_good, together_mixed are still available
+    # in the function scope for future use if needed
+    pass
 
 
 def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
@@ -3244,6 +3197,31 @@ def main():
                     All UMA v6 engine outputs including oscillator values, trend metrics, macro context, and historical signal history.
                 </p>
                 """, unsafe_allow_html=True)
+
+                # Signal Interpretation Guide
+                with st.expander("📖 Signal Interpretation Guide", expanded=False):
+                    st.markdown("""
+                    ### Three Signal Types: Momentum (A), Crossover (B), Threshold (C)
+
+                    **Momentum (A)** — Broad oscillator crosses
+                    - Composite Line crosses above/below Signal Line anywhere
+                    - Less restrictive, captures building momentum
+
+                    **Crossover (B)** — Precise zone crossovers
+                    - Crosses occur while both lines are in extreme zones (±40)
+                    - Marks momentum exhaustion — high precision reversal timing
+
+                    **Threshold (C)** — Zone entries
+                    - Composite Line freshly enters oversold/overbought from neutral
+                    - Signal Line still outside the extreme zone
+                    - Earliest entry point into extremes
+
+                    **Key Metrics:**
+                    - **Signal**: Momentum magnitude (±0 to ±100)
+                    - **Trend**: Price trend confirmation (+1 to -1)
+                    - **UMA Flag**: MA crossover status (Conf Bull/Bear, Bull/Bear Div)
+                    - **Zone**: Oscillator position (OB/OS Extreme, OB/OS, Neutral)
+                    """)
 
                 # Show all data with historical signals
                 display_df = results_df[[
