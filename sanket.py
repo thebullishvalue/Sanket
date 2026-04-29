@@ -1107,6 +1107,270 @@ def compute_uma_flags(df, macro_dict, ticker=''):
         return "—"
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ANALOG ENGINE v2 — Full Mahalanobis Directional Accuracy
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _analog_zscore(series, length=50, clip=3.0):
+    """Z-score normalization with optional clipping."""
+    if len(series) < length:
+        return series * 0.0
+    m = series.rolling(length, min_periods=1).mean()
+    s = series.rolling(length, min_periods=1).std().replace(0, np.nan)
+    z = (series - m) / s.fillna(1.0)
+    return z.clip(-clip, clip)
+
+def _analog_atr(df, n=14):
+    """Average True Range."""
+    h, l, c = df['High'], df['Low'], df['Close']
+    tr = np.maximum(h - l, np.maximum(np.abs(h - c.shift(1)), np.abs(l - c.shift(1))))
+    return tr.rolling(n, min_periods=1).mean()
+
+def _analog_gram_schmidt(series_list, length=50):
+    """Gram-Schmidt orthogonalization for 6 basis vectors.
+
+    Returns z-normalized orthogonal basis vectors.
+    """
+    try:
+        # Initialize orthogonal vectors
+        e1 = series_list[0].copy()
+
+        # e2 orthogonal to e1
+        cov_21 = (series_list[1] * e1).rolling(length, min_periods=1).mean() - \
+                 series_list[1].rolling(length, min_periods=1).mean() * e1.rolling(length, min_periods=1).mean()
+        var_1 = (e1 * e1).rolling(length, min_periods=1).mean() - \
+                (e1.rolling(length, min_periods=1).mean() ** 2)
+        c21 = cov_21 / (var_1.replace(0, np.nan))
+        e2 = series_list[1] - c21.fillna(0) * e1
+
+        # e3 orthogonal to e1, e2
+        cov_31 = (series_list[2] * e1).rolling(length, min_periods=1).mean() - \
+                 series_list[2].rolling(length, min_periods=1).mean() * e1.rolling(length, min_periods=1).mean()
+        cov_32 = (series_list[2] * e2).rolling(length, min_periods=1).mean() - \
+                 series_list[2].rolling(length, min_periods=1).mean() * e2.rolling(length, min_periods=1).mean()
+        var_2 = (e2 * e2).rolling(length, min_periods=1).mean() - \
+                (e2.rolling(length, min_periods=1).mean() ** 2)
+        c31 = cov_31 / (var_1.replace(0, np.nan))
+        c32 = cov_32 / (var_2.replace(0, np.nan))
+        e3 = series_list[2] - c31.fillna(0) * e1 - c32.fillna(0) * e2
+
+        # e4 orthogonal to e1, e2, e3
+        cov_41 = (series_list[3] * e1).rolling(length, min_periods=1).mean() - \
+                 series_list[3].rolling(length, min_periods=1).mean() * e1.rolling(length, min_periods=1).mean()
+        cov_42 = (series_list[3] * e2).rolling(length, min_periods=1).mean() - \
+                 series_list[3].rolling(length, min_periods=1).mean() * e2.rolling(length, min_periods=1).mean()
+        var_3 = (e3 * e3).rolling(length, min_periods=1).mean() - \
+                (e3.rolling(length, min_periods=1).mean() ** 2)
+        c41 = cov_41 / (var_1.replace(0, np.nan))
+        c42 = cov_42 / (var_2.replace(0, np.nan))
+        e4 = series_list[3] - c41.fillna(0) * e1 - c42.fillna(0) * e2
+
+        # e5 orthogonal to e1-e4
+        cov_51 = (series_list[4] * e1).rolling(length, min_periods=1).mean() - \
+                 series_list[4].rolling(length, min_periods=1).mean() * e1.rolling(length, min_periods=1).mean()
+        cov_52 = (series_list[4] * e2).rolling(length, min_periods=1).mean() - \
+                 series_list[4].rolling(length, min_periods=1).mean() * e2.rolling(length, min_periods=1).mean()
+        cov_53 = (series_list[4] * e3).rolling(length, min_periods=1).mean() - \
+                 series_list[4].rolling(length, min_periods=1).mean() * e3.rolling(length, min_periods=1).mean()
+        var_4 = (e4 * e4).rolling(length, min_periods=1).mean() - \
+                (e4.rolling(length, min_periods=1).mean() ** 2)
+        c51 = cov_51 / (var_1.replace(0, np.nan))
+        c52 = cov_52 / (var_2.replace(0, np.nan))
+        c53 = cov_53 / (var_3.replace(0, np.nan))
+        e5 = series_list[4] - c51.fillna(0) * e1 - c52.fillna(0) * e2 - c53.fillna(0) * e3
+
+        # e6 orthogonal to e1-e5
+        cov_61 = (series_list[5] * e1).rolling(length, min_periods=1).mean() - \
+                 series_list[5].rolling(length, min_periods=1).mean() * e1.rolling(length, min_periods=1).mean()
+        cov_62 = (series_list[5] * e2).rolling(length, min_periods=1).mean() - \
+                 series_list[5].rolling(length, min_periods=1).mean() * e2.rolling(length, min_periods=1).mean()
+        cov_63 = (series_list[5] * e3).rolling(length, min_periods=1).mean() - \
+                 series_list[5].rolling(length, min_periods=1).mean() * e3.rolling(length, min_periods=1).mean()
+        cov_64 = (series_list[5] * e4).rolling(length, min_periods=1).mean() - \
+                 series_list[5].rolling(length, min_periods=1).mean() * e4.rolling(length, min_periods=1).mean()
+        cov_65 = (series_list[5] * e5).rolling(length, min_periods=1).mean() - \
+                 series_list[5].rolling(length, min_periods=1).mean() * e5.rolling(length, min_periods=1).mean()
+        var_5 = (e5 * e5).rolling(length, min_periods=1).mean() - \
+                (e5.rolling(length, min_periods=1).mean() ** 2)
+        c61 = cov_61 / (var_1.replace(0, np.nan))
+        c62 = cov_62 / (var_2.replace(0, np.nan))
+        c63 = cov_63 / (var_3.replace(0, np.nan))
+        c64 = cov_64 / (var_4.replace(0, np.nan))
+        c65 = cov_65 / (var_5.replace(0, np.nan))
+        e6 = series_list[5] - c61.fillna(0) * e1 - c62.fillna(0) * e2 - c63.fillna(0) * e3 - c64.fillna(0) * e4 - c65.fillna(0) * e5
+
+        # Z-score normalize each basis vector
+        zn_e1 = _analog_zscore(e1, length)
+        zn_e2 = _analog_zscore(e2, length)
+        zn_e3 = _analog_zscore(e3, length)
+        zn_e4 = _analog_zscore(e4, length)
+        zn_e5 = _analog_zscore(e5, length)
+        zn_e6 = _analog_zscore(e6, length)
+
+        return [zn_e1, zn_e2, zn_e3, zn_e4, zn_e5, zn_e6]
+    except Exception:
+        return None
+
+def compute_analog_flags(df, ticker=''):
+    """Compute Analog Engine v2 directional accuracy flag.
+
+    Returns: "▲ BULL · XX%" | "● NEUTRAL · XX%" | "▼ BEAR · XX%" | "—"
+
+    Computes full Mahalanobis distance-based analog matching with:
+    - Gram-Schmidt orthogonalization across 6 features
+    - Temporal decay weighting (recent analogs favored)
+    - Win rate calculation from 5-bar forward returns
+    - Profit factor (risk-adjusted) confidence grading
+    """
+    try:
+        if len(df) < 400:  # Need sufficient history
+            return "—"
+
+        # Use full available data for Gram-Schmidt normalization (matches Pine Script's approach)
+        full_df = df.copy()
+
+        # 1. WRCI components (composite_line, voltrend) — calculated on full data
+        hma_p = full_df['Close'].ewm(span=15).mean()
+        hma_v = full_df['Volume'].ewm(span=15).mean()
+
+        trend = pd.Series(0.0, index=full_df.index)
+        for i in range(20, len(full_df)):
+            t = ((hma_p.iloc[i-20:i] > hma_p.iloc[i-20]).sum() - 10) * 0.5
+            trend.iloc[i] = t
+
+        voltrend = pd.Series(0.0, index=full_df.index)
+        for i in range(20, len(full_df)):
+            v = ((hma_v.iloc[i-20:i] > hma_v.iloc[i-20]).sum() - 10) * 0.5
+            voltrend.iloc[i] = v
+
+        ap = (full_df['High'] + full_df['Low'] + full_df['Close']) / 3
+        esa = ap.ewm(span=10).mean()
+        d = (ap - esa).abs().ewm(span=10).mean()
+        ci = (ap - esa) / (0.015 * d.replace(0, np.nan))
+        wt1 = ci.ewm(span=21).mean()
+        composite_line = (wt1 + trend * 10) / 2
+
+        # 2. Pragyam components (RSI, oscillator, z-score, MA count) — full data
+        rsi_val = 100 - (100 / (1 + (full_df['Close'].diff().clip(lower=0).ewm(span=14).mean() /
+                                     (-full_df['Close'].diff().clip(upper=0)).ewm(span=14).mean())))
+        rsi_val = rsi_val.fillna(50)
+
+        spread = ((full_df['High'] + full_df['Low']) / 2 - full_df['Open']).fillna(0)
+        vol_ma = full_df['Volume'].rolling(20, min_periods=1).mean()
+        price_impact = ((full_df['Close'].shift(3) - full_df['Close']) * full_df['Volume'] / vol_ma).rolling(20, min_periods=1).mean()
+        osc_raw = (spread * full_df['Volume'] / vol_ma - price_impact).rolling(20, min_periods=1).mean()
+        osc_val = 200 * (osc_raw - osc_raw.rolling(20, min_periods=1).min()) / \
+                  (osc_raw.rolling(20, min_periods=1).max() - osc_raw.rolling(20, min_periods=1).min()).replace(0, 1) - 100
+        osc_val = osc_val.fillna(0)
+
+        osc_sma = osc_val.rolling(20, min_periods=1).mean()
+        osc_std = osc_val.rolling(20, min_periods=1).std().replace(0, 1)
+        zscore_val = (osc_val - osc_sma) / osc_std
+
+        ma20 = full_df['Close'].rolling(20, min_periods=1).mean()
+        ma90 = full_df['Close'].rolling(90, min_periods=1).mean()
+        ma200 = full_df['Close'].rolling(200, min_periods=1).mean()
+        ma_count = (full_df['Close'] > ma20).astype(int) + (full_df['Close'] > ma90).astype(int) + \
+                   (full_df['Close'] > ma200).astype(int) + (ma20 > ma90).astype(int) + (ma90 > ma200).astype(int)
+
+        mean_rev_raw = (full_df['Close'] - ma200) / (ma200.replace(0, 1))
+
+        # 3. Gram-Schmidt basis vectors (normalized across full available data to match Pine Script)
+        basis_vecs = _analog_gram_schmidt([composite_line, rsi_val, osc_val, ma_count.astype(float),
+                                           voltrend, mean_rev_raw], length=min(len(full_df), 300))
+        if basis_vecs is None:
+            return "—"
+
+        # 4. Regime detection (for filtering)
+        atr14 = _analog_atr(full_df, 14)
+        atr_ma50 = atr14.rolling(50, min_periods=1).mean()
+        vol_reg = (atr14 / (atr_ma50.replace(0, 1)) > 1.3).astype(int)
+        trend_reg = ((ma_count >= 4).astype(int) * 2) + ((ma_count <= 1).astype(int) * 0)
+        regime_current = trend_reg.iloc[-1] * 2 + vol_reg.iloc[-1]
+
+        # 5. Search for top 10 analogs using Mahalanobis distance
+        current_state = np.array([v.iloc[-1] for v in basis_vecs])
+
+        analogs = []
+        for i in range(50, len(full_df) - 5):  # Need 5 bars forward
+            hist_state = np.array([v.iloc[i] for v in basis_vecs])
+
+            # Filter by regime if available
+            if regime_current != trend_reg.iloc[i] * 2 + vol_reg.iloc[i]:
+                continue
+
+            dist = np.sqrt(np.sum((current_state - hist_state) ** 2) / 6.0)
+            fwd_close = full_df['Close'].iloc[i + 5]
+            fwd_ret = (fwd_close - full_df['Close'].iloc[i]) / full_df['Close'].iloc[i] * 100
+
+            # Temporal decay: weight recent analogs higher
+            bars_ago = len(full_df) - 1 - i
+            decay = np.exp(-bars_ago / 250.0)
+            weight = (1.0 / (dist + 0.1)) * decay
+
+            analogs.append({
+                'dist': dist,
+                'weight': weight,
+                'fwd_ret': fwd_ret,
+                'is_win': fwd_ret > 0.0,
+                'idx': i
+            })
+
+        if len(analogs) < 5:
+            # Fallback: unfiltered search
+            analogs = []
+            for i in range(50, len(full_df) - 5):
+                hist_state = np.array([v.iloc[i] for v in basis_vecs])
+                dist = np.sqrt(np.sum((current_state - hist_state) ** 2) / 6.0)
+                fwd_close = full_df['Close'].iloc[i + 5]
+                fwd_ret = (fwd_close - full_df['Close'].iloc[i]) / full_df['Close'].iloc[i] * 100
+                bars_ago = len(full_df) - 1 - i
+                decay = np.exp(-bars_ago / 250.0)
+                weight = (1.0 / (dist + 0.1)) * decay
+                analogs.append({'dist': dist, 'weight': weight, 'fwd_ret': fwd_ret, 'is_win': fwd_ret > 0.0, 'idx': i})
+
+        # Sort by distance, keep top 10
+        analogs = sorted(analogs, key=lambda x: x['dist'])[:10]
+
+        # 6. Calculate directional accuracy metrics
+        win_count = sum(1 for a in analogs if a['is_win'])
+        loss_count = len(analogs) - win_count
+        total_analogs = len(analogs)
+
+        if total_analogs == 0:
+            return "—"
+
+        win_rate = (win_count / total_analogs) * 100.0
+
+        # Profit factor
+        wins = [a['fwd_ret'] for a in analogs if a['is_win']]
+        losses = [a['fwd_ret'] for a in analogs if not a['is_win']]
+
+        avg_win = np.mean(wins) if wins else 0.0
+        avg_loss = np.mean(losses) if losses else 0.0
+
+        if loss_count > 0 and avg_loss != 0:
+            profit_factor = (win_count * avg_win) / (loss_count * abs(avg_loss))
+        else:
+            profit_factor = 99.0 if win_count > 0 else 0.0
+
+        # Confidence grading
+        is_strong = win_rate >= 70.0 and profit_factor >= 1.5
+        is_moderate = win_rate >= 55.0 and profit_factor >= 1.0
+
+        # Directional call
+        call_bullish = win_rate > 55.0
+        call_bearish = win_rate < 45.0
+
+        # Format output: "▲ BULL · 80%" or "● NEUTRAL · 60%" or "▼ BEAR · 40%"
+        call_sym = "▲" if call_bullish else "▼" if call_bearish else "●"
+        call_dir = "BULL" if call_bullish else "BEAR" if call_bearish else "NEUTRAL"
+
+        return f"{call_sym} {call_dir} · {int(win_rate)}%"
+
+    except Exception as e:
+        return "—"
+
+# ══════════════════════════════════════════════════════════════════════════════
 # REGIME INTELLIGENCE ENGINE (NIRNAY FEATURES)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1852,6 +2116,9 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             # UMA v6 info flag (pure read-only signal context, not screener logic)
             uma_flag = compute_uma_flags(df.iloc[:idx_pos + 1].tail(300), macro_context, ticker=ticker)
 
+            # Analog Engine v2 flag (directional accuracy from historical analogs)
+            analog_flag = compute_analog_flags(df.iloc[:idx_pos + 1], ticker=ticker)
+
             # Clean display names
             simple_name = ticker.replace(".NS", "").lstrip("^")
             friendly_name = ASSET_NAME_LOOKUP.get(ticker)
@@ -1925,13 +2192,15 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "SC_5d": "●" if sample_range.tail(5)['short_cond_wt'].any() else "—",
                 # UMA v6 info flag
                 "UMAFlag": uma_flag,
+                # Analog Engine v2 flag
+                "AnalogFlag": analog_flag,
                 # Additional fields for detail cards
                 "Osc_Value": round(last_row.get('Unified_Osc', 0), 2),
                 "MA_Alignment": 5,  # Placeholder
                 "ZScore_Value": 0,  # Placeholder
             })
             
-            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: Signal={last_row['Unified_Osc']:+.2f}  Zone={last_row['Condition']}  UMA={uma_flag}  Status={signal_type}")
+            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: Signal={last_row['Unified_Osc']:+.2f}  Zone={last_row['Condition']}  UMA={uma_flag}  Analog={analog_flag}  Status={signal_type}")
             
         except Exception as e:
             console.failure(f"Analysis Failed: {ticker}", str(e))
@@ -1963,7 +2232,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             "LA_Today", "LA_1d", "LA_2d", "LA_3d", "LA_5d", "SA_Today", "SA_1d", "SA_2d", "SA_3d", "SA_5d",
             "LB_Today", "LB_1d", "LB_2d", "LB_3d", "LB_5d", "SB_Today", "SB_1d", "SB_2d", "SB_3d", "SB_5d",
             "LC_Today", "LC_1d", "LC_2d", "LC_3d", "LC_5d", "SC_Today", "SC_1d", "SC_2d", "SC_3d", "SC_5d",
-            "UMAFlag", "Osc_Value", "MA_Alignment", "ZScore_Value",
+            "UMAFlag", "AnalogFlag", "Osc_Value", "MA_Alignment", "ZScore_Value",
         ]
         return pd.DataFrame(columns=expected_cols)
 
@@ -3295,7 +3564,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
         count = stats[age]['count']
         table_rows.append(f"""
         <tr style="background: {header_bg}; border-bottom: 2px solid {border_color};">
-            <td colspan="7" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
+            <td colspan="8" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
                 {age} · {count} signal{'s' if count != 1 else ''} · Avg Signal: {avg_signal:+.1f} · Avg %: {avg_pct:+.1f}
             </td>
         </tr>
@@ -3317,6 +3586,9 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
             zone_color = _zone_colors.get(zone_raw, '#374151')
             uma  = html_module.escape(str(row.get('UMAFlag', '—')))
             uma_color = _uma_colors.get(uma, '#374151')
+            analog = html_module.escape(str(row.get('AnalogFlag', '—')))
+            # Color analog by direction: ▲ green, ▼ red, ● yellow, — gray
+            analog_color = "#34D399" if analog.startswith("▲") else "#FB7185" if analog.startswith("▼") else "#FBBF24" if analog.startswith("●") else "#374151"
 
             # Color % change: green for positive, red for negative
             pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
@@ -3328,15 +3600,16 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
-                <td class="numeric" style="color:{uma_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em;">{uma}</td>
-                <td class="numeric" style="color:{zone_color}; font-weight:600; font-size:0.68rem;">{zone_disp}</td>
+                <td class="numeric" style="color:{analog_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em; white-space:nowrap;">{analog}</td>
+                <td class="numeric" style="color:{uma_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em; white-space:nowrap;">{uma}</td>
+                <td class="numeric" style="color:{zone_color}; font-weight:600; font-size:0.68rem; white-space:nowrap;">{zone_disp}</td>
             </tr>
             """)
 
     if not table_rows:
         table_rows.append(f"""
         <tr>
-            <td colspan="7" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="8" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
                 — no signals detected —
             </td>
@@ -3426,6 +3699,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
                     <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
+                    <th class="numeric">Analog</th>
                     <th class="numeric">UMA</th>
                     <th class="numeric">Zone</th>
                 </tr>
@@ -3484,6 +3758,9 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
             zone_color = _zone_colors.get(zone_raw, '#374151')
             uma = html_module.escape(str(row.get('UMAFlag', '—')))
             uma_color = _uma_colors.get(uma, '#374151')
+            analog = html_module.escape(str(row.get('AnalogFlag', '—')))
+            # Color analog by direction: ▲ green, ▼ red, ● yellow, — gray
+            analog_color = "#34D399" if analog.startswith("▲") else "#FB7185" if analog.startswith("▼") else "#FBBF24" if analog.startswith("●") else "#374151"
 
             rank_str = f"{idx:02d}"
             pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
@@ -3496,8 +3773,9 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
-                <td class="numeric" style="color:{uma_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em;">{uma}</td>
-                <td class="numeric" style="color:{zone_color}; font-weight:600; font-size:0.68rem;">{zone_disp}</td>
+                <td class="numeric" style="color:{analog_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em; white-space:nowrap;">{analog}</td>
+                <td class="numeric" style="color:{uma_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em; white-space:nowrap;">{uma}</td>
+                <td class="numeric" style="color:{zone_color}; font-weight:600; font-size:0.68rem; white-space:nowrap;">{zone_disp}</td>
             </tr>
             """)
 
@@ -3575,6 +3853,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                     <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
+                    <th class="numeric">Analog</th>
                     <th class="numeric">UMA</th>
                     <th class="numeric">Zone</th>
                 </tr>
@@ -3628,7 +3907,7 @@ def main():
         if st.session_state.get("run_screener_flag"):
             if mode == "Snapshot":
                 # Console header for local terminal monitoring
-                console.header("SANKET TERMINAL — Institutional Signal Screener", f"v{VERSION}")
+                console.header("SANKET TERMINAL — Institutional Signal Screener", VERSION)
                 console.main_header("ANALYSIS RUN START", {
                     "Universe": universe,
                     "Index": selected_index,
@@ -3648,7 +3927,7 @@ def main():
                 st.rerun()
             elif mode == "Range Study":
                 # Time-series (Range Study) — Console Logging
-                console.header("SANKET TERMINAL — Bulk Range Intelligence", f"v{VERSION}")
+                console.header("SANKET TERMINAL — Bulk Range Intelligence", VERSION)
                 console.main_header("RANGE STUDY START", {
                     "Universe": universe,
                     "Index": selected_index,
@@ -3663,7 +3942,7 @@ def main():
                 )
                 st.session_state["run_screener_flag"] = False
             else:  # Correlation mode
-                console.header("SANKET TERMINAL — Correlation Intelligence", f"v{VERSION}")
+                console.header("SANKET TERMINAL — Correlation Intelligence", VERSION)
                 console.main_header("CORRELATION ANALYSIS START", {
                     "Universe": universe,
                     "Index": selected_index,
@@ -4038,7 +4317,7 @@ def main():
 
                 # Show all data with historical signals
                 display_df = results_df[[
-                    "DisplayName", "Price", "Signal", "Trend", "Wave", "UMAFlag", "Zone",
+                    "DisplayName", "Price", "Signal", "Trend", "Wave", "UMAFlag", "AnalogFlag", "Zone",
                     "SignalType", "L_Today", "L_1d", "L_2d", "L_3d", "L_5d",
                     "S_Today", "S_1d", "S_2d", "S_3d", "S_5d"
                 ]].sort_values("Signal", ascending=False)
