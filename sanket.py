@@ -1495,7 +1495,7 @@ def render_signal_detail_card(symbol, price, signal_val, trend_val, zone, signal
                     {symbol.replace('.NS', '')}
                 </div>
                 <div style="font-family: var(--data); font-size: 0.8rem; color: var(--ink-secondary);">
-                    ₹{price:,.2f}
+                    {price:,.2f}
                 </div>
             </div>
             <div style="text-align: right;">
@@ -2515,7 +2515,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
             table_rows.append(f"""
             <tr>
                 <td class="symbol">{symbol}</td>
-                <td class="numeric currency">₹{price:,.2f}</td>
+                <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
@@ -2613,7 +2613,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
             <thead>
                 <tr>
                     <th>Symbol</th>
-                    <th class="numeric">Price (₹)</th>
+                    <th class="numeric">Price</th>
                     <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
@@ -2683,7 +2683,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
             <tr>
                 <td class="numeric" style="color: #D4A853; font-weight: 700;">{rank_str}</td>
                 <td class="symbol">{symbol}</td>
-                <td class="numeric currency">₹{price:,.2f}</td>
+                <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
@@ -2762,7 +2762,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                 <tr>
                     <th class="numeric">Rank</th>
                     <th>Symbol</th>
-                    <th class="numeric">Price (₹)</th>
+                    <th class="numeric">Price</th>
                     <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
