@@ -2950,6 +2950,167 @@ footer {
 }
 
 /* ================================================================
+   Correlation Mode — CSS Classes
+   ================================================================ */
+
+.corr-tier {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--r-sm);
+    font-family: var(--data);
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+}
+
+.corr-tier.strong-pos {
+    color: var(--emerald);
+    background: rgba(45, 212, 168, 0.12);
+    border: 1px solid rgba(45, 212, 168, 0.25);
+}
+
+.corr-tier.moderate-pos {
+    color: var(--emerald-bright);
+    background: rgba(45, 212, 168, 0.08);
+    border: 1px solid rgba(45, 212, 168, 0.15);
+}
+
+.corr-tier.weak-pos {
+    color: var(--ink-secondary);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border);
+}
+
+.corr-tier.neutral {
+    color: var(--ink-tertiary);
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+}
+
+.corr-tier.weak-neg {
+    color: var(--rose-bright);
+    background: rgba(232, 85, 90, 0.08);
+    border: 1px solid rgba(232, 85, 90, 0.15);
+}
+
+.corr-tier.moderate-neg {
+    color: var(--rose);
+    background: rgba(232, 85, 90, 0.12);
+    border: 1px solid rgba(232, 85, 90, 0.25);
+}
+
+.corr-tier.strong-neg {
+    color: var(--rose);
+    background: rgba(232, 85, 90, 0.18);
+    border: 1px solid rgba(232, 85, 90, 0.4);
+}
+
+.corr-bar-track {
+    width: 80px;
+    height: 6px;
+    background: var(--bg-elevated);
+    border-radius: 3px;
+    position: relative;
+    overflow: visible;
+}
+
+.corr-bar-center {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    width: 1px;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.corr-bar-fill {
+    position: absolute;
+    top: 0;
+    height: 6px;
+    border-radius: 3px;
+}
+
+.corr-bar-fill.pos {
+    background: linear-gradient(90deg, rgba(45, 212, 168, 0.4), var(--emerald));
+    left: 50%;
+}
+
+.corr-bar-fill.neg {
+    background: linear-gradient(90deg, var(--rose), rgba(232, 85, 90, 0.4));
+    right: 50%;
+}
+
+.div-badge {
+    font-family: var(--data);
+    font-size: 0.65rem;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+.div-badge.laggard {
+    color: var(--emerald);
+    background: rgba(45, 212, 168, 0.1);
+}
+
+.div-badge.runaway {
+    color: var(--rose);
+    background: rgba(232, 85, 90, 0.1);
+}
+
+.div-badge.converging {
+    color: var(--amber);
+    background: rgba(212, 168, 83, 0.1);
+}
+
+.div-badge.contra {
+    color: var(--violet);
+    background: rgba(139, 92, 246, 0.1);
+}
+
+.corr-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--glass);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    margin-bottom: var(--sp-2);
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.corr-row:hover {
+    border-color: rgba(139, 92, 246, 0.25);
+    background: var(--glass-hover);
+}
+
+.corr-row .name {
+    font-family: var(--data);
+    font-size: 0.78rem;
+    color: var(--ink-primary);
+    font-weight: 600;
+}
+
+.corr-row .sub {
+    font-family: var(--data);
+    font-size: 0.65rem;
+    color: var(--ink-tertiary);
+    margin-top: 2px;
+}
+
+.chart-container.corr::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(circle at 1px 1px, rgba(139, 92, 246, 0.15) 1px, transparent 0);
+    background-size: 24px 24px;
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* ================================================================
    Responsive Design
    ================================================================ */
 @media (prefers-reduced-motion: reduce) {
