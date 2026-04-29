@@ -1972,19 +1972,25 @@ def render_sidebar():
 # MAIN SCREENER FUNCTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True):
+def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True, external_progress_slot=None, progress_offset=0, progress_scale=100):
     """Execute WRCI momentum analysis on universe symbols and return ranked signals.
 
     Fetches market data for universe, computes Wave Trend oscillations, calculates
     signal magnitude and trend values, detects overbought/oversold zones.
 
+    Args:
+        external_progress_slot: Optional Streamlit container for external progress tracking (e.g., from correlation analysis)
+        progress_offset: Starting percentage for external progress tracking (default 0)
+        progress_scale: Scale factor for progress percentage within external slot (default 100 = full)
+
     Returns: DataFrame with signals ranked by magnitude, or None on error.
     """
     obLevel1, obLevel2, osLevel1, osLevel2 = levels
-    progress_slot = st.empty() if show_progress else None
+    progress_slot = external_progress_slot if external_progress_slot is not None else (st.empty() if show_progress else None)
 
-    if show_progress:
-        progress_bar(progress_slot, 5, "Initializing UMA v6 engine", f"Universe: {universe}")
+    if show_progress or external_progress_slot is not None:
+        pct_val = progress_offset + (5 * progress_scale / 100)
+        progress_bar(progress_slot, pct_val, "Initializing UMA v6 engine", f"Universe: {universe}")
     
     console.start_phase("DATA ACQUISITION", 1, 2)
     console.section("Universe Configuration")
@@ -2018,8 +2024,9 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     console.success(f"Fetched {len(stock_list)} symbols for {selected_index}")
     console.section("Market Data Fetch")
-    if show_progress:
-        progress_bar(progress_slot, 15, "Fetching Market Data", f"{len(stock_list)} stocks")
+    if show_progress or external_progress_slot is not None:
+        pct_val = progress_offset + (15 * progress_scale / 100)
+        progress_bar(progress_slot, pct_val, "Fetching Market Data", f"{len(stock_list)} stocks")
     data_dict, fetch_msg = fetch_batch_data(stock_list, end_date=analysis_date)
 
     if not data_dict:
@@ -2039,8 +2046,9 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.item("OB Levels", f"{obLevel1} / {obLevel2}")
     console.item("OS Levels", f"{osLevel1} / {osLevel2}")
     console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
-    if show_progress:
-        progress_bar(progress_slot, 20, "Analyzing UMA v6 momentum", f"{len(data_dict)} stocks")
+    if show_progress or external_progress_slot is not None:
+        pct_val = progress_offset + (20 * progress_scale / 100)
+        progress_bar(progress_slot, pct_val, "Analyzing UMA v6 momentum", f"{len(data_dict)} stocks")
 
     # Pre-fetch macro context once for UMA MMR (cached; reused across all symbols).
     # Symbols already downloaded for the screener universe are reused directly from
@@ -2069,8 +2077,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     for i, (ticker, df) in enumerate(data_dict.items()):
         try:
-            pct = int(20 + (i + 1) / len(data_dict) * 75)
-            if show_progress:
+            pct = int(progress_offset + (20 + (i + 1) / len(data_dict) * 75) * progress_scale / 100)
+            if show_progress or external_progress_slot is not None:
                 progress_bar(progress_slot, pct, f"Analyzing Signals", f"{i + 1}/{len(data_dict)} stocks")
 
             if timeframe == "Weekly":
@@ -2222,9 +2230,11 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     })
     console.line('═', 70)
     
-    if show_progress:
-        progress_bar(progress_slot, 100, "Analysis Complete", f"{len(results)} stocks analyzed")
-        progress_slot.empty()
+    if show_progress or external_progress_slot is not None:
+        pct_val = progress_offset + (95 * progress_scale / 100) if external_progress_slot else 100
+        progress_bar(progress_slot, pct_val, "Analysis Complete", f"{len(results)} stocks analyzed")
+        if show_progress and external_progress_slot is None:
+            progress_slot.empty()
 
     if not results:
         st.warning("No stocks met the analysis criteria.")
@@ -2426,12 +2436,13 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
     # Summary metric cards
     c1, c2, c3, c4, c5, c6 = st.columns(6)
+    timeframe_label = "Weekly Average" if timeframe == 'Weekly' else "Daily Average"
     with c1:
         ui.render_metric_card("Total Signals", str(int(total_signals)), f"{total_buys} long · {total_sells} short", "info")
     with c2:
-        ui.render_metric_card("Avg Oversold", f"{avg_oversold:.1f}%", "Daily Average", "success")
+        ui.render_metric_card("Avg Oversold", f"{avg_oversold:.1f}%", timeframe_label, "success")
     with c3:
-        ui.render_metric_card("Avg Overbought", f"{avg_overbought:.1f}%", "Daily Average", "danger")
+        ui.render_metric_card("Avg Overbought", f"{avg_overbought:.1f}%", timeframe_label, "danger")
     with c4:
         ui.render_metric_card("Period Regime", dominant_regime, f"Bull: {avg_bull_regime:.0f}% | Bear: {avg_bear_regime:.0f}%", "warning")
     with c5:
@@ -2635,7 +2646,8 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     # TAB 4: DATA TERMINAL
     # ═══════════════════════════════════════════════════════════════════════════
     with tab4:
-        ui.render_section_header("Analytical Data", f"Daily Time Series ({len(daily_agg)} days)", icon="list", accent="cyan")
+        timeframe_label = "Weekly Time Series" if timeframe == 'Weekly' else "Daily Time Series"
+        ui.render_section_header("Analytical Data", f"{timeframe_label} ({len(daily_agg)} periods)", icon="list", accent="cyan")
         
         display_ts = daily_agg.copy()
         display_ts.index = display_ts.index.strftime('%Y-%m-%d')
@@ -2825,8 +2837,6 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             console.item("Error", "Rolling correlation DataFrame is empty")
             return None
 
-        progress_bar(progress_slot, 75, "Computing Signal Confluence", "Running WRCI Momentum Engine")
-
         # Get current and average correlations
         current_corr = rolling_corr_df.iloc[-1]
         avg_corr = rolling_corr_df.mean()
@@ -2849,7 +2859,11 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 else: return "Neutral"
 
         # Run WRCI analysis on the universe for confluence
-        wrci_results = run_screener_analysis(universe, selected_index, analysis_date, 20, 10, 21, (80, 40, -80, -40), timeframe, show_progress=False)
+        # Pass progress tracking to show detailed per-symbol analysis (75-90% of correlation progress)
+        wrci_results = run_screener_analysis(
+            universe, selected_index, analysis_date, 20, 10, 21, (80, 40, -80, -40), timeframe,
+            show_progress=False, external_progress_slot=progress_slot, progress_offset=75, progress_scale=15
+        )
 
         progress_bar(progress_slot, 90, "Building Results DataFrame", "Computing Divergence Metrics")
 
@@ -3546,7 +3560,7 @@ def _render_signal_legend(side: str = 'long', condition_set: str = 'A') -> None:
     pass
 
 
-def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
+def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = 'Daily') -> str:
     """Build organized HTML table for signals grouped by age with section headers."""
     import html as html_module
 
@@ -3555,7 +3569,10 @@ def _build_signal_table_html(stats: dict, side: str = 'long') -> str:
     header_bg = "rgba(45, 212, 168, 0.15)" if side == 'long' else "rgba(232, 85, 90, 0.15)"
 
     table_rows = []
-    age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
+    if timeframe == 'Weekly':
+        age_order = ["This Week", "1 Week Ago", "2 Weeks Ago", "3 Weeks Ago", "Within 5 Weeks"]
+    else:
+        age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
 
     for age in age_order:
         if stats[age]['count'] == 0:
@@ -3998,8 +4015,9 @@ def main():
 
             # ════ TAB 1: ACTION DASHBOARD ════════════════════════════════════════════════
             with tab_signals:
+                timeframe_label = "This Week's" if timeframe == 'Weekly' else "Today's"
                 ui.render_section_header(
-                    "Today's Signals",
+                    f"{timeframe_label} Signals",
                     "Multi-condition momentum signals — Momentum (A) · Crossover (B) · Threshold (C)",
                     icon="zap",
                     accent="amber"
@@ -4025,7 +4043,10 @@ def main():
                 longs_c_df = results_df[results_df['LC_5d'] != "—"].copy().sort_values('Signal', ascending=False)
                 shorts_c_df = results_df[results_df['SC_5d'] != "—"].copy().sort_values('Signal', ascending=True)
 
-                _age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
+                if timeframe == 'Weekly':
+                    _age_order = ["This Week", "1 Week Ago", "2 Weeks Ago", "3 Weeks Ago", "Within 5 Weeks"]
+                else:
+                    _age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
 
                 has_signals = any(not df_.empty for df_ in [longs_a_df, shorts_a_df, longs_b_df, shorts_b_df, longs_c_df, shorts_c_df])
 
@@ -4084,7 +4105,7 @@ def main():
                             </p>
                             """, unsafe_allow_html=True)
                             _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A')
-                            la_html = _build_signal_table_html(la_stats, side='long')
+                            la_html = _build_signal_table_html(la_stats, side='long', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if la_stats[a]['count'] > 0)
                             _r = sum(la_stats[a]['count'] for a in _age_order)
                             st.components.v1.html(la_html, height=max(120 + _g * 60 + _r * 56, 150))
@@ -4097,7 +4118,7 @@ def main():
                             </p>
                             """, unsafe_allow_html=True)
                             _, lb_stats, _, _ = _bucket_signals_by_age(longs_b_df, side='long', condition_set='B')
-                            lb_html = _build_signal_table_html(lb_stats, side='long')
+                            lb_html = _build_signal_table_html(lb_stats, side='long', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if lb_stats[a]['count'] > 0)
                             _r = sum(lb_stats[a]['count'] for a in _age_order)
                             st.components.v1.html(lb_html, height=max(70 + _g * 46 + _r * 44, 110))
@@ -4110,7 +4131,7 @@ def main():
                             </p>
                             """, unsafe_allow_html=True)
                             _, lc_stats, _, _ = _bucket_signals_by_age(longs_c_df, side='long', condition_set='C')
-                            lc_html = _build_signal_table_html(lc_stats, side='long')
+                            lc_html = _build_signal_table_html(lc_stats, side='long', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if lc_stats[a]['count'] > 0)
                             _r = sum(lc_stats[a]['count'] for a in _age_order)
                             st.components.v1.html(lc_html, height=max(70 + _g * 46 + _r * 44, 110))
@@ -4127,7 +4148,7 @@ def main():
                             </p>
                             """, unsafe_allow_html=True)
                             _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A')
-                            sa_html = _build_signal_table_html(sa_stats, side='short')
+                            sa_html = _build_signal_table_html(sa_stats, side='short', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if sa_stats[a]['count'] > 0)
                             _r = sum(sa_stats[a]['count'] for a in _age_order)
                             st.components.v1.html(sa_html, height=max(70 + _g * 46 + _r * 44, 110))
@@ -4140,7 +4161,7 @@ def main():
                             </p>
                             """, unsafe_allow_html=True)
                             _, sb_stats, _, _ = _bucket_signals_by_age(shorts_b_df, side='short', condition_set='B')
-                            sb_html = _build_signal_table_html(sb_stats, side='short')
+                            sb_html = _build_signal_table_html(sb_stats, side='short', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if sb_stats[a]['count'] > 0)
                             _r = sum(sb_stats[a]['count'] for a in _age_order)
                             st.components.v1.html(sb_html, height=max(70 + _g * 46 + _r * 44, 110))
@@ -4153,7 +4174,7 @@ def main():
                             </p>
                             """, unsafe_allow_html=True)
                             _, sc_stats, _, _ = _bucket_signals_by_age(shorts_c_df, side='short', condition_set='C')
-                            sc_html = _build_signal_table_html(sc_stats, side='short')
+                            sc_html = _build_signal_table_html(sc_stats, side='short', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if sc_stats[a]['count'] > 0)
                             _r = sum(sc_stats[a]['count'] for a in _age_order)
                             st.components.v1.html(sc_html, height=max(70 + _g * 46 + _r * 44, 110))
