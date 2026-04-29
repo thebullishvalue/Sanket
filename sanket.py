@@ -1274,9 +1274,10 @@ def compute_analog_flags(df, ticker=''):
 
         mean_rev_raw = (full_df['Close'] - ma200) / (ma200.replace(0, 1))
 
-        # 3. Gram-Schmidt basis vectors (normalized across full available data to match Pine Script's 800-bar window)
-        # Use up to 800-bar normalization window (Pine Script default), capped by available data
-        gs_window = min(len(full_df) - 50, 800)
+        # 3. Gram-Schmidt basis vectors (normalized across 550-bar optimal window)
+        # 550 days ≈ 2.5-3x MA(200) cycle, optimal regime coherence + sample size
+        # Captures 4-5 intermediate market cycles while excluding irrelevant older regimes
+        gs_window = min(len(full_df) - 50, 550)
         basis_vecs = _analog_gram_schmidt([composite_line, rsi_val, osc_val, ma_count.astype(float),
                                            voltrend, mean_rev_raw], length=gs_window)
         if basis_vecs is None:
