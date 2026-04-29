@@ -3493,13 +3493,16 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
             stats[age] = {'count': 0, 'avg_signal': 0, 'avg_pct_change': 0, 'rows': []}
 
     # Calculate trend: are signals strengthening (newer) or weakening (older)?
-    today_avg = stats["Today"]['avg_signal'] if stats["Today"]['count'] > 0 else 0
-    older_avg = np.mean([stats[age]['avg_signal'] for age in ["1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"] if stats[age]['count'] > 0]) if any(stats[age]['count'] for age in ["1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]) else 0
+    newest_label = age_labels[0]  # "Today" or "This Week"
+    older_labels = age_labels[1:]  # Rest of the labels
 
-    if today_avg > older_avg + 5:
+    newest_avg = stats[newest_label]['avg_signal'] if stats[newest_label]['count'] > 0 else 0
+    older_avg = np.mean([stats[age]['avg_signal'] for age in older_labels if stats[age]['count'] > 0]) if any(stats[age]['count'] for age in older_labels) else 0
+
+    if newest_avg > older_avg + 5:
         trend = f"{SVGS['UP'].replace('12','14').replace('12','14')} Strengthening"
         trend_color = "#2DD4A8"
-    elif today_avg < older_avg - 5:
+    elif newest_avg < older_avg - 5:
         trend = f"{SVGS['DOWN'].replace('12','14').replace('12','14')} Weakening"
         trend_color = "#E8555A"
     else:
