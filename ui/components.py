@@ -137,7 +137,7 @@ def render_signal_item(symbol: str, price: float, change: float, signal: str, sc
             <div class="signal-icon {kind}">{signal}</div>
             <div>
                 <div class="symbol-name">{symbol}</div>
-                <div class="symbol-price">₹{price:,.2f} <span style="color: {'var(--emerald)' if change >= 0 else 'var(--rose)'};">{change:+.2f}%</span></div>
+                <div class="symbol-price">{price:,.2f} <span style="color: {'var(--emerald)' if change >= 0 else 'var(--rose)'};">{change:+.2f}%</span></div>
             </div>
         </div>
         <div class="symbol-score" style="color: var(--amber);">Score {score:,.1f}</div>
