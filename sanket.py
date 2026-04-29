@@ -2518,7 +2518,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
             for col in universe_returns.columns:
                 try:
-                    col_vals = universe_returns[col].fillna(method='ffill').fillna(method='bfill').values
+                    col_vals = universe_returns[col].ffill().bfill().values
 
                     # Compute rolling correlation using DataFrame.rolling.corr()
                     temp_df = pd.DataFrame({
