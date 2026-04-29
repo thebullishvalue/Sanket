@@ -1607,7 +1607,9 @@ def render_sidebar():
             with col_date2: end_date_hist = st.date_input("End", datetime.date.today(), label_visibility="collapsed")
             corr_target_ticker, corr_lookback, corr_method = None, 90, "Pearson"
         else:  # Correlation mode
-            analysis_date = datetime.date.today()
+            st.markdown('<div class="sidebar-title">Analysis Date</div>', unsafe_allow_html=True)
+            analysis_date = st.date_input("Analysis Date", datetime.date.today(), max_value=datetime.date.today(), label_visibility="collapsed")
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             start_date_hist, end_date_hist = None, None
 
             # Target Asset Panel
@@ -2393,12 +2395,14 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 # CORRELATION MODE ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_correlation_analysis(universe, selected_index, target_ticker, lookback, method, timeframe):
+def run_correlation_analysis(universe, selected_index, target_ticker, lookback, method, timeframe, analysis_date=None):
     """Execute correlation analysis between universe constituents and a target asset.
 
     Returns a dict with correlation data, rolling correlations, prices, and returns,
     plus WRCI confluence scoring for trade intelligence.
     """
+    if analysis_date is None:
+        analysis_date = datetime.date.today()
     progress_slot = st.empty()
     progress_bar(progress_slot, 5, "Initializing Correlation Engine", "Fetching market data")
 
@@ -2573,7 +2577,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 else: return "Neutral"
 
         # Run WRCI analysis on the universe for confluence
-        wrci_results = run_screener_analysis(universe, selected_index, datetime.date.today(), 20, 10, 21, (80, 40, -80, -40), timeframe, show_progress=False)
+        wrci_results = run_screener_analysis(universe, selected_index, analysis_date, 20, 10, 21, (80, 40, -80, -40), timeframe, show_progress=False)
 
         progress_bar(progress_slot, 90, "Building Results DataFrame", "Computing divergence metrics")
 
@@ -2914,6 +2918,32 @@ def render_correlation_results(corr_data: dict) -> None:
             accent="cyan"
         )
 
+        # How to read this tab - styled as interpretation card
+        st.markdown("""
+        <div style="background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.2);
+                    border-radius:8px; padding:1rem; margin:1.5rem 0; font-family:var(--data); font-size:0.75rem;">
+            <div style="color:#38BDF8; font-weight:700; text-transform:uppercase; margin-bottom:0.75rem; letter-spacing:0.06em;">
+                How to Read
+            </div>
+            <div style="color:#F1F5F9; line-height:1.6;">
+                Each setup type is ranked by <span style="color:#38BDF8; font-weight:600;">Confluence Score</span> (0-1).
+                Highest rank = strongest opportunity. Look for: <span style="font-weight:600;">(1) Score >0.7</span>,
+                <span style="font-weight:600;">(2) |Div %| >3%</span>, <span style="font-weight:600;">(3) Confirmed Zone (OB/OS Extreme)</span>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:0.5rem; margin-top:0.75rem;">
+                <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
+                    <span style="color:#38BDF8; font-weight:600;">Corr</span> — Correlation strength
+                </div>
+                <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
+                    <span style="color:#38BDF8; font-weight:600;">Zone</span> — Momentum extreme (OB/OS)
+                </div>
+                <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
+                    <span style="color:#38BDF8; font-weight:600;">Div %</span> — Actual vs Expected
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
         # Trade setup classification
         def classify_setup(row):
             corr = row['Corr_Current']
@@ -2991,6 +3021,34 @@ def render_correlation_results(corr_data: dict) -> None:
             }
         ]
 
+        # Setup interpretation guide
+        setup_interpretation = {
+            "LAGGARD": {
+                "action": "BUY",
+                "rationale": "Stock lagging expected move — expect catch-up rally to target's pace",
+                "validate": "Check that Zone is OS/OS Extreme and Div % is positive & large (>3%)",
+                "risk": "Correlation may break; stock continues lagging instead of catching up"
+            },
+            "RUNAWAY": {
+                "action": "SHORT",
+                "rationale": "Stock overextended vs expected move — expect pullback to fair value",
+                "validate": "Check that Zone is OB/OB Extreme and Div % is negative & large (<-3%)",
+                "risk": "Stock may continue running; wait for Zone to weaken before shorting"
+            },
+            "CONVERGING": {
+                "action": "DE-RISK",
+                "rationale": "Correlation collapsing — pair-trade falling apart, avoid new entries",
+                "validate": "Corr close to 0 or unstable; watch for re-correlation before re-entering",
+                "risk": "Old positions may unwind suddenly; previous divergence trades may fail"
+            },
+            "CONTRA": {
+                "action": "LONG (vs target down)",
+                "rationale": "Negative correlation + target down — expect rally when target recovers",
+                "validate": "Check Corr is strongly negative (<-0.6) and Zone is OB/OB Extreme",
+                "risk": "Negative correlations are unstable; requires conviction and risk management"
+            }
+        }
+
         for config in setup_configs:
             setup_data = corr_df[corr_df['Setup'] == config['name']].nlargest(10, 'Confluence_Score')
 
@@ -3009,6 +3067,24 @@ def render_correlation_results(corr_data: dict) -> None:
                         {config['description']}</span>
                     <span style="margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
                                  color:{config['color']};">→ {len(setup_data)}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Interpretation card
+                interp = setup_interpretation[config['name']]
+                st.markdown(f"""
+                <div style="background:{config['bg_color']}; border:1px solid {config['border_color']};
+                            border-radius:8px; padding:0.75rem 1rem; margin-bottom:1rem; font-family:var(--data); font-size:0.75rem;">
+                    <div style="display:grid; grid-template-columns:auto 1fr; gap:0.5rem 1rem; color:#F1F5F9;">
+                        <span style="color:{config['color']}; font-weight:700; text-transform:uppercase;">Action</span>
+                        <span>{interp['action']}</span>
+                        <span style="color:{config['color']}; font-weight:700; text-transform:uppercase;">Rationale</span>
+                        <span>{interp['rationale']}</span>
+                        <span style="color:{config['color']}; font-weight:700; text-transform:uppercase;">Validate</span>
+                        <span>{interp['validate']}</span>
+                        <span style="color:#FB7185; font-weight:700; text-transform:uppercase;">⚠ Risk</span>
+                        <span style="color:#FB7185;">{interp['risk']}</span>
+                    </div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -3598,7 +3674,7 @@ def main():
                 })
 
                 corr_data = run_correlation_analysis(
-                    universe, selected_index, corr_target_ticker, corr_lookback, corr_method, timeframe
+                    universe, selected_index, corr_target_ticker, corr_lookback, corr_method, timeframe, analysis_date
                 )
                 if corr_data is None:
                     st.session_state["run_error"] = "Failed to compute correlation analysis. Check data availability."
