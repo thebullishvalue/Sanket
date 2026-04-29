@@ -15,6 +15,8 @@ import io
 import urllib3
 import warnings
 import logging
+import time
+from scipy.stats import spearmanr
 from nsepython import nse_get_advances_declines
 from logger import console
 
@@ -71,6 +73,10 @@ if "timeseries_done" not in st.session_state:
     st.session_state["timeseries_done"] = False
 if "run_error" not in st.session_state:
     st.session_state["run_error"] = None
+if "corr_data" not in st.session_state:
+    st.session_state["corr_data"] = None
+if "run_correlation_flag" not in st.session_state:
+    st.session_state["run_correlation_flag"] = False
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INITIALIZE UI
@@ -1588,16 +1594,48 @@ def render_sidebar():
 
         # Temporal Range Section
         st.markdown('<div class="sidebar-title">Temporal Range</div>', unsafe_allow_html=True)
-        analysis_mode = st.radio("Mode", ["Snapshot", "Range Study"], horizontal=True, label_visibility="collapsed")
+        analysis_mode = st.radio("Mode", ["Snapshot", "Range Study", "Correlation"], horizontal=True, label_visibility="collapsed")
 
         if analysis_mode == "Snapshot":
             analysis_date = st.date_input("Date", datetime.date.today(), max_value=datetime.date.today(), label_visibility="collapsed")
             start_date_hist, end_date_hist = None, None
-        else:
+            corr_target_ticker, corr_lookback, corr_method = None, 90, "Pearson"
+        elif analysis_mode == "Range Study":
             analysis_date = datetime.date.today()
             col_date1, col_date2 = st.columns(2)
             with col_date1: start_date_hist = st.date_input("Start", datetime.date.today() - datetime.timedelta(days=300), label_visibility="collapsed")
             with col_date2: end_date_hist = st.date_input("End", datetime.date.today(), label_visibility="collapsed")
+            corr_target_ticker, corr_lookback, corr_method = None, 90, "Pearson"
+        else:  # Correlation mode
+            analysis_date = datetime.date.today()
+            start_date_hist, end_date_hist = None, None
+
+            # Target Asset Panel
+            st.markdown('<div class="sidebar-title">Target Asset</div>', unsafe_allow_html=True)
+            target_class = st.selectbox("Asset Class", ["Commodities", "Currency", "Crypto", "Global Indexes"], label_visibility="collapsed")
+
+            # Build target asset options from maps
+            if target_class == "Commodities":
+                target_map = COMMODITY_MAP
+                target_display_names = list(COMMODITY_MAP.keys())
+            elif target_class == "Currency":
+                target_map = CURRENCY_MAP
+                target_display_names = list(CURRENCY_MAP.keys())
+            elif target_class == "Crypto":
+                target_map = CRYPTO_MAP
+                target_display_names = list(CRYPTO_MAP.keys())
+            else:  # Global Indexes
+                target_map = GLOBAL_INDEXES_MAP
+                target_display_names = list(GLOBAL_INDEXES_MAP.keys())
+
+            target_selected = st.selectbox("Asset", target_display_names, label_visibility="collapsed")
+            corr_target_ticker = target_map.get(target_selected, target_selected)
+
+            # Correlation params
+            st.markdown('<div class="sidebar-title">Analysis Params</div>', unsafe_allow_html=True)
+            corr_lookback_str = st.selectbox("Lookback", ["30D", "60D", "90D", "180D"], label_visibility="collapsed")
+            corr_lookback = int(corr_lookback_str.replace("D", ""))
+            corr_method = st.selectbox("Method", ["Pearson", "Spearman"], label_visibility="collapsed")
 
         # WRCI Engine — hardcoded defaults
         reg_len, wt_n1, wt_n2 = 20, 10, 21
@@ -1606,7 +1644,7 @@ def render_sidebar():
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
         # Run Button
-        run_clicked = st.button("◈ RUN SCREENER", type="primary", width='stretch', use_container_width=True)
+        run_clicked = st.button("◈ RUN SCREENER", type="primary", width='stretch')
 
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
@@ -1640,23 +1678,32 @@ def render_sidebar():
             symbols_count = "—"
             universe_display = universe
 
-        st.markdown(f"""
+        # Build system spec card
+        spec_html = f"""
         <div class="system-spec">
             <div class="spec-row"><span class="spec-label">Version</span><span class="spec-value">{VERSION}</span></div>
             <div class="spec-row"><span class="spec-label">Universe</span><span class="spec-value" style="font-size:0.7rem;">{universe_display}</span></div>
             <div class="spec-row"><span class="spec-label">Timeframe</span><span class="spec-value">{timeframe}</span></div>
             <div class="spec-row"><span class="spec-label">Mode</span><span class="spec-value" style="font-size:0.7rem;">{analysis_mode}</span></div>
-        </div>
-        """, unsafe_allow_html=True)
+        """
 
-        return universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, (obLevel1, obLevel2, osLevel1, osLevel2), timeframe, analysis_mode, start_date_hist, end_date_hist, run_clicked
+        # Add Target row only in Correlation mode
+        if analysis_mode == "Correlation":
+            spec_html += f'<div class="spec-row"><span class="spec-label">Target</span><span class="spec-value" style="font-size:0.7rem;">{target_selected}</span></div>'
+
+        spec_html += """
+        </div>
+        """
+        st.markdown(spec_html, unsafe_allow_html=True)
+
+        return universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, (obLevel1, obLevel2, osLevel1, osLevel2), timeframe, analysis_mode, start_date_hist, end_date_hist, run_clicked, corr_target_ticker, corr_lookback, corr_method
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN SCREENER FUNCTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe):
+def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True):
     """Execute WRCI momentum analysis on universe symbols and return ranked signals.
 
     Fetches market data for universe, computes Wave Trend oscillations, calculates
@@ -1665,9 +1712,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     Returns: DataFrame with signals ranked by magnitude, or None on error.
     """
     obLevel1, obLevel2, osLevel1, osLevel2 = levels
-    progress_slot = st.empty()
+    progress_slot = st.empty() if show_progress else None
 
-    progress_bar(progress_slot, 5, "Initializing UMA v6 engine", f"Universe: {universe}")
+    if show_progress:
+        progress_bar(progress_slot, 5, "Initializing UMA v6 engine", f"Universe: {universe}")
     
     console.start_phase("DATA ACQUISITION", 1, 2)
     console.section("Universe Configuration")
@@ -1701,7 +1749,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     console.success(f"Fetched {len(stock_list)} symbols for {selected_index}")
     console.section("Market Data Fetch")
-    progress_bar(progress_slot, 15, "Fetching market data", f"{len(stock_list)} stocks")
+    if show_progress:
+        progress_bar(progress_slot, 15, "Fetching market data", f"{len(stock_list)} stocks")
     data_dict, fetch_msg = fetch_batch_data(stock_list, end_date=analysis_date)
 
     if not data_dict:
@@ -1721,7 +1770,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.item("OB Levels", f"{obLevel1} / {obLevel2}")
     console.item("OS Levels", f"{osLevel1} / {osLevel2}")
     console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
-    progress_bar(progress_slot, 20, "Analyzing UMA v6 momentum", f"{len(data_dict)} stocks")
+    if show_progress:
+        progress_bar(progress_slot, 20, "Analyzing UMA v6 momentum", f"{len(data_dict)} stocks")
 
     # Pre-fetch macro context once for UMA MMR (cached; reused across all symbols).
     # Symbols already downloaded for the screener universe are reused directly from
@@ -1751,7 +1801,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     for i, (ticker, df) in enumerate(data_dict.items()):
         try:
             pct = int(20 + (i + 1) / len(data_dict) * 75)
-            progress_bar(progress_slot, pct, f"Analyzing signals", f"{i + 1}/{len(data_dict)} stocks")
+            if show_progress:
+                progress_bar(progress_slot, pct, f"Analyzing signals", f"{i + 1}/{len(data_dict)} stocks")
 
             if timeframe == "Weekly":
                 df = resample_to_weekly(df)
@@ -1897,8 +1948,9 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     })
     console.line('═', 70)
     
-    progress_bar(progress_slot, 100, "Analysis complete", f"{len(results)} stocks analyzed")
-    progress_slot.empty()
+    if show_progress:
+        progress_bar(progress_slot, 100, "Analysis complete", f"{len(results)} stocks analyzed")
+        progress_slot.empty()
 
     if not results:
         st.warning("No stocks met the analysis criteria.")
@@ -2335,6 +2387,687 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     render_footer()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CORRELATION MODE ENGINE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_correlation_analysis(universe, selected_index, target_ticker, lookback, method, timeframe):
+    """Execute correlation analysis between universe constituents and a target asset.
+
+    Returns a dict with correlation data, rolling correlations, prices, and returns,
+    plus WRCI confluence scoring for trade intelligence.
+    """
+    progress_slot = st.empty()
+    progress_bar(progress_slot, 5, "Initializing Correlation Engine", "Fetching market data")
+
+    try:
+        # Fetch universe symbols
+        if universe == "India Indexes":
+            stock_list, msg = get_index_stock_list(selected_index)
+        elif universe == "Global Indexes":
+            stock_list, msg = get_global_index_symbols()
+        elif universe == "US Indexes":
+            stock_list, msg = get_us_index_symbols(selected_index)
+        elif universe == "Commodities":
+            stock_list, msg = get_commodity_symbols(None)
+        elif universe == "Currency":
+            stock_list, msg = get_currency_symbols(None)
+        elif universe == "Crypto":
+            stock_list, msg = get_crypto_symbols(None)
+        elif universe == "ETF Index":
+            stock_list, msg = get_etf_symbols()
+        else:
+            st.error(f"Universe '{universe}' not supported")
+            return None
+
+        if not stock_list:
+            st.error(f"Failed to fetch universe symbols: {msg}")
+            return None
+
+        console.item("Symbols fetched", len(stock_list))
+
+        # Combine with target asset
+        combined_list = list(set(stock_list + [target_ticker]))
+        console.item("Combined symbols", len(combined_list))
+
+        progress_bar(progress_slot, 15, "Fetching OHLCV Data", f"Symbols: {len(combined_list)}")
+
+        # Fetch data
+        data_dict, fetch_msg = fetch_batch_data(combined_list, days_back=lookback + 60)
+        if data_dict is None:
+            st.error(f"Data fetch failed: {fetch_msg}")
+            console.item("Data fetch error", fetch_msg)
+            return None
+
+        console.item("Data fetched for symbols", len(data_dict))
+
+        progress_bar(progress_slot, 25, "Building Price Matrix", "Pivoting Close prices")
+
+        # Build Close price matrix — handle MultiIndex columns from yfinance
+        close_dict = {}
+        for ticker, data in data_dict.items():
+            if len(data) > 0:
+                if 'Close' in data.columns:
+                    close_dict[ticker] = data['Close']
+                else:
+                    # Handle MultiIndex case
+                    try:
+                        close_dict[ticker] = data[data.columns[data.columns.get_level_values(-1) == 'Close'][0]]
+                    except (IndexError, KeyError):
+                        console.item(f"Skipping {ticker}", "No Close column found")
+
+        if not close_dict:
+            st.error("No valid price data found for universe")
+            console.item("Error", "No Close prices extracted")
+            return None
+
+        console.item("Close prices extracted for", len(close_dict))
+
+        close_df = pd.DataFrame(close_dict)
+        close_df = close_df.dropna(axis=1, how='all')
+
+        console.item("Close DataFrame shape", f"{close_df.shape}")
+
+        if len(close_df) < lookback + 10:
+            st.error(f"Insufficient historical data for correlation analysis (only {len(close_df)} rows, need {lookback + 10})")
+            console.item("Error", f"Only {len(close_df)} rows, need {lookback + 10}")
+            return None
+
+        # Resample to weekly if needed
+        if timeframe == "Weekly":
+            close_df = resample_to_weekly(close_df)
+
+        progress_bar(progress_slot, 40, "Computing Returns", f"Method: {method}")
+
+        # Compute log returns — drop rows only where all values are NaN
+        returns_df = np.log(close_df / close_df.shift(1)).dropna(how='all')
+
+        if target_ticker not in returns_df.columns:
+            st.error(f"Target asset '{target_ticker}' not in data")
+            console.item("Error", f"Target {target_ticker} not in returns columns")
+            return None
+
+        target_returns = returns_df[target_ticker].dropna()
+        console.item("Target returns available", len(target_returns))
+
+        # Filter to common dates with target
+        common_idx = returns_df.index.intersection(target_returns.index)
+        if len(common_idx) < lookback + 10:
+            st.error(f"Insufficient overlapping data (only {len(common_idx)} days). Try a shorter lookback period.")
+            console.item("Error", f"Only {len(common_idx)} common dates, need {lookback + 10}")
+            return None
+
+        returns_df = returns_df.loc[common_idx]
+        target_returns = target_returns.loc[common_idx]
+        universe_returns = returns_df.drop(columns=[target_ticker])
+
+        console.item("Universe returns shape", f"{universe_returns.shape}")
+        console.item("Target returns shape", target_returns.shape)
+
+        progress_bar(progress_slot, 60, "Computing Rolling Correlation", f"Lookback: {lookback} bars")
+
+        # Compute rolling correlation — use vectorized rolling correlation
+        rolling_corr_dict = {}
+        console.item("Computing rolling correlations", f"method={method}, lookback={lookback}, cols={len(universe_returns.columns)}")
+
+        try:
+            # Convert to numpy for faster computation
+            target_vals = target_returns.values
+
+            for col in universe_returns.columns:
+                try:
+                    col_vals = universe_returns[col].fillna(method='ffill').fillna(method='bfill').values
+
+                    # Compute rolling correlation using DataFrame.rolling.corr()
+                    temp_df = pd.DataFrame({
+                        'col': col_vals,
+                        'target': target_vals
+                    })
+                    rolling_corr = temp_df['col'].rolling(window=lookback).corr(temp_df['target'])
+                    rolling_corr_dict[col] = rolling_corr
+                except Exception as col_err:
+                    console.item(f"Skipping column {col}", str(col_err)[:50])
+                    continue
+
+            console.item("Rolling corr dict entries", len(rolling_corr_dict))
+
+            if len(rolling_corr_dict) == 0:
+                st.error("Could not compute rolling correlations for any column")
+                return None
+
+            rolling_corr_df = pd.DataFrame(rolling_corr_dict)
+            console.item("Rolling corr DataFrame shape", rolling_corr_df.shape)
+        except Exception as e:
+            st.error(f"Error in rolling correlation: {str(e)}")
+            console.item("Rolling corr computation error", str(e)[:100])
+            return None
+
+        if rolling_corr_df.empty or len(rolling_corr_df) == 0:
+            st.error("Could not compute rolling correlations. Check data availability.")
+            console.item("Error", "Rolling correlation DataFrame is empty")
+            return None
+
+        progress_bar(progress_slot, 75, "Computing Signal Confluence", "Running WRCI momentum engine")
+
+        # Get current and average correlations
+        current_corr = rolling_corr_df.iloc[-1]
+        avg_corr = rolling_corr_df.mean()
+        corr_trend = current_corr - avg_corr
+
+        # Compute tiers
+        def get_corr_tier(corr):
+            if pd.isna(corr):
+                return "Neutral"
+            abs_corr = abs(corr)
+            if corr > 0:
+                if abs_corr >= 0.6: return "Strong+"
+                elif abs_corr >= 0.4: return "Moderate+"
+                elif abs_corr >= 0.2: return "Weak+"
+                else: return "Neutral"
+            else:
+                if abs_corr >= 0.6: return "Strong-"
+                elif abs_corr >= 0.4: return "Moderate-"
+                elif abs_corr >= 0.2: return "Weak-"
+                else: return "Neutral"
+
+        # Run WRCI analysis on the universe for confluence
+        wrci_results = run_screener_analysis(universe, selected_index, datetime.date.today(), 20, 10, 21, (80, 40, -80, -40), timeframe, show_progress=False)
+
+        progress_bar(progress_slot, 90, "Building Results DataFrame", "Computing divergence metrics")
+
+        # Build correlation results dataframe
+        corr_data_list = []
+        for symbol in universe_returns.columns:
+            if symbol not in close_df.columns or symbol not in current_corr.index:
+                continue
+
+            # Get current data
+            current_price = close_df[symbol].iloc[-1] if symbol in close_df.columns else np.nan
+            price_change = (close_df[symbol].pct_change().iloc[-1] * 100) if symbol in close_df.columns else np.nan
+            target_price = close_df[target_ticker].iloc[-1]
+            target_change = (close_df[target_ticker].pct_change().iloc[-1] * 100)
+
+            # Get WRCI data if available
+            wrci_signal = np.nan
+            wrci_zone = "—"
+            wrci_signal_type = "Neutral"
+            if wrci_results is not None and len(wrci_results) > 0:
+                wrci_row = wrci_results[wrci_results['SimpleName'] == symbol.replace('.NS', '').replace('^', '')]
+                if len(wrci_row) > 0:
+                    wrci_signal = wrci_row['Signal'].values[0]
+                    wrci_zone = wrci_row['Zone'].values[0]
+                    wrci_signal_type = wrci_row['SignalType'].values[0]
+
+            # Compute divergence
+            expected_change = current_corr[symbol] * target_change
+            divergence = price_change - expected_change
+
+            corr_data_list.append({
+                'Symbol': symbol,
+                'DisplayName': symbol,
+                'SimpleName': symbol.replace('.NS', '').replace('^', ''),
+                'Corr_Current': current_corr[symbol],
+                'Corr_Avg': avg_corr[symbol],
+                'Corr_Trend': corr_trend[symbol],
+                'Corr_Tier': get_corr_tier(current_corr[symbol]),
+                'Price': current_price,
+                'PctChange': price_change,
+                'Target_Pct': target_change,
+                'Expected_Change': expected_change,
+                'Divergence': divergence,
+                'WRCI_Signal': wrci_signal,
+                'WRCI_Zone': wrci_zone,
+                'WRCI_Signal_Type': wrci_signal_type,
+            })
+
+        corr_df = pd.DataFrame(corr_data_list)
+        if len(corr_df) == 0:
+            st.error("No correlation data could be computed")
+            console.item("Error", "Empty correlation DataFrame")
+            return None
+
+        corr_df = corr_df.sort_values('Corr_Current', key=abs, ascending=False)
+
+        # Compute confluence score
+        corr_df['Confluence_Score'] = abs(corr_df['Corr_Current']) * (abs(corr_df['WRCI_Signal'].fillna(0)) / 80.0)
+
+        # Get target name from maps (maps are display_name -> ticker, so reverse lookup)
+        target_name = target_ticker
+        for map_dict in [COMMODITY_MAP, CURRENCY_MAP, CRYPTO_MAP, GLOBAL_INDEXES_MAP]:
+            if target_ticker in map_dict.values():
+                target_name = [k for k, v in map_dict.items() if v == target_ticker][0]
+                break
+            elif target_ticker in map_dict.keys():
+                target_name = target_ticker
+                break
+
+        progress_bar(progress_slot, 100, "Analysis Complete", "Ready to display")
+        time.sleep(0.3)
+        progress_slot.empty()
+
+        return {
+            "corr_df": corr_df,
+            "rolling_corr": rolling_corr_df,
+            "target_ticker": target_ticker,
+            "target_name": target_name,
+            "prices": close_df,
+            "returns": returns_df,
+            "lookback": lookback,
+            "method": method,
+            "timeframe": timeframe,
+        }
+
+    except Exception as e:
+        st.error(f"Correlation analysis error: {str(e)}")
+        console.item("Exception", str(e))
+        import traceback
+        console.item("Traceback", traceback.format_exc()[-500:])
+        return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CORRELATION MODE — HELPER FUNCTIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_confluence_table_html(df: pd.DataFrame) -> str:
+    """Build ranked HTML table for confluence setups.
+
+    Displays symbol, correlation, zone, signal, actual/expected/divergence, and confluence score.
+
+    Returns: Complete HTML document string ready for st.components.v1.html().
+    """
+    import html as html_module
+
+    table_rows = []
+    if df.empty:
+        table_rows.append(f"""
+        <tr>
+            <td colspan="8" style="
+                text-align: center;
+                color: #374151;
+                font-family: 'IBM Plex Mono', monospace;
+                font-size: 0.72rem;
+                letter-spacing: 0.06em;
+                padding: 2.25rem 1rem;
+            ">— no setups —</td>
+        </tr>
+        """)
+    else:
+        for idx, (_, row) in enumerate(df.iterrows(), 1):
+            symbol = html_module.escape(str(row.get('SimpleName', '')))
+            corr = float(row.get('Corr_Current', 0))
+            zone = html_module.escape(str(row.get('WRCI_Zone', 'Neutral')))
+            signal_type = html_module.escape(str(row.get('WRCI_Signal_Type', '—')))
+            actual = float(row.get('PctChange', 0))
+            expected = float(row.get('Expected_Change', 0))
+            divergence = float(row.get('Divergence', 0))
+            confluence = float(row.get('Confluence_Score', 0))
+
+            corr_color = "#34D399" if corr > 0 else "#FB7185"
+            div_color = "#34D399" if divergence > 0 else "#FB7185"
+            conf_color = "#A78BFA"
+
+            rank_str = f"{idx:02d}"
+
+            table_rows.append(f"""
+            <tr>
+                <td class="numeric" style="color: #D4A853; font-weight: 700;">{rank_str}</td>
+                <td class="symbol">{symbol}</td>
+                <td class="numeric" style="color: {corr_color}; font-weight: 600;">{corr:+.3f}</td>
+                <td class="numeric">{zone}</td>
+                <td class="numeric">{signal_type}</td>
+                <td class="numeric" style="color: #94A3B8;">{actual:+.2f}%</td>
+                <td class="numeric" style="color: #94A3B8;">{expected:+.2f}%</td>
+                <td class="numeric" style="color: {div_color}; font-weight: 600;">{divergence:+.2f}%</td>
+                <td class="numeric" style="color:{conf_color}; font-weight:600;">{confluence:.2f}</td>
+            </tr>
+            """)
+
+    # Build full HTML
+    table_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'IBM Plex Mono', monospace;
+            background: transparent;
+            color: #F1F5F9;
+            padding: 0;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+        }}
+        thead th {{
+            background: transparent;
+            color: #4B5563;
+            font-size: 0.62rem !important;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            padding: 0.5rem 0.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            text-align: left;
+        }}
+        thead th.numeric {{ text-align: right; }}
+        tbody tr {{
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        }}
+        tbody tr:hover {{ background: rgba(139, 92, 246, 0.05); }}
+        tbody td {{
+            padding: 0.5rem 0.5rem;
+            color: #F1F5F9;
+            font-size: 0.72rem !important;
+        }}
+        tbody td.symbol {{
+            font-weight: 700;
+            font-size: 0.75rem;
+            letter-spacing: 0.02em;
+        }}
+        tbody td.numeric {{
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }}
+    </style>
+    </head>
+    <body>
+    <table>
+        <thead>
+            <tr>
+                <th class="numeric">Rank</th>
+                <th>Symbol</th>
+                <th class="numeric">Corr</th>
+                <th>Zone</th>
+                <th>Type</th>
+                <th class="numeric">Actual %</th>
+                <th class="numeric">Expected %</th>
+                <th class="numeric">Div %</th>
+                <th class="numeric">Confluence</th>
+            </tr>
+        </thead>
+        <tbody>
+            {"".join(table_rows)}
+        </tbody>
+    </table>
+    </body>
+    </html>
+    """
+    return table_html
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CORRELATION MODE — RESULTS RENDERER
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_correlation_results(corr_data: dict) -> None:
+    """Render Correlation mode 4-tab results interface."""
+    corr_df = corr_data["corr_df"]
+    rolling_corr_df = corr_data["rolling_corr"]
+    target_ticker = corr_data["target_ticker"]
+    target_name = corr_data["target_name"]
+    lookback = corr_data["lookback"]
+    method = corr_data["method"]
+
+    tab1, tab2, tab3 = st.tabs([
+        "Correlation Dashboard",
+        "Trade Intelligence",
+        "Heatmap Matrix"
+    ])
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 1: CORRELATION DASHBOARD
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab1:
+        ui.render_section_header(
+            "Correlation Dashboard",
+            f"Target: {target_name} ({target_ticker}) | {lookback}D Rolling {method}",
+            icon="crosshair",
+            accent="violet"
+        )
+
+        # Summary metrics
+        strong_corr_count = len(corr_df[corr_df['Corr_Current'] >= 0.6])
+        strong_inv_count = len(corr_df[corr_df['Corr_Current'] <= -0.6])
+        avg_abs_corr = abs(corr_df['Corr_Current']).mean()
+        target_change = corr_df['Target_Pct'].iloc[0] if len(corr_df) > 0 else 0
+
+        metrics = [
+            {"label": "Target Performance", "value": f"{target_change:+.2f}%", "kind": "success" if target_change >= 0 else "danger"},
+            {"label": "Highly Correlated", "value": str(strong_corr_count), "kind": "info"},
+            {"label": "Highly Inverse", "value": str(strong_inv_count), "kind": "warning"},
+            {"label": "Avg |Correlation|", "value": f"{avg_abs_corr:.2f}", "kind": "neutral"},
+            {"label": "Correlation Signal", "value": "CONCENTRATED" if strong_corr_count > len(corr_df) * 0.3 else "DIVERSIFIED", "kind": "violet"},
+        ]
+
+        cols = st.columns(len(metrics))
+        for i, m in enumerate(metrics):
+            with cols[i]:
+                ui.render_metric_card(m["label"], m["value"], color_class=m["kind"])
+
+        st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
+
+        # Ranked lists
+        col_pos, col_neg = st.columns(2)
+
+        with col_pos:
+            ui.render_section_header("Top Positively Correlated", icon="trending", accent="emerald")
+            pos_corr = corr_df[corr_df['Corr_Current'] > 0].head(7)
+            for _, row in pos_corr.iterrows():
+                trend_arrow = "↑" if row['Corr_Trend'] > 0.05 else "↓" if row['Corr_Trend'] < -0.05 else "→"
+                corr_val = row['Corr_Current']
+                tier_class = row['Corr_Tier'].lower().replace("+", "-pos").replace("-", "-neg")
+
+                st.markdown(f"""
+                <div class="corr-row">
+                    <div>
+                        <div class="name">{row['SimpleName']}</div>
+                        <div class="sub">{row['PctChange']:+.2f}% | Expected: {row['Expected_Change']:+.2f}%</div>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <span class="corr-tier {tier_class}">{corr_val:.3f}</span>
+                        <div class="corr-bar-track">
+                            <div class="corr-bar-center"></div>
+                            <div class="corr-bar-fill pos" style="width:{abs(corr_val)*50}px;"></div>
+                        </div>
+                        <span style="font-size:0.75rem; color:var(--ink-secondary);">{trend_arrow}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        with col_neg:
+            ui.render_section_header("Top Inversely Correlated", icon="trending", accent="rose")
+            neg_corr = corr_df[corr_df['Corr_Current'] < 0].head(7)
+            for _, row in neg_corr.iterrows():
+                trend_arrow = "↑" if row['Corr_Trend'] > 0.05 else "↓" if row['Corr_Trend'] < -0.05 else "→"
+                corr_val = row['Corr_Current']
+                tier_class = row['Corr_Tier'].lower().replace("+", "-pos").replace("-", "-neg")
+
+                st.markdown(f"""
+                <div class="corr-row">
+                    <div>
+                        <div class="name">{row['SimpleName']}</div>
+                        <div class="sub">{row['PctChange']:+.2f}% | Expected: {row['Expected_Change']:+.2f}%</div>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <span class="corr-tier {tier_class}">{corr_val:.3f}</span>
+                        <div class="corr-bar-track">
+                            <div class="corr-bar-center"></div>
+                            <div class="corr-bar-fill neg" style="width:{abs(corr_val)*50}px;"></div>
+                        </div>
+                        <span style="font-size:0.75rem; color:var(--ink-secondary);">{trend_arrow}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 2: TRADE INTELLIGENCE
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab2:
+        ui.render_section_header(
+            "Trade Intelligence",
+            "Confluence: Correlation × Momentum Signals",
+            icon="zap",
+            accent="cyan"
+        )
+
+        # Trade setup classification
+        def classify_setup(row):
+            corr = row['Corr_Current']
+            div = row['Divergence']
+            zone = row['WRCI_Zone']
+
+            if corr > 0.4 and div > 2 and zone in ['OS', 'OS Extreme']:
+                return "LAGGARD"
+            elif corr > 0.4 and div < -2 and zone in ['OB', 'OB Extreme']:
+                return "RUNAWAY"
+            elif abs(corr) < 0.2:
+                return "CONVERGING"
+            elif corr < -0.4 and div < -2 and zone in ['OB', 'OB Extreme']:
+                return "CONTRA"
+            else:
+                return "NEUTRAL"
+
+        corr_df['Setup'] = corr_df.apply(classify_setup, axis=1)
+
+        # Summary metrics
+        laggard_count = len(corr_df[corr_df['Setup'] == 'LAGGARD'])
+        runaway_count = len(corr_df[corr_df['Setup'] == 'RUNAWAY'])
+        converging_count = len(corr_df[corr_df['Setup'] == 'CONVERGING'])
+        contra_count = len(corr_df[corr_df['Setup'] == 'CONTRA'])
+        avg_confluence = corr_df[corr_df['Setup'] != 'NEUTRAL']['Confluence_Score'].mean()
+
+        metrics = [
+            {"label": "Laggard Setups", "value": str(laggard_count), "kind": "success"},
+            {"label": "Runaway Setups", "value": str(runaway_count), "kind": "danger"},
+            {"label": "Converging", "value": str(converging_count), "kind": "warning"},
+            {"label": "Contra Setups", "value": str(contra_count), "kind": "info"},
+            {"label": "Avg Confluence", "value": f"{avg_confluence:.2f}", "kind": "neutral"},
+        ]
+
+        cols = st.columns(len(metrics))
+        for i, m in enumerate(metrics):
+            with cols[i]:
+                ui.render_metric_card(m["label"], m["value"], color_class=m["kind"])
+
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+        # Render each setup type as a section
+        setup_configs = [
+            {
+                "name": "LAGGARD",
+                "title": "Laggard Setups",
+                "description": "High corr + oversold + underperforming — expect catch-up rally",
+                "color": "#34D399",
+                "bg_color": "rgba(45, 212, 168, 0.1)",
+                "border_color": "rgba(45, 212, 168, 0.25)"
+            },
+            {
+                "name": "RUNAWAY",
+                "title": "Runaway Setups",
+                "description": "High corr + overbought + overextended — expect pullback",
+                "color": "#FB7185",
+                "bg_color": "rgba(232, 85, 90, 0.1)",
+                "border_color": "rgba(232, 85, 90, 0.25)"
+            },
+            {
+                "name": "CONVERGING",
+                "title": "Converging Setups",
+                "description": "Low corr or normalizing — expect tightening after divergence",
+                "color": "#D4A853",
+                "bg_color": "rgba(212, 168, 83, 0.1)",
+                "border_color": "rgba(212, 168, 83, 0.25)"
+            },
+            {
+                "name": "CONTRA",
+                "title": "Contra Setups",
+                "description": "Strong negative corr + overbought — expect rally vs target decline",
+                "color": "#A78BFA",
+                "bg_color": "rgba(139, 92, 246, 0.1)",
+                "border_color": "rgba(139, 92, 246, 0.25)"
+            }
+        ]
+
+        for config in setup_configs:
+            setup_data = corr_df[corr_df['Setup'] == config['name']].nlargest(10, 'Confluence_Score')
+
+            if len(setup_data) > 0:
+                st.markdown(f"""
+                <div style="display:flex; align-items:baseline; gap:0.65rem; margin:1.75rem 0 0.9rem 0;
+                             padding-bottom:0.6rem; border-bottom:1px solid {config['border_color']};">
+                    <span style="font-family:var(--display); font-size:0.62rem; font-weight:700;
+                                 letter-spacing:0.12em; text-transform:uppercase; color:{config['color']};
+                                 padding:0.18rem 0.5rem; background:{config['bg_color']};
+                                 border:1px solid {config['border_color']}; border-radius:4px;">
+                        {config['name']}</span>
+                    <span style="font-family:var(--display); font-size:1rem; font-weight:700;
+                                 color:#F1F5F9; letter-spacing:0.04em;">{config['title']}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:0.75rem; color:#6B7280;">
+                        {config['description']}</span>
+                    <span style="margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
+                                 color:{config['color']};">→ {len(setup_data)}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Display as two-column table
+                col_left, col_right = st.columns(2)
+                with col_left:
+                    st.markdown(f"""<p style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600;
+                                   text-transform:uppercase; letter-spacing:0.1em; color:{config['color']};
+                                   margin:0 0 0.4rem 0; display:flex; align-items:center; gap:0.35rem;">
+                        Top Confluence</p>""", unsafe_allow_html=True)
+                    top_half = setup_data.head(5)
+                    if len(top_half) > 0:
+                        st.components.v1.html(_build_confluence_table_html(top_half), height=100 + len(top_half) * 48)
+                with col_right:
+                    st.markdown(f"""<p style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600;
+                                   text-transform:uppercase; letter-spacing:0.1em; color:{config['color']};
+                                   margin:0 0 0.4rem 0; display:flex; align-items:center; gap:0.35rem;">
+                        Also Considered</p>""", unsafe_allow_html=True)
+                    bottom_half = setup_data.iloc[5:10]
+                    if len(bottom_half) > 0:
+                        st.components.v1.html(_build_confluence_table_html(bottom_half), height=100 + len(bottom_half) * 48)
+                    else:
+                        st.info("No additional setups")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 3: HEATMAP MATRIX
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab3:
+        ui.render_section_header("Correlation Matrix", "Top constituents by |correlation|", icon="grid", accent="violet")
+
+        # Build heatmap data using Symbol (original ticker) to match rolling_corr_df columns
+        top_by_corr = corr_df.copy()
+        top_by_corr['AbsCorr'] = abs(top_by_corr['Corr_Current'])
+        top_rows = top_by_corr.nlargest(30, 'AbsCorr')
+        top_symbols = top_rows['Symbol'].tolist()
+        valid_symbols = [s for s in top_symbols if s in rolling_corr_df.columns]
+        heatmap_data = rolling_corr_df[valid_symbols].iloc[-1:].T if valid_symbols else pd.DataFrame()
+
+        if len(heatmap_data) > 0:
+            # Filter to only the top symbols that exist in rolling_corr_df
+            heatmap_rows = corr_df[corr_df['Symbol'].isin(valid_symbols)].copy()
+            fig = go.Figure(data=go.Heatmap(
+                z=heatmap_rows['Corr_Current'].values.reshape(-1, 1),
+                x=["Correlation"],
+                y=heatmap_rows['SimpleName'].values,
+                colorscale=[[0, "#E8555A"], [0.5, "#1a2133"], [1, "#2DD4A8"]],
+                zmid=0,
+                zmin=-1,
+                zmax=1,
+                text=heatmap_rows['Corr_Current'].values.reshape(-1, 1),
+                texttemplate='%{text:.2f}',
+                textfont={"size": 8, "color": "#94A3B8"},
+                colorbar=dict(title="Corr", thickness=15, len=0.7)
+            ))
+            apply_chart_theme(fig)
+            fig.update_layout(height=600, margin=dict(l=150, r=50, t=50, b=50))
+            st.plotly_chart(fig, width='stretch')
+        else:
+            st.info("No correlation data available for heatmap")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2787,23 +3520,28 @@ def main():
     """Main app entry point with state-based flow."""
     # Render sidebar and get parameters + run button state
     sidebar_out = render_sidebar()
-    universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, mode, start_date, end_date, run_clicked = sidebar_out
+    universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, mode, start_date, end_date, run_clicked, corr_target_ticker, corr_lookback, corr_method = sidebar_out
 
     # Handle run button click
     if run_clicked:
         st.session_state["run_screener_flag"] = True
         st.session_state["timeseries_done"] = False
+        st.session_state["run_correlation_flag"] = False
         st.session_state["results_df"] = None
+        st.session_state["corr_data"] = None
         st.session_state["run_error"] = None
         st.rerun()
 
-    # Reset timeseries_done if mode switches to Snapshot
+    # Reset display flags if mode switches
     if mode == "Snapshot" and st.session_state.get("timeseries_done"):
         st.session_state["timeseries_done"] = False
         st.rerun()
+    if mode == "Snapshot" and st.session_state.get("corr_data"):
+        st.session_state["corr_data"] = None
+        st.rerun()
 
-    # Show landing page if no results yet AND not in time-series display mode
-    if st.session_state["results_df"] is None and not st.session_state.get("run_screener_flag") and not st.session_state.get("timeseries_done"):
+    # Show landing page if no results yet AND not in display modes
+    if st.session_state["results_df"] is None and st.session_state.get("corr_data") is None and not st.session_state.get("run_screener_flag") and not st.session_state.get("timeseries_done"):
         ui.render_header("SANKET", "Market Signal Screener · संकेत · UMA v6 Engine")
         if st.session_state.get("run_error"):
             st.error(st.session_state["run_error"])
@@ -2832,7 +3570,7 @@ def main():
                 st.session_state["results_df"] = results_df
                 st.session_state["run_screener_flag"] = False
                 st.rerun()
-            else:
+            elif mode == "Range Study":
                 # Time-series (Range Study) — Console Logging
                 console.header("SANKET TERMINAL — Bulk Range Intelligence", f"v{VERSION}")
                 console.main_header("RANGE STUDY START", {
@@ -2842,12 +3580,33 @@ def main():
                     "End Date": end_date,
                     "Timeframe": timeframe
                 })
-                
+
                 # Time-series renders inline, so no rerun needed
                 run_timeseries_analysis(
                     universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe
                 )
                 st.session_state["run_screener_flag"] = False
+            else:  # Correlation mode
+                console.header("SANKET TERMINAL — Correlation Intelligence", f"v{VERSION}")
+                console.main_header("CORRELATION ANALYSIS START", {
+                    "Universe": universe,
+                    "Index": selected_index,
+                    "Target": corr_target_ticker,
+                    "Lookback": f"{corr_lookback}D",
+                    "Method": corr_method,
+                    "Timeframe": timeframe
+                })
+
+                corr_data = run_correlation_analysis(
+                    universe, selected_index, corr_target_ticker, corr_lookback, corr_method, timeframe
+                )
+                if corr_data is None:
+                    st.session_state["run_error"] = "Failed to compute correlation analysis. Check data availability."
+                else:
+                    st.session_state["run_error"] = None
+                st.session_state["corr_data"] = corr_data
+                st.session_state["run_screener_flag"] = False
+                st.rerun()
 
         # Display single-date results (skip if time-series already rendered)
         if st.session_state["results_df"] is not None and not st.session_state.get("timeseries_done"):
@@ -3248,7 +4007,7 @@ def main():
                         data=longs_df.to_csv(index=False).encode('utf-8'),
                         file_name=f"bullish_signals_{analysis_date}.csv",
                         mime="text/csv",
-                        use_container_width=True,
+                        width='stretch',
                         key="dl_bullish_timing",
                         help="All active bullish signals grouped by timing"
                     )
@@ -3258,7 +4017,7 @@ def main():
                         data=shorts_df.to_csv(index=False).encode('utf-8'),
                         file_name=f"bearish_signals_{analysis_date}.csv",
                         mime="text/csv",
-                        use_container_width=True,
+                        width='stretch',
                         key="dl_bearish_timing",
                         help="All active bearish signals grouped by timing"
                     )
@@ -3272,7 +4031,7 @@ def main():
                         data=top_longs.to_csv(index=False).encode('utf-8'),
                         file_name=f"top10_bullish_{analysis_date}.csv",
                         mime="text/csv",
-                        use_container_width=True,
+                        width='stretch',
                         key="dl_top10_bullish",
                         help="Top 10 bullish signals ranked by signal magnitude"
                     )
@@ -3282,11 +4041,16 @@ def main():
                         data=top_shorts.to_csv(index=False).encode('utf-8'),
                         file_name=f"top10_bearish_{analysis_date}.csv",
                         mime="text/csv",
-                        use_container_width=True,
+                        width='stretch',
                         key="dl_top10_bearish",
                         help="Top 10 bearish signals ranked by signal magnitude"
                     )
 
+            render_footer()
+
+        # Display Correlation results (if correlation analysis was run)
+        if st.session_state.get("corr_data") is not None:
+            render_correlation_results(st.session_state["corr_data"])
             render_footer()
 
 
