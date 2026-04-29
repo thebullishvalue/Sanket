@@ -1752,7 +1752,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.success(f"Fetched {len(stock_list)} symbols for {selected_index}")
     console.section("Market Data Fetch")
     if show_progress:
-        progress_bar(progress_slot, 15, "Fetching market data", f"{len(stock_list)} stocks")
+        progress_bar(progress_slot, 15, "Fetching Market Data", f"{len(stock_list)} stocks")
     data_dict, fetch_msg = fetch_batch_data(stock_list, end_date=analysis_date)
 
     if not data_dict:
@@ -1804,7 +1804,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         try:
             pct = int(20 + (i + 1) / len(data_dict) * 75)
             if show_progress:
-                progress_bar(progress_slot, pct, f"Analyzing signals", f"{i + 1}/{len(data_dict)} stocks")
+                progress_bar(progress_slot, pct, f"Analyzing Signals", f"{i + 1}/{len(data_dict)} stocks")
 
             if timeframe == "Weekly":
                 df = resample_to_weekly(df)
@@ -1951,7 +1951,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.line('═', 70)
     
     if show_progress:
-        progress_bar(progress_slot, 100, "Analysis complete", f"{len(results)} stocks analyzed")
+        progress_bar(progress_slot, 100, "Analysis Complete", f"{len(results)} stocks analyzed")
         progress_slot.empty()
 
     if not results:
@@ -1980,7 +1980,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     Returns: Dict with per-date results for historical signal tracking.
     """
     progress_slot = st.empty()
-    progress_bar(progress_slot, 5, "Fetching historical depth", f"Date range: {start_date} to {end_date}")
+    progress_bar(progress_slot, 5, "Fetching Historical Depth", f"Date range: {start_date} to {end_date}")
 
     console.start_phase("HISTORICAL ACQUISITION", 1, 2)
     console.section("Range Configuration")
@@ -2032,7 +2032,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     for i, (ticker, df) in enumerate(data_dict.items()):
         try:
             pct = int(15 + (i + 1) / len(data_dict) * 70)
-            progress_bar(progress_slot, pct, f"Analyzing signals", f"{i + 1}/{len(data_dict)} stocks")
+            progress_bar(progress_slot, pct, f"Analyzing Signals", f"{i + 1}/{len(data_dict)} stocks")
             if timeframe == "Weekly":
                 df = resample_to_weekly(df)
             df = run_full_analysis(df, reg_len, wt_n1, wt_n2, *levels)
@@ -2146,7 +2146,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     })
     console.line('═', 70)
 
-    progress_bar(progress_slot, 100, "Range study complete", f"{int(total_signals)} signals analyzed")
+    progress_bar(progress_slot, 100, "Range Study Complete", f"{int(total_signals)} signals analyzed")
     progress_slot.empty()
     st.session_state["timeseries_done"] = True
 
@@ -2404,7 +2404,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
     if analysis_date is None:
         analysis_date = datetime.date.today()
     progress_slot = st.empty()
-    progress_bar(progress_slot, 5, "Initializing Correlation Engine", "Fetching market data")
+    progress_bar(progress_slot, 5, "Initializing Correlation Engine", "Fetching Market Data")
 
     try:
         # Fetch universe symbols
@@ -2447,7 +2447,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         console.item("Data fetched for symbols", len(data_dict))
 
-        progress_bar(progress_slot, 25, "Building Price Matrix", "Pivoting Close prices")
+        progress_bar(progress_slot, 25, "Building Price Matrix", "Pivoting Close Prices")
 
         # Build Close price matrix — handle MultiIndex columns from yfinance
         close_dict = {}
@@ -2553,7 +2553,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             console.item("Error", "Rolling correlation DataFrame is empty")
             return None
 
-        progress_bar(progress_slot, 75, "Computing Signal Confluence", "Running WRCI momentum engine")
+        progress_bar(progress_slot, 75, "Computing Signal Confluence", "Running WRCI Momentum Engine")
 
         # Get current and average correlations
         current_corr = rolling_corr_df.iloc[-1]
@@ -2579,7 +2579,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         # Run WRCI analysis on the universe for confluence
         wrci_results = run_screener_analysis(universe, selected_index, analysis_date, 20, 10, 21, (80, 40, -80, -40), timeframe, show_progress=False)
 
-        progress_bar(progress_slot, 90, "Building Results DataFrame", "Computing divergence metrics")
+        progress_bar(progress_slot, 90, "Building Results DataFrame", "Computing Divergence Metrics")
 
         # Build correlation results dataframe
         corr_data_list = []
