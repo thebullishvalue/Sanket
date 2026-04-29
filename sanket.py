@@ -1213,7 +1213,7 @@ def _analog_gram_schmidt(series_list, length=50):
 def compute_analog_flags(df, ticker=''):
     """Compute Analog Engine v2 directional accuracy flag.
 
-    Returns: "▲ BULL · XX%" | "● NEUTRAL · XX%" | "▼ BEAR · XX%" | "—"
+    Returns: "▲ BULL · XX%" | "● NEUT · XX%" | "▼ BEAR · XX%" | "—"
 
     Computes full Mahalanobis distance-based analog matching with:
     - Gram-Schmidt orthogonalization across 6 features
@@ -1363,9 +1363,9 @@ def compute_analog_flags(df, ticker=''):
         call_bullish = win_rate > 55.0
         call_bearish = win_rate < 45.0
 
-        # Format output: "▲ BULL · 80%" or "● NEUTRAL · 60%" or "▼ BEAR · 40%"
+        # Format output: "▲ BULL · 80%" or "● NEUT · 60%" or "▼ BEAR · 40%"
         call_sym = "▲" if call_bullish else "▼" if call_bearish else "●"
-        call_dir = "BULL" if call_bullish else "BEAR" if call_bearish else "NEUTRAL"
+        call_dir = "BULL" if call_bullish else "BEAR" if call_bearish else "NEUT"
 
         return f"{call_sym} {call_dir} · {int(win_rate)}%"
 
