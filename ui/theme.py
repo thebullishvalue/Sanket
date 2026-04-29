@@ -1,12 +1,14 @@
 """
-Sanket v2.1.0 — Shared CSS injection, chart theming, and color constants for the UI layer.
+Pragyam v8.0.0 — Shared CSS, chart theming, and color constants for the UI layer.
 
-Design language: "Obsidian Quant" — Institutional Research Terminal
-Precision-instrument aesthetics for quantitative finance:
-  Display / UI : Syne (geometric, authoritative, distinctive)
-  Body / Data  : JetBrains Mono (refined monospace, tabular precision)
-  Palette      : Obsidian (#0A0E17 → #050810) + Amber Gold (#D4A853)
-  Surfaces     : Frameless glass panels with thin hairline border strokes
+UI — "Obsidian Quant" Institutional Research Terminal design language.
+
+Aesthetic: "Obsidian Quant" — Institutional Research Terminal
+Precision-instrument design language for quantitative finance.
+- Display/UI:  Syne (geometric, authoritative, distinctive)
+- Body/Data:   JetBrains Mono (refined monospace, tabular precision)
+- Palette:     Obsidian (#0A0E17 -> #050810), Amber Gold (#D4A853)
+- Surfaces:    Frameless glass panels with thin border strokes.
 """
 
 from __future__ import annotations
@@ -16,15 +18,15 @@ from pathlib import Path
 
 import streamlit as st
 
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 PRODUCT_NAME = "Sanket"
 COMPANY = "@thebullishvalue"
 
-# Path to the external stylesheet — injected once per render cycle
+# Path to external CSS file
 CSS_PATH = Path(__file__).parent / "theme.css"
 
-# ── Shared Plotly layout defaults — applied via apply_chart_theme() to every figure
-# Centralizing these eliminates repetition across all tab rendering sites.
+# ── Shared Plotly layout config ─────────────────────────────────────────────
+# Eliminates massive duplication across all tab files.
 
 PLOTLY_FONT = dict(family="JetBrains Mono, monospace", color="#94A3B8", size=10)
 PLOTLY_HOVERLABEL = dict(
@@ -46,7 +48,7 @@ PLOTLY_MARGIN = dict(t=20, l=50, r=20, b=40)
 PLOTLY_GRID = "rgba(255,255,255,0.035)"
 PLOTLY_GRID_ZERO = "rgba(255,255,255,0.06)"
 
-# Interactive chart mode-bar — draw-line / erase enabled; lasso and box-select removed
+# Interactive chart config — click + zoom + pan
 PLOTLY_MODEBAR = dict(
     modeBarButtonsToRemove=["lasso2d", "select2d"],
     modeBarButtonsToAdd=[
@@ -89,11 +91,7 @@ def chart_layout(
 
 
 def style_axes(fig, y_title: str = "", x_title: str = "", y_range=None, row=None, col=None) -> None:
-    """Apply consistent Obsidian Quant axis styling to a Plotly figure (mutates in place).
-
-    Adds monospace tick fonts, faint gridlines, and full-viewport vertical crosshairs.
-    Pass `row` and `col` when targeting a specific subplot panel.
-    """
+    """Apply consistent axis styling to a Plotly figure."""
     kw = {}
     if row is not None:
         kw["row"] = row
@@ -108,7 +106,7 @@ def style_axes(fig, y_title: str = "", x_title: str = "", y_range=None, row=None
         linecolor="rgba(255,255,255,0.04)",
         title_text=x_title,
         tickfont=dict(size=9, family="JetBrains Mono, monospace", color="#64748B"),
-        # Vertical crosshair — dashed hairline, snaps to cursor position
+        # Vertical crosshair — dashed dim grey
         showspikes=True,
         spikemode="across",
         spikesnap="cursor",
@@ -136,22 +134,19 @@ def style_axes(fig, y_title: str = "", x_title: str = "", y_range=None, row=None
 def inject_css() -> None:
     """Inject the Obsidian Quant Terminal CSS into the Streamlit app.
 
-    Loads from the external theme.css file for maintainability.
-    Safe to call on every render — Streamlit deduplicates identical <style> blocks.
+    Loads from external theme.css file for maintainability.
+    Injects on every render — Streamlit deduplicates identical <style> blocks.
     """
     if CSS_PATH.exists():
         css = CSS_PATH.read_text()
     else:
-        css = "/* theme.css not found — check ui/ directory */"
+        css = "/* theme.css not found */"
 
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 
 def progress_bar(slot, pct: int, label: str, sub: str = "") -> None:
-    """Render a themed amber/teal/green progress card into an st.empty() slot.
-
-    Color transitions amber (< 50%) → cyan (50–99%) → emerald (100%).
-    """
+    """Render a themed progress card into an ``st.empty()`` slot."""
     is_complete = pct >= 100
     bar_color = "#34D399" if is_complete else "#D4A853" if pct > 50 else "#22D3EE"
     dot_class = "pulse-dot complete" if is_complete else "pulse-dot"
@@ -173,9 +168,6 @@ def progress_bar(slot, pct: int, label: str, sub: str = "") -> None:
 
 
 def apply_chart_theme(fig) -> None:
-    """Apply the full Obsidian Quant Terminal theme to a Plotly figure (mutates in place).
-
-    Convenience wrapper: calls chart_layout() + style_axes() in one call.
-    """
+    """Apply the Obsidian Quant Terminal theme to a Plotly figure (mutates in place)."""
     fig.update_layout(**chart_layout())
     style_axes(fig)
