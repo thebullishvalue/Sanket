@@ -1704,7 +1704,7 @@ def render_landing_page():
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
             AWAITING ANALYSIS PARAMETERS
         </h4>
-        <p>Configure via the <strong>Sidebar</strong>: select <strong>Universe</strong>, <strong>Timeframe</strong>, <strong>Temporal Range</strong>, and <strong>Engine Settings</strong>.<br>
+        <p>Configure via the <strong>Sidebar</strong>: select <strong>Universe</strong>, <strong>Timeframe</strong>, <strong>Analysis Mode</strong>, and <strong>Engine Settings</strong>.<br>
            Click <strong>RUN SCREENER</strong> to analyze and discover today's signals.<br>
            <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will compute Wave Trend oscillations · Calculate signal magnitude · Rank by strength</span></p>
     </div>
@@ -1859,21 +1859,21 @@ def render_sidebar():
 
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-        # Temporal Range Section
-        st.markdown('<div class="sidebar-title">Temporal Range</div>', unsafe_allow_html=True)
-        analysis_mode = st.radio("Mode", ["Snapshot", "Range Study", "Correlation"], horizontal=True, label_visibility="collapsed")
+        # Analysis Modes Section
+        st.markdown('<div class="sidebar-title">Analysis Modes</div>', unsafe_allow_html=True)
+        analysis_mode = st.radio("Mode", ["Single Date", "Historical Range", "Correlation Analysis"], horizontal=True, label_visibility="collapsed")
 
-        if analysis_mode == "Snapshot":
+        if analysis_mode == "Single Date":
             analysis_date = st.date_input("Date", datetime.date.today(), max_value=datetime.date.today(), label_visibility="collapsed")
             start_date_hist, end_date_hist = None, None
             corr_target_ticker, corr_lookback, corr_method = None, 90, "Pearson"
-        elif analysis_mode == "Range Study":
+        elif analysis_mode == "Historical Range":
             analysis_date = datetime.date.today()
             col_date1, col_date2 = st.columns(2)
             with col_date1: start_date_hist = st.date_input("Start", datetime.date.today() - datetime.timedelta(days=300), label_visibility="collapsed")
             with col_date2: end_date_hist = st.date_input("End", datetime.date.today(), label_visibility="collapsed")
             corr_target_ticker, corr_lookback, corr_method = None, 90, "Pearson"
-        else:  # Correlation mode
+        else:  # Correlation Analysis mode
             st.markdown('<div class="sidebar-title">Analysis Date</div>', unsafe_allow_html=True)
             analysis_date = st.date_input("Analysis Date", datetime.date.today(), max_value=datetime.date.today(), label_visibility="collapsed")
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -1956,8 +1956,8 @@ def render_sidebar():
             <div class="spec-row"><span class="spec-label">Mode</span><span class="spec-value" style="font-size:0.7rem;">{analysis_mode}</span></div>
         """
 
-        # Add Target row only in Correlation mode
-        if analysis_mode == "Correlation":
+        # Add Target row only in Correlation Analysis mode
+        if analysis_mode == "Correlation Analysis":
             spec_html += f'<div class="spec-row"><span class="spec-label">Target</span><span class="spec-value" style="font-size:0.7rem;">{target_selected}</span></div>'
 
         spec_html += """
@@ -2415,10 +2415,10 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     avg_bear_regime = daily_agg['Regime_Bear_Pct'].mean()
     total_change_points = int(daily_agg['Change_Point'].sum())
 
-    console.summary("RANGE STUDY SUMMARY", {
+    console.summary("HISTORICAL RANGE SUMMARY", {
         "Universe": universe,
         "Universe Index": selected_index,
-        "Range Study": f"{start_date} to {end_date}",
+        "Historical Range": f"{start_date} to {end_date}",
         "Total Signals Generated": int(total_signals),
         "Avg Signal Strength": round(avg_signal, 2),
         "Bias Ratio (L/S)": round(overall_ratio, 2),
@@ -2428,11 +2428,11 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     })
     console.line('═', 70)
 
-    progress_bar(progress_slot, 100, "Range Study Complete", f"{int(total_signals)} signals analyzed")
+    progress_bar(progress_slot, 100, "Historical Range Complete", f"{int(total_signals)} signals analyzed")
     progress_slot.empty()
     st.session_state["timeseries_done"] = True
 
-    ui.render_section_header(f"Range Study ({start_date} to {end_date})", icon="history", accent="violet")
+    ui.render_section_header(f"Historical Range ({start_date} to {end_date})", icon="history", accent="violet")
 
     # Summary metric cards
     c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -3436,10 +3436,11 @@ def render_correlation_results(corr_data: dict) -> None:
 # HELPER FUNCTIONS FOR TAB RENDERING
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'C') -> dict:
+def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'C', timeframe: str = 'Daily') -> dict:
     """Bucket signals by age (Today, 1d, 2d, 3d, 5d) with stats for timeline display.
 
     condition_set: 'A' = Momentum (LA_/SA_), 'B' = Crossover (LB_/SB_), 'C' = Threshold (LC_/SC_)
+    timeframe: 'Daily' or 'Weekly' — determines age label names
     """
     if condition_set == 'A':
         prefix = 'LA' if side == 'long' else 'SA'
@@ -3450,19 +3451,19 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
     else:
         prefix = 'L' if side == 'long' else 'S'
     target_indicator = "●"
-    buckets = {
-        "Today": [],
-        "1 Day Ago": [],
-        "2 Days Ago": [],
-        "3 Days Ago": [],
-        "Within 5 Days": []
-    }
+
+    if timeframe == 'Weekly':
+        age_labels = ["This Week", "1 Week Ago", "2 Weeks Ago", "3 Weeks Ago", "Within 5 Weeks"]
+    else:
+        age_labels = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
+
+    buckets = {label: [] for label in age_labels}
     col_map = {
-        "Today": f"{prefix}_Today",
-        "1 Day Ago": f"{prefix}_1d",
-        "2 Days Ago": f"{prefix}_2d",
-        "3 Days Ago": f"{prefix}_3d",
-        "Within 5 Days": f"{prefix}_5d"
+        age_labels[0]: f"{prefix}_Today",
+        age_labels[1]: f"{prefix}_1d",
+        age_labels[2]: f"{prefix}_2d",
+        age_labels[3]: f"{prefix}_3d",
+        age_labels[4]: f"{prefix}_5d"
     }
     seen = set()
 
@@ -3908,10 +3909,10 @@ def main():
         st.rerun()
 
     # Reset display flags if mode switches
-    if mode == "Snapshot" and st.session_state.get("timeseries_done"):
+    if mode == "Single Date" and st.session_state.get("timeseries_done"):
         st.session_state["timeseries_done"] = False
         st.rerun()
-    if mode == "Snapshot" and st.session_state.get("corr_data"):
+    if mode == "Single Date" and st.session_state.get("corr_data"):
         st.session_state["corr_data"] = None
         st.rerun()
 
@@ -3925,7 +3926,7 @@ def main():
     else:
         # Run analysis if flagged
         if st.session_state.get("run_screener_flag"):
-            if mode == "Snapshot":
+            if mode == "Single Date":
                 # Console header for local terminal monitoring
                 console.header("SANKET TERMINAL — Institutional Signal Screener", VERSION)
                 console.main_header("ANALYSIS RUN START", {
@@ -3945,10 +3946,10 @@ def main():
                 st.session_state["results_df"] = results_df
                 st.session_state["run_screener_flag"] = False
                 st.rerun()
-            elif mode == "Range Study":
-                # Time-series (Range Study) — Console Logging
+            elif mode == "Historical Range":
+                # Time-series (Historical Range) — Console Logging
                 console.header("SANKET TERMINAL — Bulk Range Intelligence", VERSION)
-                console.main_header("RANGE STUDY START", {
+                console.main_header("HISTORICAL RANGE START", {
                     "Universe": universe,
                     "Index": selected_index,
                     "Start Date": start_date,
@@ -3961,7 +3962,7 @@ def main():
                     universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe
                 )
                 st.session_state["run_screener_flag"] = False
-            else:  # Correlation mode
+            else:  # Correlation Analysis mode
                 console.header("SANKET TERMINAL — Correlation Intelligence", VERSION)
                 console.main_header("CORRELATION ANALYSIS START", {
                     "Universe": universe,
@@ -4104,7 +4105,7 @@ def main():
                                 Set A · Composite Line crosses above Signal Line anywhere — broad momentum crossover, no zone filter
                             </p>
                             """, unsafe_allow_html=True)
-                            _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A')
+                            _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A', timeframe=timeframe)
                             la_html = _build_signal_table_html(la_stats, side='long', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if la_stats[a]['count'] > 0)
                             _r = sum(la_stats[a]['count'] for a in _age_order)
@@ -4117,7 +4118,7 @@ def main():
                                 Set B · Composite Line crosses below Signal Line while both are in oversold zone (&lt;−40)
                             </p>
                             """, unsafe_allow_html=True)
-                            _, lb_stats, _, _ = _bucket_signals_by_age(longs_b_df, side='long', condition_set='B')
+                            _, lb_stats, _, _ = _bucket_signals_by_age(longs_b_df, side='long', condition_set='B', timeframe=timeframe)
                             lb_html = _build_signal_table_html(lb_stats, side='long', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if lb_stats[a]['count'] > 0)
                             _r = sum(lb_stats[a]['count'] for a in _age_order)
@@ -4130,7 +4131,7 @@ def main():
                                 Set C · Composite Line enters oversold zone (&lt;−40) from above, Signal Line still above −40
                             </p>
                             """, unsafe_allow_html=True)
-                            _, lc_stats, _, _ = _bucket_signals_by_age(longs_c_df, side='long', condition_set='C')
+                            _, lc_stats, _, _ = _bucket_signals_by_age(longs_c_df, side='long', condition_set='C', timeframe=timeframe)
                             lc_html = _build_signal_table_html(lc_stats, side='long', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if lc_stats[a]['count'] > 0)
                             _r = sum(lc_stats[a]['count'] for a in _age_order)
@@ -4147,7 +4148,7 @@ def main():
                                 Set A · Composite Line crosses below Signal Line anywhere — broad momentum crossover, no zone filter
                             </p>
                             """, unsafe_allow_html=True)
-                            _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A')
+                            _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A', timeframe=timeframe)
                             sa_html = _build_signal_table_html(sa_stats, side='short', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if sa_stats[a]['count'] > 0)
                             _r = sum(sa_stats[a]['count'] for a in _age_order)
@@ -4160,7 +4161,7 @@ def main():
                                 Set B · Composite Line crosses above Signal Line while both are in overbought zone (&gt;+40)
                             </p>
                             """, unsafe_allow_html=True)
-                            _, sb_stats, _, _ = _bucket_signals_by_age(shorts_b_df, side='short', condition_set='B')
+                            _, sb_stats, _, _ = _bucket_signals_by_age(shorts_b_df, side='short', condition_set='B', timeframe=timeframe)
                             sb_html = _build_signal_table_html(sb_stats, side='short', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if sb_stats[a]['count'] > 0)
                             _r = sum(sb_stats[a]['count'] for a in _age_order)
@@ -4173,7 +4174,7 @@ def main():
                                 Set C · Composite Line enters overbought zone (&gt;+40) from below, Signal Line still below +40
                             </p>
                             """, unsafe_allow_html=True)
-                            _, sc_stats, _, _ = _bucket_signals_by_age(shorts_c_df, side='short', condition_set='C')
+                            _, sc_stats, _, _ = _bucket_signals_by_age(shorts_c_df, side='short', condition_set='C', timeframe=timeframe)
                             sc_html = _build_signal_table_html(sc_stats, side='short', timeframe=timeframe)
                             _g = sum(1 for a in _age_order if sc_stats[a]['count'] > 0)
                             _r = sum(sc_stats[a]['count'] for a in _age_order)
