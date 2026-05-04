@@ -3335,6 +3335,11 @@ footer {
     border-left-color: rgba(148, 163, 184, 0.4);
 }
 
+.signal-type.squeeze {
+    background: rgba(139, 92, 246, 0.08);
+    border-left-color: rgba(139, 92, 246, 0.4);
+}
+
 .signal-type-label {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.75rem;
@@ -3354,6 +3359,10 @@ footer {
 
 .signal-type.threshold .signal-type-label {
     color: #94A3B8;
+}
+
+.signal-type.squeeze .signal-type-label {
+    color: #8B5CF6;
 }
 
 .signal-type-desc {

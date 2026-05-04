@@ -521,7 +521,6 @@ def render_signal_guide() -> None:
                 <div class="signal-guide-metrics-grid">
                     <div class="metric-item"><span class="metric-label">Signal</span> · Momentum magnitude ±0 to ±100</div>
                     <div class="metric-item"><span class="metric-label">Trend</span> · Price confirmation +1 to -1</div>
-                    <div class="metric-item"><span class="metric-label">UMA Flag</span> · MA crossover status</div>
                     <div class="metric-item"><span class="metric-label">Zone</span> · Oscillator position (OB/OS)</div>
                 </div>
             </div>
