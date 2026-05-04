@@ -1,6 +1,6 @@
 """
 Sanket - Market Signal Screener | A Pragyam Product Family Member
-UMA v6 Engine (Unified Market Analytics) Quantitative Signal Screener Terminal
+WRCI Engine Quantitative Signal Screener Terminal
 """
 
 import html
@@ -439,15 +439,6 @@ GLOBAL_INDEXES_MAP = {
 # Asset Name Lookup for friendly display (Reverse map tickers to names)
 ASSET_NAME_LOOKUP = {v: k for k, v in {**COMMODITY_MAP, **CURRENCY_MAP, **CRYPTO_MAP, **GLOBAL_MACRO_MAP, **GLOBAL_INDEXES_MAP}.items()}
 
-# Ordered, deduplicated list of all macro context symbols used by UMA MMR regression.
-# Defined once here so both fetch_macro_context_data and run_screener_analysis share the same set.
-_MACRO_SYM_ORDERED = list(dict.fromkeys(
-    list(GLOBAL_MACRO_MAP.values()) +
-    list(COMMODITY_MAP.values()) +
-    list(CURRENCY_MAP.values())
-))
-_MACRO_SYM_SET = set(_MACRO_SYM_ORDERED)
-
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA FETCHING FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -864,514 +855,94 @@ def run_full_analysis(df, reg_len=20, wt_n1=10, wt_n2=21, obLevel1=80, obLevel2=
         default='Neutral'
     )
 
+    # Set D: Squeeze — Squeeze Momentum
+    df = compute_squeeze_momentum(df)
+    df['long_cond_sqz'] = df['SQZ_On'].shift(1) & df['SQZ_Off'] & (df['SQZ_Val'] > 0)
+    df['short_cond_sqz'] = df['SQZ_On'].shift(1) & df['SQZ_Off'] & (df['SQZ_Val'] < 0)
+
     return df
 
 # ══════════════════════════════════════════════════════════════════════════════
-# UMA v6 ENGINE — Unified Market Analysis (Python Port)
-# Signals: Conf Bull / Conf Bear / Bull Div / Bear Div — info flag only
-# MMR macro context: Global Macro + Commodities + Currency universes
+# SQUEEZE MOMENTUM ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _uma_zscore(series, length, clip=3.0):
-    mean = series.rolling(length).mean()
-    std  = series.rolling(length).std(ddof=0).replace(0.0, np.nan)
-    return ((series - mean) / std).clip(-clip, clip).fillna(0.0)
-
-def _uma_sigmoid(z, scale=1.5):
-    return 2.0 / (1.0 + np.exp((-z / scale).clip(-20, 20))) - 1.0
-
-def _uma_atr(df, n):
-    prev = df['Close'].shift(1)
-    tr   = pd.concat([df['High'] - df['Low'],
-                      (df['High'] - prev).abs(),
-                      (df['Low']  - prev).abs()], axis=1).max(axis=1)
-    return tr.ewm(span=n, adjust=False).mean()
-
-def _compute_msf(df, length=20, roc_len=14, wt_ch=10, wt_avg=21,
-                 ent_lb=50, ent_damp=0.25,
-                 h_short=10, h_long=50, h_sample=100, h_inf=0.3,
-                 vol_s=5, vol_l=20, vol_damp=0.15, clip=3.0):
-    """MSF — Momentum Structure Flow.  Returns (msf_signal, wt1) as pd.Series."""
-    close  = df['Close']
-    high   = df['High']
-    low    = df['Low']
-    volume = df['Volume'].copy().fillna(0)
-    # Guard: instruments with no volume (yield indices, some ETFs)
-    med_v = volume.median()
-    volume = volume.replace(0, med_v if med_v > 0 else 1.0)
-
-    # Momentum (ROC)
-    mom_norm = _uma_sigmoid(_uma_zscore(close.pct_change(roc_len).fillna(0) * 100, length, clip))
-
-    # Microstructure
-    vol_ma    = volume.rolling(length).mean().replace(0, np.nan)
-    vol_ratio = (volume / vol_ma).fillna(1.0)
-    micro_raw = (((high + low) / 2 - df['Open']) * vol_ratio).rolling(length).mean() \
-              - ((close - close.shift(5)).fillna(0) * vol_ratio).rolling(length).mean()
-    micro_norm = _uma_sigmoid(_uma_zscore(micro_raw, length, clip))
-
-    # Composite Trend (4-component)
-    t_slow = close.rolling(length).mean()
-    atr14  = _uma_atr(df, 14).replace(0, np.nan)
-    ct_z   = ((_uma_zscore(close.rolling(5).mean() - t_slow, length, clip)
-              + _uma_zscore(close.diff(5).diff(5).fillna(0), length, clip)
-              + _uma_zscore((close.diff(5).fillna(0) / atr14).fillna(0), length, clip)
-              + _uma_zscore(close - t_slow, length, clip)) / np.sqrt(4))
-    ct_norm = _uma_sigmoid(ct_z)
-
-    # Accumulation / Distribution
-    mf    = ((high + low + close) / 3) * volume
-    mf_p  = mf.where(close > close.shift(), 0.0).rolling(length).mean()
-    mft   = (mf_p + mf.where(close < close.shift(), 0.0).rolling(length).mean()).replace(0, np.nan)
-    accum = 2.0 * (mf_p / mft).fillna(0.5) - 1.0
-
-    # Regime Counter (cumulative directional count, de-trended)
-    pct  = close.pct_change().fillna(0) * 100
-    rcnt = ((pct > 0.33).astype(float) - (pct < -0.33).astype(float)).cumsum()
-    reg_norm = _uma_sigmoid(_uma_zscore(rcnt - rcnt.rolling(length).mean(), length, clip))
-
-    # WaveTrend Cycle
-    ap  = (high + low + close) / 3
-    esa = ap.ewm(span=wt_ch, adjust=False).mean()
-    d   = (ap - esa).abs().ewm(span=wt_ch, adjust=False).mean().replace(0, np.nan)
-    wt1 = ((ap - esa) / (0.015 * d)).ewm(span=wt_avg, adjust=False).mean()
-    wt_norm = _uma_sigmoid(_uma_zscore(wt1, length, clip))
-
-    # Permutation Entropy (order-3 patterns)
-    d_old = close.shift(2) - close.shift(3)
-    d_mid = close.shift(1) - close.shift(2)
-    d_new = close           - close.shift(1)
-    pats  = [
-        ((d_old < d_mid) & (d_mid < d_new)).astype(float),
-        ((d_old < d_new) & (d_new < d_mid)).astype(float),
-        ((d_mid < d_old) & (d_old < d_new)).astype(float),
-        ((d_mid < d_new) & (d_new < d_old)).astype(float),
-        ((d_new < d_old) & (d_old < d_mid)).astype(float),
-        ((d_new < d_mid) & (d_mid < d_old)).astype(float),
-    ]
-    freqs    = [p.rolling(ent_lb).mean().clip(1e-12, None) for p in pats]
-    ent_norm = (-sum(f * np.log(f) for f in freqs) / np.log(6)).clip(0, 1)
-    ent_mod  = 1.0 - ent_damp * _uma_sigmoid(_uma_zscore(ent_norm, length, clip))
-
-    # Hurst Regime (variance-ratio approach)
-    std_s = np.log((close / close.shift(h_short)).replace(0, np.nan)).rolling(h_sample).std().replace(0, np.nan)
-    std_l = np.log((close / close.shift(h_long)).replace(0, np.nan)).rolling(h_sample).std()
-    h_raw = (np.log(std_l / std_s) / np.log(h_long / h_short)).fillna(0.5)
-    h_smo = h_raw.ewm(span=10, adjust=False).mean().clip(0.1, 0.9)
-    h_tilt = ((h_smo - h_smo.rolling(length * 5).mean().fillna(0.5)) * 2.5).clip(-1, 1)
-    hw_m = 1.0 + h_tilt * h_inf;  hw_s = 1.0 + h_tilt * h_inf
-    hw_f = 1.0 - h_tilt * h_inf * 0.5
-    hw_c = 1.0 - h_tilt * h_inf
-    hw_d = np.sqrt(hw_m**2 + hw_s**2 + hw_f**2 + hw_c**2).replace(0, np.nan)
-
-    # Volatility Structure
-    vov = (_uma_atr(df, 14).rolling(length).std() / _uma_atr(df, 14).rolling(length).mean().replace(0, np.nan)).fillna(0)
-    vts = (_uma_atr(df, vol_s) / _uma_atr(df, vol_l).replace(0, np.nan)).fillna(1)
-    vol_mod = 1.0 - vol_damp * _uma_sigmoid(
-        (_uma_zscore(vov, length, clip) + _uma_zscore(vts, length, clip)) / np.sqrt(2)).clip(lower=0)
-
-    # MSF Composite
-    msf_raw = ((hw_m * mom_norm + hw_s * (micro_norm + ct_norm) / np.sqrt(2)
-                + hw_f * (accum + reg_norm) / np.sqrt(2) + hw_c * wt_norm) / hw_d)
-    msf_sig = (_uma_sigmoid(msf_raw.fillna(0) * 2.0, scale=1.0) * ent_mod * vol_mod).clip(-1, 1)
-
-    return msf_sig.fillna(0.0), wt1.fillna(0.0)
-
-
-def _compute_mmr(close_y, macro_dict, length_reg=20, lookback_corr=200):
-    """MMR — Macro Multiple Regression (Gram-Schmidt orthogonalized, top-3 vars).
-    Returns (mmr_signal, model_r2) as pd.Series.
+def compute_squeeze_momentum(df: pd.DataFrame, length: int = 20, mult: float = 2.0, 
+                             length_kc: int = 20, mult_kc: float = 1.5, 
+                             use_true_range: bool = True) -> pd.DataFrame:
     """
-    if len(close_y) < lookback_corr + length_reg or not macro_dict:
-        return pd.Series(0.0, index=close_y.index), pd.Series(0.0, index=close_y.index)
-
-    # Scalar correlations over last lookback_corr bars to rank macro variables
-    tail_y = close_y.dropna().iloc[-lookback_corr:]
-    ranked = []
-    for sym, mac in macro_dict.items():
-        aligned = mac.reindex(tail_y.index).ffill().bfill()
-        if aligned.isna().mean() > 0.4:
-            continue
-        mask = ~(np.isnan(tail_y.values) | np.isnan(aligned.values))
-        if mask.sum() < 30:
-            continue
-        c = float(np.corrcoef(tail_y.values[mask], aligned.values[mask])[0, 1])
-        if not np.isnan(c):
-            ranked.append((abs(c), mac))
-
-    if not ranked:
-        return pd.Series(0.0, index=close_y.index), pd.Series(0.0, index=close_y.index)
-
-    xs = [s.reindex(close_y.index).ffill().bfill()
-          for _, s in sorted(ranked, reverse=True)[:3]]
-
-    def _var(s):    return s.rolling(length_reg).var(ddof=0).replace(0, np.nan)
-    def _cov(a, b): return ((a * b).rolling(length_reg).mean()
-                             - a.rolling(length_reg).mean() * b.rolling(length_reg).mean())
-
-    # Gram-Schmidt orthogonalization
-    u1 = xs[0]
-    u2 = (xs[1] - (_cov(xs[1], u1) / _var(u1)) * u1).fillna(0) if len(xs) > 1 else pd.Series(0.0, index=close_y.index)
-    if len(xs) > 2:
-        var_u2 = _var(u2)
-        u3 = (xs[2] - (_cov(xs[2], u1) / _var(u1)) * u1
-                     - (_cov(xs[2], u2) / var_u2) * u2).fillna(0)
+    Squeeze Momentum Indicator
+    Ported exactly from Pine Script.
+    """
+    df = df.copy()
+    
+    # Calculate BB
+    source = df['Close']
+    basis = source.rolling(window=length).mean()
+    # As per original script: dev = multKC * stdev(source, length)
+    dev = mult_kc * source.rolling(window=length).std(ddof=0)
+    upperBB = basis + dev
+    lowerBB = basis - dev
+    
+    # Calculate KC
+    ma = source.rolling(window=length_kc).mean()
+    if use_true_range:
+        prev_close = df['Close'].shift(1)
+        tr1 = df['High'] - df['Low']
+        tr2 = (df['High'] - prev_close).abs()
+        tr3 = (df['Low'] - prev_close).abs()
+        range_val = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     else:
-        u3 = pd.Series(0.0, index=close_y.index)
-
-    def _beta(u, y): return (_cov(u, y) / _var(u)).fillna(0)
-    b1, b2, b3 = _beta(u1, close_y), _beta(u2, close_y), _beta(u3, close_y)
-
-    mean_y    = close_y.rolling(length_reg).mean()
-    intercept = mean_y - b1 * u1.rolling(length_reg).mean() \
-                       - b2 * u2.rolling(length_reg).mean() \
-                       - b3 * u3.rolling(length_reg).mean()
-    y_pred    = intercept + b1 * u1 + b2 * u2 + b3 * u3
-
-    r2  = (((y_pred - mean_y)**2).rolling(length_reg).mean()
-           / _var(close_y)).clip(0, 1).fillna(0)
-    mmr = _uma_sigmoid(_uma_zscore(close_y - y_pred, length_reg)).fillna(0.0)
-
-    return mmr, r2
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_macro_context_data(end_date=None, days_back=350):
-    """Pre-fetch close series for Global Macro + Commodities + Currency universes.
-    Cached 5 min; called once per screener run, reused for all symbols.
-    """
-    if end_date is None:
-        end_date = datetime.date.today()
-    data, _ = fetch_batch_data(_MACRO_SYM_ORDERED, end_date=end_date, days_back=days_back)
-    return {sym: df['Close'] for sym, df in data.items()} if data else {}
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _fetch_remaining_macro_context(syms_tuple, end_date, days_back=350):
-    """Fetch close series for macro symbols not already present in the screener data_dict.
-    Accepts a tuple (hashable) so Streamlit can cache the result per unique symbol subset.
-    """
-    if not syms_tuple:
-        return {}
-    data, _ = fetch_batch_data(list(syms_tuple), end_date=end_date, days_back=days_back)
-    return {sym: df['Close'] for sym, df in data.items()} if data else {}
-
-
-def compute_uma_flags(df, macro_dict, ticker=''):
-    """Compute UMA v6 info flags for the latest bar.
-
-    Priority: Conf Bull > Conf Bear > Bull Div > Bear Div > —
-    Definitions (direct port from Pine Script Section 10):
-      bull_div      = osc_rising  AND price_falling AND unified_osc < -5
-      bear_div      = osc_falling AND price_rising  AND unified_osc >  5
-      conf_bull     = signal_agreement > 0.3        AND unified_osc < -5
-      conf_bear     = signal_agreement > 0.3        AND unified_osc >  5
-    """
-    try:
-        if len(df) < 50:
-            return "—"
-
-        macro_filtered = {k: v for k, v in macro_dict.items() if k != ticker}
-
-        msf, _  = _compute_msf(df)
-        mmr, r2 = _compute_mmr(df['Close'], macro_filtered)
-
-        # Adaptive signal integration
-        msf_c = msf.abs() ** 1.5
-        mmr_c = (mmr.abs() * r2.clip(0) ** 0.5) ** 1.5
-        c_sum = msf_c + mmr_c + 1e-6
-        w_msf = 0.5 * 0.5 + 0.5 * msf_c / c_sum
-        w_mmr = 0.5 * 0.5 + 0.5 * mmr_c / c_sum
-        w_tot = w_msf + w_mmr
-        unified   = (w_msf / w_tot) * msf + (w_mmr / w_tot) * mmr
-        agreement = msf * mmr
-        osc       = unified * 10.0
-
-        # Latest and previous bar reads
-        uo, uo_p = float(osc.iloc[-1]), float(osc.iloc[-2])
-        sa        = float(agreement.iloc[-1])
-        pr, pr_p  = float(df['Close'].iloc[-1]), float(df['Close'].iloc[-2])
-
-        conf_bull = sa > 0.3  and uo < -5
-        conf_bear = sa > 0.3  and uo >  5
-        bull_div  = uo > uo_p and pr < pr_p and uo < -5
-        bear_div  = uo < uo_p and pr > pr_p and uo >  5
-
-        if conf_bull: return "Conf Bull"
-        if conf_bear: return "Conf Bear"
-        if bull_div:  return "Bull Div"
-        if bear_div:  return "Bear Div"
-        return "—"
-
-    except Exception:
-        return "—"
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ANALOG ENGINE v2 — Full Mahalanobis Directional Accuracy
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _analog_zscore(series, length=50, clip=3.0):
-    """Z-score normalization with optional clipping."""
-    if len(series) < length:
-        return series * 0.0
-    m = series.rolling(length, min_periods=1).mean()
-    s = series.rolling(length, min_periods=1).std().replace(0, np.nan)
-    z = (series - m) / s.fillna(1.0)
-    return z.clip(-clip, clip)
-
-def _analog_atr(df, n=14):
-    """Average True Range."""
-    h, l, c = df['High'], df['Low'], df['Close']
-    tr = np.maximum(h - l, np.maximum(np.abs(h - c.shift(1)), np.abs(l - c.shift(1))))
-    return tr.rolling(n, min_periods=1).mean()
-
-def _analog_gram_schmidt(series_list, length=50):
-    """Gram-Schmidt orthogonalization for 6 basis vectors.
-
-    Returns z-normalized orthogonal basis vectors.
-    """
-    try:
-        # Initialize orthogonal vectors
-        e1 = series_list[0].copy()
-
-        # e2 orthogonal to e1
-        cov_21 = (series_list[1] * e1).rolling(length, min_periods=1).mean() - \
-                 series_list[1].rolling(length, min_periods=1).mean() * e1.rolling(length, min_periods=1).mean()
-        var_1 = (e1 * e1).rolling(length, min_periods=1).mean() - \
-                (e1.rolling(length, min_periods=1).mean() ** 2)
-        c21 = cov_21 / (var_1.replace(0, np.nan))
-        e2 = series_list[1] - c21.fillna(0) * e1
-
-        # e3 orthogonal to e1, e2
-        cov_31 = (series_list[2] * e1).rolling(length, min_periods=1).mean() - \
-                 series_list[2].rolling(length, min_periods=1).mean() * e1.rolling(length, min_periods=1).mean()
-        cov_32 = (series_list[2] * e2).rolling(length, min_periods=1).mean() - \
-                 series_list[2].rolling(length, min_periods=1).mean() * e2.rolling(length, min_periods=1).mean()
-        var_2 = (e2 * e2).rolling(length, min_periods=1).mean() - \
-                (e2.rolling(length, min_periods=1).mean() ** 2)
-        c31 = cov_31 / (var_1.replace(0, np.nan))
-        c32 = cov_32 / (var_2.replace(0, np.nan))
-        e3 = series_list[2] - c31.fillna(0) * e1 - c32.fillna(0) * e2
-
-        # e4 orthogonal to e1, e2, e3
-        cov_41 = (series_list[3] * e1).rolling(length, min_periods=1).mean() - \
-                 series_list[3].rolling(length, min_periods=1).mean() * e1.rolling(length, min_periods=1).mean()
-        cov_42 = (series_list[3] * e2).rolling(length, min_periods=1).mean() - \
-                 series_list[3].rolling(length, min_periods=1).mean() * e2.rolling(length, min_periods=1).mean()
-        var_3 = (e3 * e3).rolling(length, min_periods=1).mean() - \
-                (e3.rolling(length, min_periods=1).mean() ** 2)
-        c41 = cov_41 / (var_1.replace(0, np.nan))
-        c42 = cov_42 / (var_2.replace(0, np.nan))
-        e4 = series_list[3] - c41.fillna(0) * e1 - c42.fillna(0) * e2
-
-        # e5 orthogonal to e1-e4
-        cov_51 = (series_list[4] * e1).rolling(length, min_periods=1).mean() - \
-                 series_list[4].rolling(length, min_periods=1).mean() * e1.rolling(length, min_periods=1).mean()
-        cov_52 = (series_list[4] * e2).rolling(length, min_periods=1).mean() - \
-                 series_list[4].rolling(length, min_periods=1).mean() * e2.rolling(length, min_periods=1).mean()
-        cov_53 = (series_list[4] * e3).rolling(length, min_periods=1).mean() - \
-                 series_list[4].rolling(length, min_periods=1).mean() * e3.rolling(length, min_periods=1).mean()
-        var_4 = (e4 * e4).rolling(length, min_periods=1).mean() - \
-                (e4.rolling(length, min_periods=1).mean() ** 2)
-        c51 = cov_51 / (var_1.replace(0, np.nan))
-        c52 = cov_52 / (var_2.replace(0, np.nan))
-        c53 = cov_53 / (var_3.replace(0, np.nan))
-        e5 = series_list[4] - c51.fillna(0) * e1 - c52.fillna(0) * e2 - c53.fillna(0) * e3
-
-        # e6 orthogonal to e1-e5
-        cov_61 = (series_list[5] * e1).rolling(length, min_periods=1).mean() - \
-                 series_list[5].rolling(length, min_periods=1).mean() * e1.rolling(length, min_periods=1).mean()
-        cov_62 = (series_list[5] * e2).rolling(length, min_periods=1).mean() - \
-                 series_list[5].rolling(length, min_periods=1).mean() * e2.rolling(length, min_periods=1).mean()
-        cov_63 = (series_list[5] * e3).rolling(length, min_periods=1).mean() - \
-                 series_list[5].rolling(length, min_periods=1).mean() * e3.rolling(length, min_periods=1).mean()
-        cov_64 = (series_list[5] * e4).rolling(length, min_periods=1).mean() - \
-                 series_list[5].rolling(length, min_periods=1).mean() * e4.rolling(length, min_periods=1).mean()
-        cov_65 = (series_list[5] * e5).rolling(length, min_periods=1).mean() - \
-                 series_list[5].rolling(length, min_periods=1).mean() * e5.rolling(length, min_periods=1).mean()
-        var_5 = (e5 * e5).rolling(length, min_periods=1).mean() - \
-                (e5.rolling(length, min_periods=1).mean() ** 2)
-        c61 = cov_61 / (var_1.replace(0, np.nan))
-        c62 = cov_62 / (var_2.replace(0, np.nan))
-        c63 = cov_63 / (var_3.replace(0, np.nan))
-        c64 = cov_64 / (var_4.replace(0, np.nan))
-        c65 = cov_65 / (var_5.replace(0, np.nan))
-        e6 = series_list[5] - c61.fillna(0) * e1 - c62.fillna(0) * e2 - c63.fillna(0) * e3 - c64.fillna(0) * e4 - c65.fillna(0) * e5
-
-        # Z-score normalize each basis vector
-        zn_e1 = _analog_zscore(e1, length)
-        zn_e2 = _analog_zscore(e2, length)
-        zn_e3 = _analog_zscore(e3, length)
-        zn_e4 = _analog_zscore(e4, length)
-        zn_e5 = _analog_zscore(e5, length)
-        zn_e6 = _analog_zscore(e6, length)
-
-        return [zn_e1, zn_e2, zn_e3, zn_e4, zn_e5, zn_e6]
-    except Exception:
-        return None
-
-def compute_analog_flags(df, ticker=''):
-    """Compute Analog Engine v2 directional accuracy flag.
-
-    Returns: "▲ BULL · XX%" | "● NEUT · XX%" | "▼ BEAR · XX%" | "—"
-
-    Computes full Mahalanobis distance-based analog matching with:
-    - Gram-Schmidt orthogonalization across 6 features
-    - Temporal decay weighting (recent analogs favored)
-    - Win rate calculation from 5-bar forward returns
-    - Profit factor (risk-adjusted) confidence grading
-    """
-    try:
-        if len(df) < 400:  # Need sufficient history
-            return "—"
-
-        # Use full available data for Gram-Schmidt normalization (matches Pine Script's approach)
-        full_df = df.copy()
-
-        # 1. WRCI components (composite_line, voltrend) — calculated on full data
-        hma_p = full_df['Close'].ewm(span=15).mean()
-        hma_v = full_df['Volume'].ewm(span=15).mean()
-
-        trend = pd.Series(0.0, index=full_df.index)
-        for i in range(20, len(full_df)):
-            t = ((hma_p.iloc[i-20:i] > hma_p.iloc[i-20]).sum() - 10) * 0.5
-            trend.iloc[i] = t
-
-        voltrend = pd.Series(0.0, index=full_df.index)
-        for i in range(20, len(full_df)):
-            v = ((hma_v.iloc[i-20:i] > hma_v.iloc[i-20]).sum() - 10) * 0.5
-            voltrend.iloc[i] = v
-
-        ap = (full_df['High'] + full_df['Low'] + full_df['Close']) / 3
-        esa = ap.ewm(span=10).mean()
-        d = (ap - esa).abs().ewm(span=10).mean()
-        ci = (ap - esa) / (0.015 * d.replace(0, np.nan))
-        wt1 = ci.ewm(span=21).mean()
-        composite_line = (wt1 + trend * 10) / 2
-
-        # 2. Pragyam components (RSI, oscillator, z-score, MA count) — full data
-        rsi_val = 100 - (100 / (1 + (full_df['Close'].diff().clip(lower=0).ewm(span=14).mean() /
-                                     (-full_df['Close'].diff().clip(upper=0)).ewm(span=14).mean())))
-        rsi_val = rsi_val.fillna(50)
-
-        spread = ((full_df['High'] + full_df['Low']) / 2 - full_df['Open']).fillna(0)
-        vol_ma = full_df['Volume'].rolling(20, min_periods=1).mean()
-        price_impact = ((full_df['Close'].shift(3) - full_df['Close']) * full_df['Volume'] / vol_ma).rolling(20, min_periods=1).mean()
-        osc_raw = (spread * full_df['Volume'] / vol_ma - price_impact).rolling(20, min_periods=1).mean()
-        osc_val = 200 * (osc_raw - osc_raw.rolling(20, min_periods=1).min()) / \
-                  (osc_raw.rolling(20, min_periods=1).max() - osc_raw.rolling(20, min_periods=1).min()).replace(0, 1) - 100
-        osc_val = osc_val.fillna(0)
-
-        osc_sma = osc_val.rolling(20, min_periods=1).mean()
-        osc_std = osc_val.rolling(20, min_periods=1).std().replace(0, 1)
-        zscore_val = (osc_val - osc_sma) / osc_std
-
-        ma20 = full_df['Close'].rolling(20, min_periods=1).mean()
-        ma90 = full_df['Close'].rolling(90, min_periods=1).mean()
-        ma200 = full_df['Close'].rolling(200, min_periods=1).mean()
-        ma_count = (full_df['Close'] > ma20).astype(int) + (full_df['Close'] > ma90).astype(int) + \
-                   (full_df['Close'] > ma200).astype(int) + (ma20 > ma90).astype(int) + (ma90 > ma200).astype(int)
-
-        mean_rev_raw = (full_df['Close'] - ma200) / (ma200.replace(0, 1))
-
-        # 3. Gram-Schmidt basis vectors (normalized across 550-bar optimal window)
-        # 550 days ≈ 2.5-3x MA(200) cycle, optimal regime coherence + sample size
-        # Captures 4-5 intermediate market cycles while excluding irrelevant older regimes
-        gs_window = min(len(full_df) - 50, 550)
-        basis_vecs = _analog_gram_schmidt([composite_line, rsi_val, osc_val, ma_count.astype(float),
-                                           voltrend, mean_rev_raw], length=gs_window)
-        if basis_vecs is None:
-            return "—"
-
-        # 4. Regime detection (for filtering)
-        atr14 = _analog_atr(full_df, 14)
-        atr_ma50 = atr14.rolling(50, min_periods=1).mean()
-        vol_reg = (atr14 / (atr_ma50.replace(0, 1)) > 1.3).astype(int)
-        trend_reg = ((ma_count >= 4).astype(int) * 2) + ((ma_count <= 1).astype(int) * 0)
-        regime_current = trend_reg.iloc[-1] * 2 + vol_reg.iloc[-1]
-
-        # 5. Search for top 10 analogs using Mahalanobis distance
-        current_state = np.array([v.iloc[-1] for v in basis_vecs])
-
-        analogs = []
-        for i in range(50, len(full_df) - 5):  # Need 5 bars forward
-            hist_state = np.array([v.iloc[i] for v in basis_vecs])
-
-            # Filter by regime if available
-            if regime_current != trend_reg.iloc[i] * 2 + vol_reg.iloc[i]:
-                continue
-
-            dist = np.sqrt(np.sum((current_state - hist_state) ** 2) / 6.0)
-            fwd_close = full_df['Close'].iloc[i + 5]
-            fwd_ret = (fwd_close - full_df['Close'].iloc[i]) / full_df['Close'].iloc[i] * 100
-
-            # Temporal decay: weight recent analogs higher
-            bars_ago = len(full_df) - 1 - i
-            decay = np.exp(-bars_ago / 250.0)
-            weight = (1.0 / (dist + 0.1)) * decay
-
-            analogs.append({
-                'dist': dist,
-                'weight': weight,
-                'fwd_ret': fwd_ret,
-                'is_win': fwd_ret > 0.0,
-                'idx': i
-            })
-
-        if len(analogs) < 5:
-            # Fallback: unfiltered search
-            analogs = []
-            for i in range(50, len(full_df) - 5):
-                hist_state = np.array([v.iloc[i] for v in basis_vecs])
-                dist = np.sqrt(np.sum((current_state - hist_state) ** 2) / 6.0)
-                fwd_close = full_df['Close'].iloc[i + 5]
-                fwd_ret = (fwd_close - full_df['Close'].iloc[i]) / full_df['Close'].iloc[i] * 100
-                bars_ago = len(full_df) - 1 - i
-                decay = np.exp(-bars_ago / 250.0)
-                weight = (1.0 / (dist + 0.1)) * decay
-                analogs.append({'dist': dist, 'weight': weight, 'fwd_ret': fwd_ret, 'is_win': fwd_ret > 0.0, 'idx': i})
-
-        # Sort by distance, keep top 10
-        analogs = sorted(analogs, key=lambda x: x['dist'])[:10]
-
-        # 6. Calculate directional accuracy metrics
-        win_count = sum(1 for a in analogs if a['is_win'])
-        loss_count = len(analogs) - win_count
-        total_analogs = len(analogs)
-
-        if total_analogs == 0:
-            return "—"
-
-        win_rate = (win_count / total_analogs) * 100.0
-
-        # Profit factor
-        wins = [a['fwd_ret'] for a in analogs if a['is_win']]
-        losses = [a['fwd_ret'] for a in analogs if not a['is_win']]
-
-        avg_win = np.mean(wins) if wins else 0.0
-        avg_loss = np.mean(losses) if losses else 0.0
-
-        if loss_count > 0 and avg_loss != 0:
-            profit_factor = (win_count * avg_win) / (loss_count * abs(avg_loss))
-        else:
-            profit_factor = 99.0 if win_count > 0 else 0.0
-
-        # Confidence grading
-        is_strong = win_rate >= 70.0 and profit_factor >= 1.5
-        is_moderate = win_rate >= 55.0 and profit_factor >= 1.0
-
-        # Directional call
-        call_bullish = win_rate > 55.0
-        call_bearish = win_rate < 45.0
-
-        # Format output: "▲ BULL · 80%" or "● NEUT · 60%" or "▼ BEAR · 40%"
-        call_sym = "▲" if call_bullish else "▼" if call_bearish else "●"
-        call_dir = "BULL" if call_bullish else "BEAR" if call_bearish else "NEUT"
-
-        return f"{call_sym} {call_dir} · {int(win_rate)}%"
-
-    except Exception as e:
-        return "—"
+        range_val = df['High'] - df['Low']
+        
+    rangema = range_val.rolling(window=length_kc).mean()
+    upperKC = ma + rangema * mult_kc
+    lowerKC = ma - rangema * mult_kc
+    
+    # Squeeze States
+    sqzOn = (lowerBB > lowerKC) & (upperBB < upperKC)
+    sqzOff = (lowerBB < lowerKC) & (upperBB > upperKC)
+    noSqz = (~sqzOn) & (~sqzOff)
+    
+    # Linear Regression of Delta
+    highest_high = df['High'].rolling(window=length_kc).max()
+    lowest_low = df['Low'].rolling(window=length_kc).min()
+    
+    avg_hl = (highest_high + lowest_low) / 2.0
+    sma_close = df['Close'].rolling(window=length_kc).mean()
+    
+    inner_avg = (avg_hl + sma_close) / 2.0
+    delta = source - inner_avg
+    
+    # Linear Regression endpoint is mathematically equivalent to: 3 * WMA - 2 * SMA
+    weights = np.arange(1, length_kc + 1)
+    def _wma(x):
+        if np.isnan(x).any():
+            return np.nan
+        return np.dot(x, weights) / weights.sum()
+        
+    wma_delta = delta.rolling(window=length_kc).apply(_wma, raw=True)
+    sma_delta = delta.rolling(window=length_kc).mean()
+    
+    val = 3.0 * wma_delta - 2.0 * sma_delta
+    
+    # Assign Colors (using numpy where for vectorized condition mapping)
+    prev_val = val.shift(1).fillna(0)
+    bcolor = np.where(
+        val > 0,
+        np.where(val > prev_val, "lime", "green"),
+        np.where(val < prev_val, "red", "maroon")
+    )
+    scolor = np.where(noSqz, "blue", np.where(sqzOn, "black", "gray"))
+    
+    # Add to DataFrame
+    df['SQZ_Val'] = val
+    df['SQZ_BColor'] = bcolor
+    df['SQZ_SColor'] = scolor
+    df['SQZ_On'] = sqzOn
+    df['SQZ_Off'] = sqzOff
+    df['SQZ_NoSqz'] = noSqz
+    
+    return df
 
 # ══════════════════════════════════════════════════════════════════════════════
 # REGIME INTELLIGENCE ENGINE (NIRNAY FEATURES)
@@ -1652,7 +1223,7 @@ def render_landing_page():
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                 SIGNAL ENGINE
             </h3>
-            <p>UMA v6 (Unified Market Analytics) identifies momentum signals and trend strength across your universe with macro-context awareness.</p>
+            <p>WRCI Engine identifies momentum signals and trend strength across your universe.</p>
             <div class='spec'>
                 <span>Detection:</span> Wave Trend signals (bullish/bearish)<br>
                 <span>Scoring:</span> Signal magnitude + trend direction<br>
@@ -1990,7 +1561,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (5 * progress_scale / 100)
-        progress_bar(progress_slot, pct_val, "Initializing UMA v6 engine", f"Universe: {universe}")
+        progress_bar(progress_slot, pct_val, "Initializing WRCI engine", f"Universe: {universe}")
     
     console.start_phase("DATA ACQUISITION", 1, 2)
     console.section("Universe Configuration")
@@ -2037,7 +1608,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.success(f"Successfully downloaded data for {len(data_dict)} stocks")
     console.end_phase("DATA ACQUISITION")
 
-    console.start_phase("UMA v6 MOMENTUM ANALYSIS", 2, 2)
+    console.start_phase("WRCI MOMENTUM ANALYSIS", 2, 2)
 
     console.section("Analysis Parameters")
     console.item("Timeframe", timeframe)
@@ -2048,27 +1619,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (20 * progress_scale / 100)
-        progress_bar(progress_slot, pct_val, "Analyzing UMA v6 momentum", f"{len(data_dict)} stocks")
-
-    # Pre-fetch macro context once for UMA MMR (cached; reused across all symbols).
-    # Symbols already downloaded for the screener universe are reused directly from
-    # data_dict to avoid a redundant network round-trip (e.g. when universe is
-    # Commodities, Currency, or Global Macro all those tickers are already in data_dict).
-    _from_dict = {sym: data_dict[sym]['Close'] for sym in _MACRO_SYM_SET if sym in data_dict}
-    _missing = tuple(sym for sym in _MACRO_SYM_ORDERED if sym not in data_dict)
-    console.section("UMA v6 Macro Context")
-    console.item("Universes", "Global Macro + Commodities + Currency")
-    console.item("Reused from screener data", f"{len(_from_dict)} symbols")
-    console.item("Fetching fresh", f"{len(_missing)} symbols")
-    if _missing:
-        _fetched = _fetch_remaining_macro_context(_missing, analysis_date)
-        macro_context = {**_fetched, **_from_dict}
-    else:
-        macro_context = _from_dict
-    if macro_context:
-        console.success(f"Macro context ready: {len(macro_context)} instruments available for MMR regression")
-    else:
-        console.warning("Macro context empty — UMA MMR will fall back to MSF-only scoring")
+        progress_bar(progress_slot, pct_val, "Analyzing WRCI momentum", f"{len(data_dict)} stocks")
 
     results = []
 
@@ -2121,14 +1672,12 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 signal_type = "Long Threshold"
             elif last_row['short_cond_wt']:
                 signal_type = "Short Threshold"
+            elif last_row['long_cond_sqz']:
+                signal_type = "Long Squeeze"
+            elif last_row['short_cond_sqz']:
+                signal_type = "Short Squeeze"
             elif last_row['Condition'] != 'Neutral':
                 signal_type = last_row['Condition']
-
-            # UMA v6 info flag (pure read-only signal context, not screener logic)
-            uma_flag = compute_uma_flags(df.iloc[:idx_pos + 1].tail(300), macro_context, ticker=ticker)
-
-            # Analog Engine v2 flag (directional accuracy from historical analogs)
-            analog_flag = compute_analog_flags(df.iloc[:idx_pos + 1], ticker=ticker)
 
             # Clean display names
             simple_name = ticker.replace(".NS", "").lstrip("^")
@@ -2201,17 +1750,25 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "SC_2d": "●" if sample_range.iloc[-3]['short_cond_wt'] else "—",
                 "SC_3d": "●" if sample_range.iloc[-4]['short_cond_wt'] else "—",
                 "SC_5d": "●" if sample_range.tail(5)['short_cond_wt'].any() else "—",
-                # UMA v6 info flag
-                "UMAFlag": uma_flag,
-                # Analog Engine v2 flag
-                "AnalogFlag": analog_flag,
+                # Set D: Squeeze — Historical Long Signals
+                "LD_Today": "●" if sample_range.iloc[-1]['long_cond_sqz'] else "—",
+                "LD_1d": "●" if sample_range.iloc[-2]['long_cond_sqz'] else "—",
+                "LD_2d": "●" if sample_range.iloc[-3]['long_cond_sqz'] else "—",
+                "LD_3d": "●" if sample_range.iloc[-4]['long_cond_sqz'] else "—",
+                "LD_5d": "●" if sample_range.tail(5)['long_cond_sqz'].any() else "—",
+                # Set D: Squeeze — Historical Short Signals
+                "SD_Today": "●" if sample_range.iloc[-1]['short_cond_sqz'] else "—",
+                "SD_1d": "●" if sample_range.iloc[-2]['short_cond_sqz'] else "—",
+                "SD_2d": "●" if sample_range.iloc[-3]['short_cond_sqz'] else "—",
+                "SD_3d": "●" if sample_range.iloc[-4]['short_cond_sqz'] else "—",
+                "SD_5d": "●" if sample_range.tail(5)['short_cond_sqz'].any() else "—",
                 # Additional fields for detail cards
                 "Osc_Value": round(last_row.get('Unified_Osc', 0), 2),
                 "MA_Alignment": 5,  # Placeholder
                 "ZScore_Value": 0,  # Placeholder
             })
             
-            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: Signal={last_row['Unified_Osc']:+.2f}  Zone={last_row['Condition']}  UMA={uma_flag}  Analog={analog_flag}  Status={signal_type}")
+            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: Signal={last_row['Unified_Osc']:+.2f}  Zone={last_row['Condition']}  Status={signal_type}")
             
         except Exception as e:
             console.failure(f"Analysis Failed: {ticker}", str(e))
@@ -2245,7 +1802,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             "LA_Today", "LA_1d", "LA_2d", "LA_3d", "LA_5d", "SA_Today", "SA_1d", "SA_2d", "SA_3d", "SA_5d",
             "LB_Today", "LB_1d", "LB_2d", "LB_3d", "LB_5d", "SB_Today", "SB_1d", "SB_2d", "SB_3d", "SB_5d",
             "LC_Today", "LC_1d", "LC_2d", "LC_3d", "LC_5d", "SC_Today", "SC_1d", "SC_2d", "SC_3d", "SC_5d",
-            "UMAFlag", "AnalogFlag", "Osc_Value", "MA_Alignment", "ZScore_Value",
+            "LD_Today", "LD_1d", "LD_2d", "LD_3d", "LD_5d", "SD_Today", "SD_1d", "SD_2d", "SD_3d", "SD_5d",
+            "Osc_Value", "MA_Alignment", "ZScore_Value",
         ]
         return pd.DataFrame(columns=expected_cols)
 
@@ -2308,7 +1866,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     console.success(f"Downloaded depth for {len(data_dict)} entities")
     console.end_phase("HISTORICAL ACQUISITION")
 
-    progress_bar(progress_slot, 15, "Processing UMA v6 + Regime Intelligence", f"{len(data_dict)} stocks")
+    progress_bar(progress_slot, 15, "Processing WRCI + Regime Intelligence", f"{len(data_dict)} stocks")
     all_results = []
 
     for i, (ticker, df) in enumerate(data_dict.items()):
@@ -3448,6 +3006,8 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
         prefix = 'LB' if side == 'long' else 'SB'
     elif condition_set == 'C':
         prefix = 'LC' if side == 'long' else 'SC'
+    elif condition_set == 'D':
+        prefix = 'LD' if side == 'long' else 'SD'
     else:
         prefix = 'L' if side == 'long' else 'S'
     target_indicator = "●"
@@ -3519,13 +3079,13 @@ def _render_signal_legend(side: str = 'long', condition_set: str = 'A') -> None:
     """
     if condition_set == 'A':
         if side == 'long':
-            signal_desc  = "Positive UMA value — the oscillator has crossed upward, indicating building bullish momentum. Higher magnitude = stronger push."
+            signal_desc  = "Positive WRCI value — the oscillator has crossed upward, indicating building bullish momentum. Higher magnitude = stronger push."
             trend_desc   = "Positive = uptrend confirming the signal. Negative = downtrend still in place despite the bullish cross."
             timing_desc  = "Older bullish signals are more reliable — the upside shift has had time to prove itself. Today&rsquo;s signal is fresh and may still be developing."
             together_good = "Signal &#x2B; | Trend &#x2B; = high conviction long — momentum and direction fully aligned."
             together_mixed = "Signal &#x2B; | Trend &#x2212; = bullish cross against a downtrend. Likely a counter-trend bounce — wait for Trend to turn positive before committing."
         else:
-            signal_desc  = "Negative UMA value — the oscillator has crossed downward, indicating building selling pressure. Higher magnitude (more negative) = stronger push."
+            signal_desc  = "Negative WRCI value — the oscillator has crossed downward, indicating building selling pressure. Higher magnitude (more negative) = stronger push."
             trend_desc   = "Negative = downtrend confirming the signal. Positive = uptrend still in place despite the bearish cross."
             timing_desc  = "Older bearish signals are more reliable — the downside shift has confirmed over time. Today&rsquo;s signal is fresh and may still be developing."
             together_good = "Signal &#x2212; | Trend &#x2212; = high conviction short — momentum and direction fully aligned."
@@ -3595,8 +3155,6 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
         """)
 
         # Data rows for this age group
-        _uma_colors  = {"Conf Bull": "#34D399", "Conf Bear": "#FB7185",
-                        "Bull Div":  "#86EFAC", "Bear Div":  "#FCA5A5"}
         _zone_colors = {"OB Extreme": "#FB7185", "OB": "#FCA5A5",
                         "OS Extreme": "#34D399", "OS": "#86EFAC"}
         for row in stats[age]['rows']:
@@ -3608,11 +3166,6 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
             zone_raw = str(row.get('Zone', 'Neutral'))
             zone_disp = html_module.escape("—" if zone_raw == "Neutral" else zone_raw)
             zone_color = _zone_colors.get(zone_raw, '#374151')
-            uma  = html_module.escape(str(row.get('UMAFlag', '—')))
-            uma_color = _uma_colors.get(uma, '#374151')
-            analog = html_module.escape(str(row.get('AnalogFlag', '—')))
-            # Color analog by direction: ▲ green, ▼ red, ● yellow, — gray
-            analog_color = "#34D399" if analog.startswith("▲") else "#FB7185" if analog.startswith("▼") else "#FBBF24" if analog.startswith("●") else "#374151"
 
             # Color % change: green for positive, red for negative
             pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
@@ -3624,8 +3177,6 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
-                <td class="numeric" style="color:{analog_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em; white-space:nowrap;">{analog}</td>
-                <td class="numeric" style="color:{uma_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em; white-space:nowrap;">{uma}</td>
                 <td class="numeric" style="color:{zone_color}; font-weight:600; font-size:0.68rem; white-space:nowrap;">{zone_disp}</td>
             </tr>
             """)
@@ -3723,8 +3274,6 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                     <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
-                    <th class="numeric">Analog</th>
-                    <th class="numeric">UMA</th>
                     <th class="numeric">Zone</th>
                 </tr>
             </thead>
@@ -3767,8 +3316,6 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
         </tr>
         """)
     else:
-        _uma_colors  = {"Conf Bull": "#34D399", "Conf Bear": "#FB7185",
-                        "Bull Div":  "#86EFAC", "Bear Div":  "#FCA5A5"}
         _zone_colors = {"OB Extreme": "#FB7185", "OB": "#FCA5A5",
                         "OS Extreme": "#34D399", "OS": "#86EFAC"}
         for idx, (_, row) in enumerate(df.iterrows(), 1):
@@ -3780,11 +3327,6 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
             zone_raw = str(row.get('Zone', 'Neutral'))
             zone_disp = html_module.escape("—" if zone_raw == "Neutral" else zone_raw)
             zone_color = _zone_colors.get(zone_raw, '#374151')
-            uma = html_module.escape(str(row.get('UMAFlag', '—')))
-            uma_color = _uma_colors.get(uma, '#374151')
-            analog = html_module.escape(str(row.get('AnalogFlag', '—')))
-            # Color analog by direction: ▲ green, ▼ red, ● yellow, — gray
-            analog_color = "#34D399" if analog.startswith("▲") else "#FB7185" if analog.startswith("▼") else "#FBBF24" if analog.startswith("●") else "#374151"
 
             rank_str = f"{idx:02d}"
             pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
@@ -3797,8 +3339,6 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
-                <td class="numeric" style="color:{analog_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em; white-space:nowrap;">{analog}</td>
-                <td class="numeric" style="color:{uma_color}; font-weight:600; font-size:0.68rem; letter-spacing:0.04em; white-space:nowrap;">{uma}</td>
                 <td class="numeric" style="color:{zone_color}; font-weight:600; font-size:0.68rem; white-space:nowrap;">{zone_disp}</td>
             </tr>
             """)
@@ -3877,8 +3417,6 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                     <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
-                    <th class="numeric">Analog</th>
-                    <th class="numeric">UMA</th>
                     <th class="numeric">Zone</th>
                 </tr>
             </thead>
@@ -3921,7 +3459,7 @@ def main():
 
     # Show landing page if no results yet AND not in display modes
     if st.session_state["results_df"] is None and st.session_state.get("corr_data") is None and not st.session_state.get("run_screener_flag") and not st.session_state.get("timeseries_done"):
-        ui.render_header("SANKET", "Market Signal Screener · संकेत · UMA v6 Engine")
+        ui.render_header("SANKET", "Market Signal Screener · संकेत · WRCI Engine")
         if st.session_state.get("run_error"):
             st.error(st.session_state["run_error"])
         render_landing_page()
@@ -4047,33 +3585,37 @@ def main():
                 longs_c_df = results_df[results_df['LC_5d'] != "—"].copy().sort_values('Signal', ascending=False)
                 shorts_c_df = results_df[results_df['SC_5d'] != "—"].copy().sort_values('Signal', ascending=True)
 
+                # Set D: Squeeze — sqzOn & val > 0 / val < 0
+                longs_d_df = results_df[results_df['LD_5d'] != "—"].copy().sort_values('Signal', ascending=False)
+                shorts_d_df = results_df[results_df['SD_5d'] != "—"].copy().sort_values('Signal', ascending=True)
+
                 if timeframe == 'Weekly':
                     _age_order = ["This Week", "1 Week Ago", "2 Weeks Ago", "3 Weeks Ago", "Within 5 Weeks"]
                 else:
                     _age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
 
-                has_signals = any(not df_.empty for df_ in [longs_a_df, shorts_a_df, longs_b_df, shorts_b_df, longs_c_df, shorts_c_df])
+                has_signals = any(not df_.empty for df_ in [longs_a_df, shorts_a_df, longs_b_df, shorts_b_df, longs_c_df, shorts_c_df, longs_d_df, shorts_d_df])
 
                 if has_signals:
                     # ── Summary metrics ────────────────────────────────────────────────────
-                    total_longs  = len(longs_a_df) + len(longs_b_df) + len(longs_c_df)
-                    total_shorts = len(shorts_a_df) + len(shorts_b_df) + len(shorts_c_df)
-                    all_longs  = pd.concat([longs_a_df, longs_b_df, longs_c_df]).drop_duplicates('Symbol').sort_values('Signal', ascending=False)
-                    all_shorts = pd.concat([shorts_a_df, shorts_b_df, shorts_c_df]).drop_duplicates('Symbol').sort_values('Signal', ascending=True)
+                    total_longs  = len(longs_a_df) + len(longs_b_df) + len(longs_c_df) + len(longs_d_df)
+                    total_shorts = len(shorts_a_df) + len(shorts_b_df) + len(shorts_c_df) + len(shorts_d_df)
+                    all_longs  = pd.concat([longs_a_df, longs_b_df, longs_c_df, longs_d_df]).drop_duplicates('Symbol').sort_values('Signal', ascending=False)
+                    all_shorts = pd.concat([shorts_a_df, shorts_b_df, shorts_c_df, shorts_d_df]).drop_duplicates('Symbol').sort_values('Signal', ascending=True)
 
                     mc1, mc2, mc3, mc4 = st.columns(4)
                     with mc1:
                         ui.render_metric_card(
                             "Long Signals",
                             str(total_longs),
-                            f"A: {len(longs_a_df)} · B: {len(longs_b_df)} · C: {len(longs_c_df)}",
+                            f"A:{len(longs_a_df)} B:{len(longs_b_df)} C:{len(longs_c_df)} D:{len(longs_d_df)}",
                             "success"
                         )
                     with mc2:
                         ui.render_metric_card(
                             "Short Signals",
                             str(total_shorts),
-                            f"A: {len(shorts_a_df)} · B: {len(shorts_b_df)} · C: {len(shorts_c_df)}",
+                            f"A:{len(shorts_a_df)} B:{len(shorts_b_df)} C:{len(shorts_c_df)} D:{len(shorts_d_df)}",
                             "danger"
                         )
                     with mc3:
@@ -4099,8 +3641,8 @@ def main():
                     bull_tab, bear_tab = st.tabs(["Bullish Signals by Timing", "Bearish Signals by Timing"])
 
                     with bull_tab:
-                        # Level-2 nested tabs: Momentum | Crossover | Threshold
-                        mom_bull_tab, cross_bull_tab, thresh_bull_tab = st.tabs(["Momentum", "Crossover", "Threshold"])
+                        # Level-2 nested tabs: Momentum | Crossover | Threshold | Squeeze
+                        mom_bull_tab, cross_bull_tab, thresh_bull_tab, sqz_bull_tab = st.tabs(["Momentum", "Crossover", "Threshold", "Squeeze"])
 
                         with mom_bull_tab:
                             st.markdown("""
@@ -4141,9 +3683,22 @@ def main():
                             st.components.v1.html(lc_html, height=max(70 + _g * 46 + _r * 44, 110))
                             _render_signal_legend(side='long', condition_set='C')
 
+                        with sqz_bull_tab:
+                            st.markdown("""
+                            <p style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:#94A3B8; margin:0.5rem 0 1rem 0;">
+                                Set D · Squeeze Momentum Indicator — sqzOn[1] &amp; sqzOff &amp; SQZ_Val &gt; 0
+                            </p>
+                            """, unsafe_allow_html=True)
+                            _, ld_stats, _, _ = _bucket_signals_by_age(longs_d_df, side='long', condition_set='D', timeframe=timeframe)
+                            ld_html = _build_signal_table_html(ld_stats, side='long', timeframe=timeframe)
+                            _g = sum(1 for a in _age_order if ld_stats[a]['count'] > 0)
+                            _r = sum(ld_stats[a]['count'] for a in _age_order)
+                            st.components.v1.html(ld_html, height=max(70 + _g * 46 + _r * 44, 110))
+                            _render_signal_legend(side='long', condition_set='D')
+
                     with bear_tab:
-                        # Level-2 nested tabs: Momentum | Crossover | Threshold
-                        mom_bear_tab, cross_bear_tab, thresh_bear_tab = st.tabs(["Momentum", "Crossover", "Threshold"])
+                        # Level-2 nested tabs: Momentum | Crossover | Threshold | Squeeze
+                        mom_bear_tab, cross_bear_tab, thresh_bear_tab, sqz_bear_tab = st.tabs(["Momentum", "Crossover", "Threshold", "Squeeze"])
 
                         with mom_bear_tab:
                             st.markdown("""
@@ -4184,6 +3739,19 @@ def main():
                             st.components.v1.html(sc_html, height=max(70 + _g * 46 + _r * 44, 110))
                             _render_signal_legend(side='short', condition_set='C')
 
+                        with sqz_bear_tab:
+                            st.markdown("""
+                            <p style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:#94A3B8; margin:0.5rem 0 1rem 0;">
+                                Set D · Squeeze Momentum Indicator — sqzOn[1] &amp; sqzOff &amp; SQZ_Val &lt; 0
+                            </p>
+                            """, unsafe_allow_html=True)
+                            _, sd_stats, _, _ = _bucket_signals_by_age(shorts_d_df, side='short', condition_set='D', timeframe=timeframe)
+                            sd_html = _build_signal_table_html(sd_stats, side='short', timeframe=timeframe)
+                            _g = sum(1 for a in _age_order if sd_stats[a]['count'] > 0)
+                            _r = sum(sd_stats[a]['count'] for a in _age_order)
+                            st.components.v1.html(sd_html, height=max(70 + _g * 46 + _r * 44, 110))
+                            _render_signal_legend(side='short', condition_set='D')
+
                 else:
                     st.info("No signals detected in the specified universe and timeframe.")
 
@@ -4192,7 +3760,7 @@ def main():
             with tab_strength:
                 ui.render_section_header(
                     "Signal Strength Analysis",
-                    "Top signals ranked by magnitude — Momentum (A) · Crossover (B) · Threshold (C)",
+                    "Top signals ranked by magnitude — Momentum (A) · Crossover (B) · Threshold (C) · Squeeze (D)",
                     icon="target",
                     accent="emerald"
                 )
@@ -4219,6 +3787,8 @@ def main():
                 top_shorts_b = shorts_b_df.head(10)
                 top_longs_c  = longs_c_df.head(10)
                 top_shorts_c = shorts_c_df.head(10)
+                top_longs_d  = longs_d_df.head(10)
+                top_shorts_d = shorts_d_df.head(10)
 
                 # Kept for System Data exports
                 top_longs  = top_longs_a
@@ -4327,6 +3897,35 @@ def main():
                     st.markdown(_col_label("Top 10 Shorts", "short"), unsafe_allow_html=True)
                     st.components.v1.html(_build_signal_strength_table_html(top_shorts_c, side='short'), height=_table_height(top_shorts_c))
 
+                # ─────────────────────────────────────────────────────────────────────
+                # SET D · SQUEEZE
+                # ─────────────────────────────────────────────────────────────────────
+                st.markdown(f"""
+                <div style="display:flex; align-items:baseline; gap:0.65rem; margin:2rem 0 0.9rem 0;
+                             padding-bottom:0.6rem; border-bottom:1px solid rgba(139,92,246,0.15);">
+                    <span style="font-family:var(--display); font-size:0.62rem; font-weight:700;
+                                 letter-spacing:0.12em; text-transform:uppercase; color:#8B5CF6;
+                                 padding:0.18rem 0.5rem; background:rgba(139,92,246,0.07);
+                                 border:1px solid rgba(139,92,246,0.2); border-radius:4px;">Set D</span>
+                    <span style="font-family:var(--display); font-size:1rem; font-weight:700;
+                                 color:#F1F5F9; letter-spacing:0.04em;">Squeeze</span>
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:0.75rem; color:#6B7280;">
+                        Squeeze momentum indicator active and directional
+                    </span>
+                    <span style="margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
+                                 color:#34D399;">↑ {len(top_longs_d)}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
+                                 color:#FB7185; margin-left:0.5rem;">↓ {len(top_shorts_d)}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                _col_dl, _col_ds = st.columns(2)
+                with _col_dl:
+                    st.markdown(_col_label("Top 10 Longs", "long"), unsafe_allow_html=True)
+                    st.components.v1.html(_build_signal_strength_table_html(top_longs_d, side='long'), height=_table_height(top_longs_d))
+                with _col_ds:
+                    st.markdown(_col_label("Top 10 Shorts", "short"), unsafe_allow_html=True)
+                    st.components.v1.html(_build_signal_strength_table_html(top_shorts_d, side='short'), height=_table_height(top_shorts_d))
+
             # ════ TAB 4: SYSTEM DATA ════════════════════════════════════════════════════
             with tab_raw:
                 # ── SYSTEM RAW DATA SECTION ────────────────────────────────────────────────
@@ -4339,13 +3938,13 @@ def main():
 
                 st.markdown("""
                 <p style="font-family: var(--data); font-size: 0.8rem; color: var(--ink-secondary); margin-bottom: 1rem;">
-                    All UMA v6 engine outputs including oscillator values, trend metrics, macro context, and historical signal history.
+                    All WRCI engine outputs including oscillator values, trend metrics, and historical signal history.
                 </p>
                 """, unsafe_allow_html=True)
 
                 # Show all data with historical signals
                 display_df = results_df[[
-                    "DisplayName", "Price", "Signal", "Trend", "Wave", "UMAFlag", "AnalogFlag", "Zone",
+                    "DisplayName", "Price", "Signal", "Trend", "Wave", "Zone",
                     "SignalType", "L_Today", "L_1d", "L_2d", "L_3d", "L_5d",
                     "S_Today", "S_1d", "S_2d", "S_3d", "S_5d"
                 ]].sort_values("Signal", ascending=False)
@@ -4357,19 +3956,19 @@ def main():
 
                 ui.render_section_header(
                     "Signal Types Reference",
-                    "Three signal generation conditions — Momentum (A) · Crossover (B) · Threshold (C)",
+                    "Four signal generation conditions — Momentum (A) · Crossover (B) · Threshold (C) · Squeeze (D)",
                     icon="layers",
                     accent="amber"
                 )
 
                 st.markdown("""
                 <p style="font-family: var(--data); font-size: 0.8rem; color: var(--ink-secondary); margin-bottom: 1.5rem;">
-                    Reference guide for understanding the three signal generation methodologies and their key metrics.
+                    Reference guide for understanding the four signal generation methodologies and their key metrics.
                 </p>
                 """, unsafe_allow_html=True)
 
                 # Signal guide grid
-                st.markdown('<div class="signal-guide-grid"><div class="signal-type momentum"><div class="signal-type-label">Set A: Momentum</div><div class="signal-type-desc">Composite Line crosses Signal Line anywhere • No zone filter • Captures building momentum</div></div><div class="signal-type crossover"><div class="signal-type-label">Set B: Crossover</div><div class="signal-type-desc">Lines cross in extreme zones (±40) • Momentum exhaustion • High precision timing</div></div><div class="signal-type threshold"><div class="signal-type-label">Set C: Threshold</div><div class="signal-type-desc">Freshly enters OS/OB zone from neutral • First bar of entry • Earliest actionable signal</div></div></div>', unsafe_allow_html=True)
+                st.markdown('<div class="signal-guide-grid"><div class="signal-type momentum"><div class="signal-type-label">Set A: Momentum</div><div class="signal-type-desc">Composite Line crosses Signal Line anywhere • No zone filter • Captures building momentum</div></div><div class="signal-type crossover"><div class="signal-type-label">Set B: Crossover</div><div class="signal-type-desc">Lines cross in extreme zones (±40) • Momentum exhaustion • High precision timing</div></div><div class="signal-type threshold"><div class="signal-type-label">Set C: Threshold</div><div class="signal-type-desc">Freshly enters OS/OB zone from neutral • First bar of entry • Earliest actionable signal</div></div><div class="signal-type squeeze"><div class="signal-type-label">Set D: Squeeze</div><div class="signal-type-desc">Volatility squeeze firing • Bollinger Bands inside Keltner Channels • Expansion incoming</div></div></div>', unsafe_allow_html=True)
 
                 # ── EXPORT SECTION ─────────────────────────────────────────────────────────
                 st.markdown('<div class="section-divider" style="margin-top: 2rem;"></div>', unsafe_allow_html=True)
