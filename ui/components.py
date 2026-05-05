@@ -1,5 +1,5 @@
 """
-Pragyam v7.0.5 — Reusable UI components: metric cards, signal badges, headers, section headers.
+Pragyam v7.1.0 — Reusable UI components: metric cards, signal badges, headers, section headers.
 
 UI — Obsidian Quant Terminal design language.
 """
@@ -519,9 +519,9 @@ def render_signal_guide() -> None:
             <div class="signal-guide-metrics">
                 <div class="signal-guide-metrics-title">Key Metrics</div>
                 <div class="signal-guide-metrics-grid">
-                    <div class="metric-item"><span class="metric-label">Signal</span> · Momentum magnitude ±0 to ±100</div>
-                    <div class="metric-item"><span class="metric-label">Trend</span> · Price confirmation +1 to -1</div>
-                    <div class="metric-item"><span class="metric-label">Zone</span> · Oscillator position (OB/OS)</div>
+                    <div class="metric-item"><span class="metric-label">Pulse</span> · Abnormal Acceleration (Velocity * Vol Z-Score)</div>
+                    <div class="metric-item"><span class="metric-label">Conviction</span> · Signal magnitude + trend confluence</div>
+                    <div class="metric-item"><span class="metric-label">Trend</span> · Structural Price confirmation +1 to -1</div>
                 </div>
             </div>
         </div>
