@@ -1,148 +1,79 @@
-# SANKET v2.2.0 — Institutional Pulse Engine
+# 🌌 SANKET | Market Signal Screener
+### The Institutional Pulse Engine · Obsidian Quant Terminal
 
-> **संकेत** — *Signal. Indicator. Omen.*
-> Institutional-grade quantitative terminal for multi-asset regime discovery and momentum analysis.
+**Sanket** is a high-fidelity quantitative terminal designed for institutional-grade market analysis. As a core member of the **Pragyam Product Family**, it utilizes the **Wave-Regime Composite Index (WRCI)** to identify abnormal market acceleration ("Pulse") and fractal resonance across global asset classes.
 
-SANKET (v2.2.0) integrates the **Pulse Engine v1 (Abnormal Acceleration)**, **UMA v6 (Unified Market Analytics)** engine, **Analog Engine v2** directional accuracy system, and **NIRNAY** regime intelligence features into a production-ready quantitative terminal. It applies multi-component momentum scoring, macro multiple regression, historical pattern matching with Mahalanobis distance, and hidden markov regime state discovery across global equity indexes, macro instruments, commodities, and crypto assets.
-
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Architecture](#architecture)
-- [UMA v6 Analysis Engine](#uma-v6-analysis-engine)
-- [Universes & Coverage](#universes--coverage)
-- [Signal Output Reference](#signal-output-reference)
-- [Analysis Modes](#analysis-modes)
-- [Getting Started](#getting-started)
-- [Development Guide](#development-guide)
-- [License](#license)
+The system provides 1:1 mathematical parity between the Python-based terminal and the TradingView Pine Script indicator, ensuring that tactical signals generated in the screener match the visual execution on the charts.
 
 ---
 
-## Features
+## ⚡ Key Intelligence Features
 
-- **UMA v6 Analysis Engine** — A unified intelligence layer combining MSF momentum, MMR macro context, and Adaptive HMM regime classification.
-- **MSF (Momentum Structure Flow)** — High-precision composite oscillator combining Wave Trend, volatility-adjusted ROC, and accumulation/distribution metrics.
-- **MMR (Macro Multiple Regression)** — Real-time macro-context scoring using Gram-Schmidt orthogonalization against top-ranked global macro baskets.
-- **Adaptive HMM Regime Discovery** — Hidden Markov Model state detection (Bullish/Neutral/Bearish) classifies signal reliability and filters noise.
-- **Analog Engine v2** — Full Mahalanobis distance-based directional accuracy system:
-    - **6-Dimensional Feature Space** — composite_line (WRCI), RSI, oscillator, MA alignment count, volume trend, mean reversion
-    - **Gram-Schmidt Orthogonalization** — Produces 6 normalized orthogonal basis vectors for accurate pattern matching
-    - **Temporal Decay Weighting** — Recent analogs weighted higher (250-bar half-life)
-    - **Win Rate & Profit Factor** — Directional accuracy from 5-bar forward returns with risk-adjusted metrics
-    - **Confidence Grading** — STRONG (≥70% accuracy + ≥1.5 PF), MODERATE (≥55% + ≥1.0 PF), WEAK
-- **Multi-Universe Scanning** — India Indexes (NIFTY suite), Global Indexes (56 country benchmarks), Global Macro (Bond ETFs, Yields), US Indexes, NSE ETFs, Commodities, Currency, and Crypto.
-- **Signal Interpretation Flags** — Advanced contextual signals combining UMA and Analog engines:
-    - **UMA Flags**: Conf Bull/Bear (high signal agreement), Bull/Bear Div (oscillator divergence)
-    - **Analog Flags**: ▲ BULL (>55% win rate), ● NEUTRAL (45-55%), ▼ BEAR (<45%)
-- **Sanket Pulse Engine** — Quantifies "Ignition Events" by calculating **Abnormal Acceleration** (`5-Day Velocity * 20-Day Vol Z-Score`). This surfaces explosive moves before they reach standard trend filters.
-- **Institutional UI (Obsidian Quant)** — Dark-mode terminal design with amber accents, glassmorphism surfaces, and precision typography (IBM Plex Mono + Space Grotesk).
-- **3-Source Constituent Fetch** — High-reliability India index data: NSE JSON API → NSE Archive CSV → Wikipedia fallback.
-- **Intraday Quote Injection** — Automated appending of live candles for same-day analysis when historical feeds are lagging.
+- **WRCI Pulse Engine**: Measures abnormal acceleration by modulating 5-day velocity with 20-day statistical intensity (Z-Score). It filters out "market noise" to identify true regime shifts.
+- **Fractal Resonance Logic**: A multi-dimensional signal engine that synchronizes tactical momentum with structural trend alignment.
+- **Obsidian Quant UI**: A premium, high-contrast dark-mode terminal built on Streamlit, designed for maximum information density with zero visual friction.
+- **Universal Asset Scanning**: Native support for NSE (F&O, Indices), US Equities, Crypto, Commodities, Currencies, and Global Macro Bond ETFs.
+- **Analog Engine**: A historical pattern-matching system using cosine similarity to identify high-probability price trajectories.
 
 ---
 
-## Tech Stack
+## 🛠 Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Language | Python 3.8+ |
-| Web Framework | Streamlit |
-| Market Data | yfinance (global), NSE API + nsepython (India) |
-| Data Processing | pandas, NumPy (vectorized operations) |
-| Statistics | Adaptive HMM, Gram-Schmidt Regression |
-| Charts | Plotly (Institutional Theming) |
-| UI | Custom CSS (Obsidian Quant Terminal), CSS Variables |
-| Logging | Custom ANSI console logger (`logger.py`) |
+- **Backend**: Python 3.10+
+- **Frontend**: Streamlit (with Custom Obsidian CSS)
+- **Signal Logic**: Pine Script v6 (Mathematical Mirror)
+- **Data Pipeline**: YFinance API / NSE India
+- **Visuals**: Plotly Quant Themes
 
 ---
 
-## UMA v6 Analysis Engine
+## 🚦 Signal Hierarchy (Sets A–D)
 
-The core intelligence lives in `compute_uma_flags()` and integrates three primary quantitative pillars:
+Sanket classifies every market signal into a strict hierarchical system to ensure non-redundant trading execution:
 
-### 1. MSF (Momentum Structure Flow)
-A composite oscillator that builds upon the legacy WRCI. It calculates price-volume variance and microstructure trend flow to identify momentum shifts before they appear in standard moving averages.
-
-### 2. MMR (Macro Multiple Regression)
-Calculates the relative strength of an asset against a macro-weighted index. By identifying how much of a stock's move is attributed to systemic macro factors vs. idiosyncratic strength, MMR assigns a "Macro Context Score."
-
-### 3. Adaptive HMM (Hidden Markov Model)
-A state-machine that constantly re-evaluates the market environment.
-- **State 0 (Bullish)**: High-conviction trend following allowed.
-- **State 1 (Neutral)**: Mean-reversion and range-trading logic prioritized.
-- **State 2 (Bearish)**: Aggressive risk-management and short-bias signals.
+| Signal Set | Type | Logic | Use Case |
+| :--- | :--- | :--- | :--- |
+| **Set A** | **Momentum** | WRCI Line/Signal Crossover | Tactical trend following in liquid regimes. |
+| **Set B** | **Contrarian** | WRCI Cross in OS/OB Zones | High-probability reversal identification. |
+| **Set C** | **Threshold** | Zone Entry/Exit Gates | Identifying volatility regime transitions. |
+| **Set D** | **Squeeze** | BB/KC Volatility Breakout | Capitalizing on imminent explosive expansion. |
 
 ---
 
-## Universes & Coverage
+## 🚀 Getting Started
 
-| Universe | Description | Count |
-|---|---|---|
-| **India Indexes** | NIFTY 50, NIFTY Next 50, NIFTY 500, etc. | 26 Indices |
-| **Global Indexes** | Primary benchmarks (S&P 500, DAX, Nikkei, etc.) | 56 Countries |
-| **Global Macro** | Bond ETFs (TLT, AGG), Yields, TIPS, Credit Spreads | 40+ Assets |
-| **US Indexes** | Major US Sector ETFs and Benchmarks | 30+ Assets |
-| **Commodities** | Gold, Silver, Crude Oil, Natural Gas, etc. | 25+ Assets |
-| **Currency** | Major G10 and EM Pairs | 35+ Pairs |
-| **Crypto** | Top Market Cap Digital Assets | 20+ Assets |
+### 1. Prerequisites
+- Python 3.10 or higher installed.
+- Git.
 
----
-
-## Signal Output Reference
-
-The Screener Dashboard displays the following key metrics for every asset in the chosen universe:
-
-| Column | Description |
-|---|---|
-| **Pulse** | **Abnormal Acceleration** (Velocity * Z-Score). Primary ranking metric for ignition events. |
-| **Conviction** | Blended score of signal magnitude and trend confluence. |
-| **Signal** | The Unified Oscillator value (-100 to +100). |
-| **Trend** | The underlying trend directionality score. |
-| **Timing** | Age of the most recent signal (Today, 1D, 2D, 3D, <5D). |
-
----
-
-## Analysis Modes
-
-### 1. Single Date Mode
-Provides a snapshot of the market at a specific point in time. Best for identifying fresh signals at the current market open/close.
-
-### 2. Date Range Mode (Historical Evolution)
-Analyzes how signals have evolved over a window of time. Identifies "sticky" signals and cluster events where multiple assets in a sector trigger simultaneously.
-
----
-
-## Getting Started
-
+### 2. Installation
 ```bash
-# 1. Obtain project
-git clone <repository-url>
-cd Sanket-Final
-
-# 2. Install dependencies
+git clone https://github.com/manthan/Sanket.git
+cd Sanket
 pip install -r requirements.txt
+```
 
-# 3. Run application
+### 3. Launch the Terminal
+```bash
 streamlit run sanket.py
 ```
 
 ---
 
-## Development Guide
+## 📂 Project Structure
 
-### Adjusting Engine Parameters
-Parameters are defined in `render_sidebar()` and passed to the analysis engine. 
-- `reg_len`: Length for trend count (default: 20)
-- `wt_n1 / wt_n2`: Wave trend smoothing factors
-
-### License
-Copyright © 2026 Antigravity. All rights reserved.
-Built as part of the **Sanket** product family.
+```
+├── sanket.py           # Main Intelligence Engine & Streamlit UI
+├── wrci.pine           # TradingView Indicator (Mathematical 1:1)
+├── logger.py           # Professional Console Logging System
+├── ui/
+│   ├── theme.py        # Obsidian Quant Design System
+│   └── components.py   # Reusable UI Elements (SVG/Tables)
+└── requirements.txt    # Project Dependencies
+```
 
 ---
 
-*SANKET v2.2.0 · @thebullishvalue · Pragyam / Antigravity*
+## ⚖️ License
+
+Institutional usage only. See the `LICENSE` file for full terms.
