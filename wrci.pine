@@ -1,0 +1,148 @@
+// This work is licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+// © Synthesized via Quant & Scientific Analysis
+// © BullishValue
+
+//@version=6
+indicator("Wave-Regime Composite Index [VWI]", shorttitle="WRCI", overlay=false)
+
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 1 · INPUTS & CONFIGURATION                                     ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+
+// ── 1A · TACTICAL (FAST) ──
+grp_fast   = "WRCI: Tactical (Fast)"
+n1         = input.int(10, "Channel Length",         group=grp_fast, display=display.none)
+n2         = input.int(21, "Average Length",         group=grp_fast, display=display.none)
+
+// ── 1B · STRUCTURAL (MEDIUM) ──
+grp_med    = "WRCI: Structural (Medium)"
+hma_len    = input.int(15, "HMA Smoothing Length",     group=grp_med, display=display.none)
+sqz_len    = input.int(20, "Squeeze Momentum Length",  group=grp_med, display=display.none)
+
+// ── 1C · MACRO (SLOW / REGIME) ──
+grp_slow   = "WRCI: Macro (Regime Filter)"
+reg_len    = input.int(20, "Regime Logic Window",      group=grp_slow, display=display.none)
+
+grp_levels = "WRCI: OB / OS Levels"
+obLevel1   = input.int(80,  "Over Bought Level 1",  group=grp_med,  display=display.none)
+obLevel2   = input.int(40,  "Over Bought Level 2",  group=grp_med,  display=display.none)
+osLevel1   = input.int(-80, "Over Sold Level 1",    group=grp_med,  display=display.none)
+osLevel2   = input.int(-40, "Over Sold Level 2",    group=grp_med,  display=display.none)
+
+// ── Color Palette ──
+var color C_BG_DARK   = #1a1a1a
+var color C_TXT_DIM   = #666666
+var color C_POS       = #22c55e
+var color C_NEG       = #ef4444
+var color C_ACCENT    = #4a9eff
+var color C_WARN      = #fbbf24
+
+
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 2 · MODULES & FUNCTIONS                                         ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+
+// Function: Calculate Normalized Trend Slope
+f_calc_slope(source, length) =>
+    float _slope = 0.0
+    for i = 1 to length
+        _slope += (source > source[i] ? 1.0 : -1.0)
+    _slope
+
+
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 3 · CORE CALCULATIONS                                          ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+
+// ── 3A · Regime Detection ──
+hma_p      = ta.hma(hlc3,   hma_len)
+hma_v      = ta.hma(volume, hma_len)
+coeff      = 10.0 / reg_len
+trend      = f_calc_slope(hma_p, reg_len)
+voltrend   = f_calc_slope(hma_v, reg_len) * coeff
+norm_trend = (trend * coeff) * 10
+
+// ── 3B · WaveTrend (Core Specification) ──
+ap         = hlc3
+esa        = ta.ema(ap, n1)
+d          = ta.ema(math.abs(ap - esa), n1)
+ci         = (ap - esa) / (0.015 * d)
+tci        = ta.ema(ci, n2)
+
+wt1        = tci
+wt2        = ta.sma(wt1, 4)
+
+// ── 3C · Composite Assembly ──
+wrci_line   = wt1
+wrci_signal = wt2
+vol_mult    = (voltrend + 10) / 20
+wrci_hist   = (wrci_line - wrci_signal) * vol_mult
+
+
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 4 · SANKET ENGINE (SIGNAL LOGIC)                               ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+
+// ── 4A · Squeeze Analysis (Structural Parity with SMI Reference) ──
+basis_sqz   = ta.sma(close, sqz_len)
+dev_sqz     = 1.5 * ta.stdev(close, sqz_len)
+upperBB_sqz = basis_sqz + dev_sqz
+lowerBB_sqz = basis_sqz - dev_sqz
+
+ma_sqz      = ta.sma(close, sqz_len)
+rangema_sqz = ta.sma(ta.tr, sqz_len)
+upperKC_sqz = ma_sqz + rangema_sqz * 1.5
+lowerKC_sqz = ma_sqz - rangema_sqz * 1.5
+
+sqz_on      = (lowerBB_sqz > lowerKC_sqz) and (upperBB_sqz < upperKC_sqz)
+sqz_off     = (lowerBB_sqz < lowerKC_sqz) and (upperBB_sqz > upperKC_sqz)
+sqz_release = sqz_off and sqz_on[1]
+sqz_val     = ta.linreg(close - math.avg(math.avg(ta.highest(high, sqz_len), ta.lowest(low, sqz_len)), ta.sma(close, sqz_len)), sqz_len, 0)
+
+// ── 4B · Signal Gates ──
+sig_bull_cross = ta.crossover(wrci_line,  wrci_signal)
+sig_bear_cross = ta.crossunder(wrci_line, wrci_signal)
+
+// Set B: Contrarian Zone Signals
+crossover_long  = sig_bear_cross and wrci_line < osLevel2
+crossover_short = sig_bull_cross and wrci_line > obLevel2
+
+// Set A: Momentum Signals (Mutually Exclusive with Set B)
+momentum_long   = sig_bull_cross and not crossover_short
+momentum_short  = sig_bear_cross and not crossover_long
+
+// Set C: Threshold Zone Entry
+threshold_long  = wrci_line < osLevel2 and wrci_line[1] >= osLevel2 and wrci_signal > osLevel2
+threshold_short = wrci_line > obLevel2 and wrci_line[1] <= obLevel2 and wrci_signal < obLevel2
+
+// Set D: Squeeze Release
+squeeze_long    = sqz_release and sqz_val > sqz_val[1]
+squeeze_short   = sqz_release and sqz_val < sqz_val[1]
+
+
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 5 · VISUALIZATION                                              ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+
+// ── 5A · Static Levels ──
+hline(0,        "Zero Line", color=color.new(color.gray, 50))
+hline(obLevel1, "OB Level 1", color=color.new(color.red,   30))
+hline(obLevel2, "OB Level 2", color=color.new(color.red,   60), linestyle=hline.style_dashed)
+hline(osLevel1, "OS Level 1", color=color.new(color.green, 30))
+hline(osLevel2, "OS Level 2", color=color.new(color.green, 60), linestyle=hline.style_dashed)
+
+// ── 5B · WRCI Components ──
+_hist_c = wrci_hist > 0 ? (wrci_hist > wrci_hist[1] ? color.new(color.lime, 60) : color.new(color.green, 60)) : (wrci_hist < wrci_hist[1] ? color.new(color.red, 60) : color.new(color.maroon, 60))
+plot(wrci_hist,   "Volume-Adjusted Histogram", style=plot.style_columns, color=_hist_c, display=display.all - display.status_line)
+plot(wrci_line,   "Composite Index",           color=color.new(color.aqua,   30), linewidth=1)
+plot(wrci_signal, "Composite Signal",          color=color.new(color.orange, 40), linewidth=1)
+
+// ── 5C · Signal Markers ──
+plotshape(momentum_long,   "Momentum Long",   style=shape.arrowup,      location=location.bottom, color=#00FF88,      size=size.small, display=display.all - display.status_line)
+plotshape(momentum_short,  "Momentum Short",  style=shape.arrowdown,    location=location.top,    color=#FF3355,      size=size.small, display=display.all - display.status_line)
+plotshape(crossover_long,  "Crossover Long",  style=shape.triangleup,   location=location.bottom, color=color.lime,   size=size.tiny,  display=display.all - display.status_line)
+plotshape(crossover_short, "Crossover Short", style=shape.triangledown, location=location.top,    color=color.red,    size=size.tiny,  display=display.all - display.status_line)
+plotshape(threshold_long,  "Threshold Long",  style=shape.circle,       location=location.bottom, color=color.teal,   size=size.tiny,  display=display.all - display.status_line)
+plotshape(threshold_short, "Threshold Short", style=shape.circle,       location=location.top,    color=color.orange, size=size.tiny,  display=display.all - display.status_line)
+plotshape(squeeze_long,    "Squeeze Long",    style=shape.diamond,      location=location.bottom, color=C_ACCENT,        size=size.tiny,  display=display.all - display.status_line)
+plotshape(squeeze_short,   "Squeeze Short",   style=shape.diamond,      location=location.top,    color=C_WARN,        size=size.tiny,  display=display.all - display.status_line)

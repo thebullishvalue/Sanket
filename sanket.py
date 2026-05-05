@@ -774,7 +774,7 @@ def resample_to_weekly(df):
         return df
     df = df.copy()
     df.index = pd.to_datetime(df.index)
-    weekly = df.resample('W-FRI').agg({
+    weekly = df.resample('W-MON', closed='left', label='left').agg({
         'Open': 'first',
         'High': 'max',
         'Low': 'min',
@@ -805,6 +805,63 @@ def calculate_hma(series, length):
     return calculate_wma(diff, sqrt_length)
 
 
+def calculate_ema(series, length):
+    """
+    Exponential Moving Average matched to TradingView's ta.ema.
+    Initializes with SMA and follows the recursive formula.
+    """
+    if length <= 1:
+        return series
+    
+    # Calculate initial SMA for startup
+    sma = series.rolling(window=length, min_periods=length).mean()
+    
+    # Find the first valid SMA index
+    first_idx = sma.first_valid_index()
+    if first_idx is None:
+        return pd.Series(np.nan, index=series.index)
+        
+    start_pos = series.index.get_loc(first_idx)
+    alpha = 2.0 / (length + 1)
+    
+    # Recursive calculation
+    values = series.values
+    ema_values = np.empty(len(series))
+    ema_values.fill(np.nan)
+    ema_values[start_pos] = sma.loc[first_idx]
+    
+    for i in range(start_pos + 1, len(series)):
+        if np.isnan(values[i]):
+            # If current price is NaN, EMA is NaN but state is preserved
+            ema_values[i] = np.nan
+        else:
+            # If previous EMA was NaN (due to NaN price), find the last valid EMA
+            prev_ema = ema_values[i-1]
+            if np.isnan(prev_ema):
+                # Look back for last valid EMA to continue recursion
+                # Standard TV behavior: if price was NaN, recursion skips it
+                j = i - 1
+                while j >= start_pos and np.isnan(ema_values[j]):
+                    j -= 1
+                prev_ema = ema_values[j] if j >= start_pos else values[i]
+            
+            ema_values[i] = (values[i] - prev_ema) * alpha + prev_ema
+            
+    return pd.Series(ema_values, index=series.index)
+
+
+def calculate_linreg(series, length, offset=0):
+    """Calculate the Linear Regression endpoint."""
+    def _linreg_val(y):
+        if np.isnan(y).any():
+            return np.nan
+        x = np.arange(len(y))
+        slope, intercept = np.polyfit(x, y, 1)
+        return slope * (len(y) - 1 - offset) + intercept
+
+    return series.rolling(window=length).apply(_linreg_val, raw=True)
+
+
 def calculate_trend_count(series, length):
     trend = pd.Series(0.0, index=series.index)
     for i in range(1, length + 1):
@@ -812,42 +869,68 @@ def calculate_trend_count(series, length):
     return trend
 
 
-def run_full_analysis(df, reg_len=20, wt_n1=10, wt_n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40):
+def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40):
     hlc3 = (df['High'] + df['Low'] + df['Close']) / 3.0
+    vol = df['Volume']
+    
+    # Institutional Volume Fallback: Historically used for VWMA-based indicators on indexes; 
+    # maintained for volume-trend calculations even after transition to EMA core.
+    if vol.sum() == 0:
+        vol = pd.Series(1.0, index=df.index)
+    
     hma_p = calculate_hma(hlc3, 15)
-    hma_v = calculate_hma(df['Volume'], 15)
+    hma_v = calculate_hma(vol, 15)
 
     trend = calculate_trend_count(hma_p, reg_len)
-    voltrend = calculate_trend_count(hma_v, reg_len)
+    voltrend_raw = calculate_trend_count(hma_v, reg_len)
 
     coeff = 10.0 / reg_len
     norm_trend = (trend * coeff) * 10.0
+    voltrend = voltrend_raw * coeff
 
     ap = hlc3
-    esa = ap.ewm(span=wt_n1, adjust=False).mean()
-    d = (ap - esa).abs().ewm(span=wt_n1, adjust=False).mean()
+    esa = calculate_ema(ap, n1)
+    d = calculate_ema((ap - esa).abs(), n1)
     ci = (ap - esa) / (0.015 * d).replace(0, np.nan)
-    wt1 = ci.ewm(span=wt_n2, adjust=False).mean()
+    tci = calculate_ema(ci, n2)
 
-    composite_line = (wt1 + norm_trend) / 2.0
-    composite_signal = composite_line.rolling(window=4).mean()
+    wt1 = tci
+    wt2 = wt1.rolling(window=4).mean()
+
+    composite_line = wt1
+    composite_signal = wt2
+    
+    vol_mult = (voltrend + 10.0) / 20.0
+    wrci_hist = (composite_line - composite_signal) * vol_mult
 
     df['Unified_Osc'] = composite_line
     df['Signal_Line'] = composite_signal
+    df['WRCI_Hist'] = wrci_hist
     df['WT1'] = wt1
     df['Norm_Trend'] = norm_trend
     
-    # Set A: Momentum — crossover anywhere (used by Range Study)
-    df['long_cond'] = (composite_line > composite_signal) & (composite_line.shift(1) <= composite_signal.shift(1))
-    df['short_cond'] = (composite_line < composite_signal) & (composite_line.shift(1) >= composite_signal.shift(1))
+    # Base Crossings
+    sig_bull_cross = (composite_line > composite_signal) & (composite_line.shift(1) <= composite_signal.shift(1))
+    sig_bear_cross = (composite_line < composite_signal) & (composite_line.shift(1) >= composite_signal.shift(1))
 
-    # Set B: Crossover — line crosses signal inside an extreme zone
-    df['long_cond_comp'] = (composite_line < composite_signal) & (composite_line.shift(1) >= composite_signal.shift(1)) & (composite_line < osLevel2)
-    df['short_cond_comp'] = (composite_line > composite_signal) & (composite_line.shift(1) <= composite_signal.shift(1)) & (composite_line > obLevel2)
+    # Set B: Crossover — Contrarian signals inside extreme zones
+    crossover_long  = sig_bear_cross & (composite_line < osLevel2)
+    crossover_short = sig_bull_cross & (composite_line > obLevel2)
+
+    # Set A: Momentum — Trend signals (Mutually Exclusive with Set B)
+    momentum_long   = sig_bull_cross & (~crossover_short)
+    momentum_short  = sig_bear_cross & (~crossover_long)
 
     # Set C: Threshold — freshly entering OS/OB zone with signal-line validation
-    df['long_cond_wt'] = (composite_line < osLevel2) & (composite_line.shift(1) >= osLevel2) & (composite_signal > osLevel2)
-    df['short_cond_wt'] = (composite_line > obLevel2) & (composite_line.shift(1) <= obLevel2) & (composite_signal < obLevel2)
+    threshold_long  = (composite_line < osLevel2) & (composite_line.shift(1) >= osLevel2) & (composite_signal > osLevel2)
+    threshold_short = (composite_line > obLevel2) & (composite_line.shift(1) <= obLevel2) & (composite_signal < obLevel2)
+
+    df['long_cond'] = momentum_long
+    df['short_cond'] = momentum_short
+    df['long_cond_comp'] = crossover_long
+    df['short_cond_comp'] = crossover_short
+    df['long_cond_wt'] = threshold_long
+    df['short_cond_wt'] = threshold_short
 
     df['Condition'] = np.select(
         [composite_line > obLevel1, composite_line > obLevel2, composite_line < osLevel1, composite_line < osLevel2],
@@ -856,9 +939,10 @@ def run_full_analysis(df, reg_len=20, wt_n1=10, wt_n2=21, obLevel1=80, obLevel2=
     )
 
     # Set D: Squeeze — Squeeze Momentum
-    df = compute_squeeze_momentum(df)
-    df['long_cond_sqz'] = df['SQZ_On'].shift(1) & df['SQZ_Off'] & (df['SQZ_Val'] > 0)
-    df['short_cond_sqz'] = df['SQZ_On'].shift(1) & df['SQZ_Off'] & (df['SQZ_Val'] < 0)
+    df = compute_squeeze_momentum(df, length=20)
+    sqz_release = df['SQZ_Off'] & df['SQZ_On'].shift(1)
+    df['long_cond_sqz'] = sqz_release & (df['SQZ_Val'] > df['SQZ_Val'].shift(1))
+    df['short_cond_sqz'] = sqz_release & (df['SQZ_Val'] < df['SQZ_Val'].shift(1))
 
     return df
 
@@ -866,7 +950,7 @@ def run_full_analysis(df, reg_len=20, wt_n1=10, wt_n2=21, obLevel1=80, obLevel2=
 # SQUEEZE MOMENTUM ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def compute_squeeze_momentum(df: pd.DataFrame, length: int = 20, mult: float = 2.0, 
+def compute_squeeze_momentum(df: pd.DataFrame, length: int = 20, mult: float = 1.5, 
                              length_kc: int = 20, mult_kc: float = 1.5, 
                              use_true_range: bool = True) -> pd.DataFrame:
     """
@@ -878,8 +962,7 @@ def compute_squeeze_momentum(df: pd.DataFrame, length: int = 20, mult: float = 2
     # Calculate BB
     source = df['Close']
     basis = source.rolling(window=length).mean()
-    # As per original script: dev = multKC * stdev(source, length)
-    dev = mult_kc * source.rolling(window=length).std(ddof=0)
+    dev = mult * source.rolling(window=length).std(ddof=0)
     upperBB = basis + dev
     lowerBB = basis - dev
     
@@ -904,28 +987,19 @@ def compute_squeeze_momentum(df: pd.DataFrame, length: int = 20, mult: float = 2
     noSqz = (~sqzOn) & (~sqzOff)
     
     # Linear Regression of Delta
-    highest_high = df['High'].rolling(window=length_kc).max()
-    lowest_low = df['Low'].rolling(window=length_kc).min()
+    highest_high = df['High'].rolling(window=length).max()
+    lowest_low = df['Low'].rolling(window=length).min()
     
     avg_hl = (highest_high + lowest_low) / 2.0
-    sma_close = df['Close'].rolling(window=length_kc).mean()
+    sma_close = df['Close'].rolling(window=length).mean()
     
     inner_avg = (avg_hl + sma_close) / 2.0
     delta = source - inner_avg
     
-    # Linear Regression endpoint is mathematically equivalent to: 3 * WMA - 2 * SMA
-    weights = np.arange(1, length_kc + 1)
-    def _wma(x):
-        if np.isnan(x).any():
-            return np.nan
-        return np.dot(x, weights) / weights.sum()
-        
-    wma_delta = delta.rolling(window=length_kc).apply(_wma, raw=True)
-    sma_delta = delta.rolling(window=length_kc).mean()
+    # Real ta.linreg endpoint
+    val = calculate_linreg(delta, length, 0)
     
-    val = 3.0 * wma_delta - 2.0 * sma_delta
-    
-    # Assign Colors (using numpy where for vectorized condition mapping)
+    # Assign Colors
     prev_val = val.shift(1).fillna(0)
     bcolor = np.where(
         val > 0,
