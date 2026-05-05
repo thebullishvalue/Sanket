@@ -1,9 +1,12 @@
-// This work is licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
-// © Synthesized via Quant & Scientific Analysis
-// © BullishValue
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  WRCI · Wave-Regime Composite Index                                     ║
+// ║  INTELLIGENCE: Abnormal Acceleration (Pulse) Engine                     ║
+// ║  LOGIC: 5D Velocity * 20D Volatility Z-Score                            ║
+// ║  VERSION: v2.2.0                                                        ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
 
 //@version=6
-indicator("Wave-Regime Composite Index [VWI]", shorttitle="WRCI", overlay=false)
+indicator("Wave-Regime Composite Index [Sanket Pulse]", shorttitle="WRCI", overlay=false)
 
 // ╔═════════════════════════════════════════════════════════════════════════╗
 // ║  SECTION 1 · INPUTS & CONFIGURATION                                     ║
@@ -78,6 +81,17 @@ wrci_signal = wt2
 vol_mult    = (voltrend + 10) / 20
 wrci_hist   = (wrci_line - wrci_signal) * vol_mult
 
+// ── 3D · Unified Conviction Score ──
+conviction  = (norm_trend * 0.6) + (wrci_hist * 5 * 0.4)
+
+// ── 3E · Sanket Pulse Engine (Abnormal Acceleration) ──
+// Measures 5-day momentum trajectory modulated by statistical intensity (Z-Score).
+conv_vel    = conviction - conviction[5]
+conv_mean   = ta.sma(conviction, 20)
+conv_std    = ta.stdev(conviction, 20)
+conv_z      = (conviction - conv_mean) / math.max(conv_std, 0.001)
+pulse       = conv_vel * conv_z
+
 
 // ╔═════════════════════════════════════════════════════════════════════════╗
 // ║  SECTION 4 · SANKET ENGINE (SIGNAL LOGIC)                               ║
@@ -132,7 +146,7 @@ hline(osLevel1, "OS Level 1", color=color.new(color.green, 30))
 hline(osLevel2, "OS Level 2", color=color.new(color.green, 60), linestyle=hline.style_dashed)
 
 // ── 5B · WRCI Components ──
-_hist_c = wrci_hist > 0 ? (wrci_hist > wrci_hist[1] ? color.new(color.lime, 60) : color.new(color.green, 60)) : (wrci_hist < wrci_hist[1] ? color.new(color.red, 60) : color.new(color.maroon, 60))
+_hist_c = conviction > 0 ? (wrci_hist > wrci_hist[1] ? color.new(color.lime, 60) : color.new(color.green, 60)) : (wrci_hist < wrci_hist[1] ? color.new(color.red, 60) : color.new(color.maroon, 60))
 plot(wrci_hist,   "Volume-Adjusted Histogram", style=plot.style_columns, color=_hist_c, display=display.all - display.status_line)
 plot(wrci_line,   "Composite Index",           color=color.new(color.aqua,   30), linewidth=1)
 plot(wrci_signal, "Composite Signal",          color=color.new(color.orange, 40), linewidth=1)
@@ -146,3 +160,16 @@ plotshape(threshold_long,  "Threshold Long",  style=shape.circle,       location
 plotshape(threshold_short, "Threshold Short", style=shape.circle,       location=location.top,    color=color.orange, size=size.tiny,  display=display.all - display.status_line)
 plotshape(squeeze_long,    "Squeeze Long",    style=shape.diamond,      location=location.bottom, color=C_ACCENT,        size=size.tiny,  display=display.all - display.status_line)
 plotshape(squeeze_short,   "Squeeze Short",   style=shape.diamond,      location=location.top,    color=C_WARN,        size=size.tiny,  display=display.all - display.status_line)
+ 
+// ── 5D · Intelligence Table ──
+var table intel_tbl = table.new(position.top_right, 2, 3, bgcolor=#0A0E17, border_color=color.new(color.white, 10), border_width=1)
+if barstate.islast
+    table.cell(intel_tbl, 0, 0, "Metric",     text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(intel_tbl, 1, 0, "Value",      text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(intel_tbl, 0, 1, "Conviction", text_color=color.gray,  text_size=size.small, text_halign=text.align_left)
+    table.cell(intel_tbl, 1, 1, str.tostring(conviction, "#.##"), text_color=conviction > 0 ? C_POS : C_NEG, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(intel_tbl, 0, 2, "Pulse",      text_color=color.gray,  text_size=size.small, text_halign=text.align_left)
+    table.cell(intel_tbl, 1, 2, str.tostring(pulse, "#.##"),      text_color=pulse > 0 ? C_ACCENT : C_WARN, text_size=size.small, text_halign=text.align_right)
+

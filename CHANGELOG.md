@@ -5,6 +5,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v2.2.0] — May 2026
+
+Institutionalisation of the **Sanket Pulse Engine** as the primary intelligence driver.
+
+### Institutional Pulse Engine (Abnormal Acceleration)
+
+- **Engine Integration** — Fully integrated "Abnormal Acceleration" (Pulse) as the primary ranking driver for the market screener.
+- **Pulse Calculation** — Mathematical logic defined as `5-Day Velocity * 20-Day Volatility Z-Score`. This surfaces explosive ignition events before they trigger standard trend filters.
+- **Nomenclature Standardisation** — Transitioned entire system-wide scoring from "Signal Magnitude" to "Pulse-based" ranking.
+- **Intelligence Dashboard Overhaul**:
+  - New summary metric cards: **Avg Pulse**, **Avg Conviction**, and **Strong Pulse Count**.
+  - Updated "Signal Strength" tab to **"Abnormal Acceleration (Pulse)"** with ranked analysis.
+  - New column hierarchy in results tables: `Pulse` (Primary) → `Conviction` (Secondary) → `Signal` → `Trend`.
+
+### Hierarchical Signal Structure (Sets A-D)
+
+- **Set A: Momentum** — Baseline composite line / signal line crossovers.
+- **Set B: Crossover** — High-precision reversals firing within extreme oscillator zones (±40).
+- **Set C: Threshold** — Fresh entries into overbought/oversold zones; now sorted by Pulse strength for better signal prioritization.
+- **Set D: Squeeze** — Volatility expansion signals derived from Bollinger Band / Keltner Channel compression.
+
+### UI & UX Institutionalisation
+
+- **Landing Page Refactor** — Overhauled system architecture cards to accurately reflect the Pulse Engine and Signal Structure (Sets A-D).
+- **Glassmorphism Parity** — Reverted dashboard aesthetics to high-fidelity translucent surfaces while maintaining amber accent highlights.
+- **Signal Interpretation Guide** — Updated footer reference grid with detailed Pulse, Conviction, and Trend definitions.
+- **Export Tooltips** — Standardized CSV/Excel download tooltips to reflect the new metric hierarchy.
+
+### Technical Performance & Parity
+
+- **Indicator Alignment** — Achieved 1:1 mathematical and UI parity between the Python backend and the `wrci.pine` indicator.
+- **Zero-Lag Calculation** — Optimized Pulse logic for real-time performance across multi-universe datasets.
+
+---
+
 ## [v2.1.0] — April 2026
 
 Integrated Analog Engine v2 for directional accuracy and historical pattern matching with Mahalanobis distance.

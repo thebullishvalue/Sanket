@@ -57,7 +57,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v2.1.0"
+VERSION = "v2.2.0"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE INITIALIZATION
@@ -903,11 +903,25 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     vol_mult = (voltrend + 10.0) / 20.0
     wrci_hist = (composite_line - composite_signal) * vol_mult
 
+    # Unified Conviction Score: Blending Structural Regime (60%) and Tactical Momentum (40%)
+    # norm_trend is -100 to 100; wrci_hist is scaled to match.
+    conviction = ((norm_trend * 0.6) + (wrci_hist * 5.0 * 0.4)).fillna(0)
+
+    # Sanket Pulse Engine: Abnormal Acceleration (Velocity * Z-Score)
+    # Measures 5-day momentum trajectory modulated by statistical intensity.
+    conv_vel = conviction - conviction.shift(5)
+    conv_mean = conviction.rolling(20).mean()
+    conv_std = conviction.rolling(20).std().replace(0, np.nan)
+    conv_z = (conviction - conv_mean) / conv_std
+    pulse = (conv_vel * conv_z).fillna(0)
+
     df['Unified_Osc'] = composite_line
     df['Signal_Line'] = composite_signal
     df['WRCI_Hist'] = wrci_hist
     df['WT1'] = wt1
     df['Norm_Trend'] = norm_trend
+    df['Conviction'] = conviction
+    df['Pulse'] = pulse
     
     # Base Crossings
     sig_bull_cross = (composite_line > composite_signal) & (composite_line.shift(1) <= composite_signal.shift(1))
@@ -1295,14 +1309,14 @@ def render_landing_page():
         <div class='system-card portfolio'>
             <h3>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                SIGNAL ENGINE
+                PULSE ENGINE
             </h3>
-            <p>WRCI Engine identifies momentum signals and trend strength across your universe.</p>
+            <p>Sanket Pulse Engine identifies Abnormal Acceleration (Velocity * Z-Score) to surface high-conviction ignition events.</p>
             <div class='spec'>
-                <span>Detection:</span> Wave Trend signals (bullish/bearish)<br>
-                <span>Scoring:</span> Signal magnitude + trend direction<br>
-                <span>Output:</span> Signal strength, zone, trend value<br>
-                <span>Refresh:</span> Daily updates
+                <span>Primary:</span> Abnormal Acceleration (Pulse)<br>
+                <span>Secondary:</span> Signal Conviction Score<br>
+                <span>Metric:</span> 5D Velocity * 20D Vol Z-Score<br>
+                <span>Sorting:</span> Rank by Pulse Strength
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1312,14 +1326,14 @@ def render_landing_page():
         <div class='system-card regime'>
             <h3>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
-                SIGNAL TYPES
+                SIGNAL STRUCTURE
             </h3>
-            <p>Rank momentum signals by strength, identify overbought/oversold zones, and track trend direction for each symbol.</p>
+            <p>Hierarchical signal generation (Sets A-D) contextualized by Pulse and structural trend regime alignment.</p>
             <div class='spec'>
-                <span>Long:</span> Bullish signal (positive Wave Trend)<br>
-                <span>Short:</span> Bearish signal (negative Wave Trend)<br>
-                <span>OB/OS:</span> Overbought/Oversold zones<br>
-                <span>Trend:</span> Direction + strength value
+                <span>Sets:</span> Momentum / Crossover / Threshold / Squeeze<br>
+                <span>Ranking:</span> Sorted by Abnormal Acceleration<br>
+                <span>Long/Short:</span> Dual-sided directional logic<br>
+                <span>Timing:</span> Age-weighted signal aging
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1351,7 +1365,7 @@ def render_landing_page():
         </h4>
         <p>Configure via the <strong>Sidebar</strong>: select <strong>Universe</strong>, <strong>Timeframe</strong>, <strong>Analysis Mode</strong>, and <strong>Engine Settings</strong>.<br>
            Click <strong>RUN SCREENER</strong> to analyze and discover today's signals.<br>
-           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will compute Wave Trend oscillations · Calculate signal magnitude · Rank by strength</span></p>
+           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will compute Wave Trend oscillations · Analyze Abnormal Acceleration · Rank by Pulse strength</span></p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1732,24 +1746,24 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
             last_row = df.iloc[idx_pos]
 
-            # Build Signal String — priority: Set B > Set A > Set C > Zone
-            signal_type = "Neutral"
+            # Build Signal String — priority: Set B > Set A > Set C > Set D > Zone
+            signal_type = "-"
             if last_row['long_cond_comp']:
-                signal_type = "Long Crossover"
+                signal_type = "B: Long"
             elif last_row['short_cond_comp']:
-                signal_type = "Short Crossover"
+                signal_type = "B: Short"
             elif last_row['long_cond']:
-                signal_type = "Long Momentum"
+                signal_type = "A: Long"
             elif last_row['short_cond']:
-                signal_type = "Short Momentum"
+                signal_type = "A: Short"
             elif last_row['long_cond_wt']:
-                signal_type = "Long Threshold"
+                signal_type = "C: Long"
             elif last_row['short_cond_wt']:
-                signal_type = "Short Threshold"
+                signal_type = "C: Short"
             elif last_row['long_cond_sqz']:
-                signal_type = "Long Squeeze"
+                signal_type = "D: Long"
             elif last_row['short_cond_sqz']:
-                signal_type = "Short Squeeze"
+                signal_type = "D: Short"
             elif last_row['Condition'] != 'Neutral':
                 signal_type = last_row['Condition']
 
@@ -1769,9 +1783,11 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "Symbol": ticker,
                 "DisplayName": display_name,
                 "SimpleName": simple_name,
-                "Signal": round(last_row['Unified_Osc'], 2),
-                "Trend": round(last_row['Norm_Trend'], 2),
-                "Wave": round(last_row['WT1'], 2),
+                "Signal": round(last_row['Unified_Osc'], 2) if not pd.isna(last_row['Unified_Osc']) else 0.0,
+                "Trend": round(last_row['Norm_Trend'], 2) if not pd.isna(last_row['Norm_Trend']) else 0.0,
+                "Conviction": round(last_row['Conviction'], 2) if not pd.isna(last_row['Conviction']) else 0.0,
+                "Pulse": round(last_row['Pulse'], 2) if not pd.isna(last_row['Pulse']) else 0.0,
+                "Wave": round(last_row['WT1'], 2) if not pd.isna(last_row['WT1']) else 0.0,
                 "Zone": last_row['Condition'],
                 "SignalType": signal_type,
                 "Price": round(last_row['Close'], 2),
@@ -1962,6 +1978,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'Symbol': ticker,
                     'Signal': row['Unified_Osc'],
                     'Trend': row['Norm_Trend'],
+                    'Conviction': row['Conviction'],
                     'Wave': row['WT1'],
                     'Zone': row['Condition'],
                     'LongSignal': row['long_cond'],
@@ -3114,13 +3131,16 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
         if rows:
             signals = [r['Signal'] for r in rows]
             pct_changes = [r.get('PctChange', 0) for r in rows]
+            convictions = [r.get('Conviction', 0) for r in rows]
             avg_signal = np.mean(signals)
             avg_pct_change = np.mean(pct_changes)
+            avg_conviction = np.mean(convictions)
             count = len(rows)
             stats[age] = {
                 'count': count,
                 'avg_signal': avg_signal,
                 'avg_pct_change': avg_pct_change,
+                'avg_conviction': avg_conviction,
                 'rows': rows
             }
         else:
@@ -3219,11 +3239,12 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
         # Section header for this age group
         avg_signal = stats[age]['avg_signal']
         avg_pct = stats[age].get('avg_pct_change', 0)
+        avg_conv = stats[age].get('avg_conviction', 0)
         count = stats[age]['count']
         table_rows.append(f"""
         <tr style="background: {header_bg}; border-bottom: 2px solid {border_color};">
             <td colspan="8" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
-                {age} · {count} signal{'s' if count != 1 else ''} · Avg Signal: {avg_signal:+.1f} · Avg %: {avg_pct:+.1f}
+                {age} · {count} signal{'s' if count != 1 else ''} · Avg Signal: {avg_signal:+.1f} · Avg Conv: {avg_conv:+.1f} · Avg %: {avg_pct:+.1f}
             </td>
         </tr>
         """)
@@ -3237,9 +3258,9 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
             pct_change = float(row.get('PctChange', 0))
             signal = float(row.get('Signal', 0))
             trend = float(row.get('Trend', 0))
-            zone_raw = str(row.get('Zone', 'Neutral'))
-            zone_disp = html_module.escape("—" if zone_raw == "Neutral" else zone_raw)
-            zone_color = _zone_colors.get(zone_raw, '#374151')
+            conviction = float(row.get('Conviction', 0))
+            pulse = float(row.get('Pulse', 0))
+            signal_type = str(row.get('SignalType', '-'))
 
             # Color % change: green for positive, red for negative
             pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
@@ -3251,7 +3272,8 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
-                <td class="numeric" style="color:{zone_color}; font-weight:600; font-size:0.68rem; white-space:nowrap;">{zone_disp}</td>
+                <td class="numeric" style="color: #D4A853; font-weight: 600;">{conviction:+.2f}</td>
+                <td class="numeric" style="color: #4a9eff; font-weight: 600;">{pulse:+.2f}</td>
             </tr>
             """)
 
@@ -3348,7 +3370,8 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                     <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
-                    <th class="numeric">Zone</th>
+                    <th class="numeric">Conv</th>
+                    <th class="numeric">Pulse</th>
                 </tr>
             </thead>
             <tbody>
@@ -3363,10 +3386,11 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
 
 
 def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> str:
-    """Build ranked HTML table for top signals by magnitude.
+    """Build ranked HTML table for top signals by Abnormal Acceleration (Pulse).
 
     Creates styled HTML table with colored accent for side (long=green, short=red),
     displaying symbol, price, signal magnitude, trend direction, and zone status.
+    Prioritizes Pulse (Velocity * Z-Score) as the ranking metric.
 
     Returns: Complete HTML document string ready for st.components.v1.html().
     """
@@ -3398,9 +3422,9 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
             pct_change = float(row.get('PctChange', 0))
             signal = float(row.get('Signal', 0))
             trend = float(row.get('Trend', 0))
-            zone_raw = str(row.get('Zone', 'Neutral'))
-            zone_disp = html_module.escape("—" if zone_raw == "Neutral" else zone_raw)
-            zone_color = _zone_colors.get(zone_raw, '#374151')
+            conviction = float(row.get('Conviction', 0))
+            pulse = float(row.get('Pulse', 0))
+            signal_type = str(row.get('SignalType', '-'))
 
             rank_str = f"{idx:02d}"
             pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
@@ -3413,7 +3437,8 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{trend:+.2f}</td>
-                <td class="numeric" style="color:{zone_color}; font-weight:600; font-size:0.68rem; white-space:nowrap;">{zone_disp}</td>
+                <td class="numeric" style="color: #D4A853; font-weight: 600;">{conviction:+.2f}</td>
+                <td class="numeric" style="color: #4a9eff; font-weight: 600;">{pulse:+.2f}</td>
             </tr>
             """)
 
@@ -3491,7 +3516,8 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                     <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
                     <th class="numeric">Trend</th>
-                    <th class="numeric">Zone</th>
+                    <th class="numeric">Conv</th>
+                    <th class="numeric">Pulse</th>
                 </tr>
             </thead>
             <tbody>
@@ -3634,34 +3660,34 @@ def main():
                 timeframe_label = "This Week's" if timeframe == 'Weekly' else "Today's"
                 ui.render_section_header(
                     f"{timeframe_label} Signals",
-                    "Multi-condition momentum signals — Momentum (A) · Crossover (B) · Threshold (C)",
+                    "Multi-condition momentum signals — Momentum (A) · Crossover (B) · Threshold (C) · Squeeze (D)",
                     icon="zap",
                     accent="amber"
                 )
 
-                # Set C: Momentum — crossover anywhere (also used by Range Study)
-                longs_df = results_df[results_df['L_5d'] != "—"].copy().sort_values('Signal', ascending=False)
-                shorts_df = results_df[results_df['S_5d'] != "—"].copy().sort_values('Signal', ascending=True)
+                # Set C: Momentum — sorted by Pulse (Abnormal Acceleration)
+                longs_df = results_df[results_df['L_5d'] != "—"].copy().sort_values('Pulse', ascending=False)
+                shorts_df = results_df[results_df['S_5d'] != "—"].copy().sort_values('Pulse', ascending=True)
 
                 # Set A: Momentum — broad crossover anywhere
                 # Crossover signals take priority: exclude momentum signals that conflict with crossovers
                 has_bullish_crossover = (results_df[['LB_Today', 'LB_1d', 'LB_2d', 'LB_3d', 'LB_5d']] != "—").any(axis=1)
                 has_bearish_crossover = (results_df[['SB_Today', 'SB_1d', 'SB_2d', 'SB_3d', 'SB_5d']] != "—").any(axis=1)
 
-                longs_a_df = results_df[(results_df['LA_5d'] != "—") & ~has_bearish_crossover].copy().sort_values('Signal', ascending=False)
-                shorts_a_df = results_df[(results_df['SA_5d'] != "—") & ~has_bullish_crossover].copy().sort_values('Signal', ascending=True)
+                longs_a_df = results_df[(results_df['LA_5d'] != "—") & ~has_bearish_crossover].copy().sort_values('Pulse', ascending=False)
+                shorts_a_df = results_df[(results_df['SA_5d'] != "—") & ~has_bullish_crossover].copy().sort_values('Pulse', ascending=True)
 
                 # Set B: Crossover — line crosses signal inside extreme zone
-                longs_b_df = results_df[results_df['LB_5d'] != "—"].copy().sort_values('Signal', ascending=False)
-                shorts_b_df = results_df[results_df['SB_5d'] != "—"].copy().sort_values('Signal', ascending=True)
+                longs_b_df = results_df[results_df['LB_5d'] != "—"].copy().sort_values('Pulse', ascending=False)
+                shorts_b_df = results_df[results_df['SB_5d'] != "—"].copy().sort_values('Pulse', ascending=True)
 
                 # Set C: Threshold — freshly entering OS/OB zone
-                longs_c_df = results_df[results_df['LC_5d'] != "—"].copy().sort_values('Signal', ascending=False)
-                shorts_c_df = results_df[results_df['SC_5d'] != "—"].copy().sort_values('Signal', ascending=True)
+                longs_c_df = results_df[results_df['LC_5d'] != "—"].copy().sort_values('Pulse', ascending=False)
+                shorts_c_df = results_df[results_df['SC_5d'] != "—"].copy().sort_values('Pulse', ascending=True)
 
                 # Set D: Squeeze — sqzOn & val > 0 / val < 0
-                longs_d_df = results_df[results_df['LD_5d'] != "—"].copy().sort_values('Signal', ascending=False)
-                shorts_d_df = results_df[results_df['SD_5d'] != "—"].copy().sort_values('Signal', ascending=True)
+                longs_d_df = results_df[results_df['LD_5d'] != "—"].copy().sort_values('Pulse', ascending=False)
+                shorts_d_df = results_df[results_df['SD_5d'] != "—"].copy().sort_values('Pulse', ascending=True)
 
                 if timeframe == 'Weekly':
                     _age_order = ["This Week", "1 Week Ago", "2 Weeks Ago", "3 Weeks Ago", "Within 5 Weeks"]
@@ -3674,8 +3700,8 @@ def main():
                     # ── Summary metrics ────────────────────────────────────────────────────
                     total_longs  = len(longs_a_df) + len(longs_b_df) + len(longs_c_df) + len(longs_d_df)
                     total_shorts = len(shorts_a_df) + len(shorts_b_df) + len(shorts_c_df) + len(shorts_d_df)
-                    all_longs  = pd.concat([longs_a_df, longs_b_df, longs_c_df, longs_d_df]).drop_duplicates('Symbol').sort_values('Signal', ascending=False)
-                    all_shorts = pd.concat([shorts_a_df, shorts_b_df, shorts_c_df, shorts_d_df]).drop_duplicates('Symbol').sort_values('Signal', ascending=True)
+                    all_longs  = pd.concat([longs_a_df, longs_b_df, longs_c_df, longs_d_df]).drop_duplicates('Symbol').sort_values('Pulse', ascending=False)
+                    all_shorts = pd.concat([shorts_a_df, shorts_b_df, shorts_c_df, shorts_d_df]).drop_duplicates('Symbol').sort_values('Pulse', ascending=True)
 
                     mc1, mc2, mc3, mc4 = st.columns(4)
                     with mc1:
@@ -3833,23 +3859,30 @@ def main():
             # ════ TAB 2: SIGNAL STRENGTH ANALYSIS ════════════════════════════════════════
             with tab_strength:
                 ui.render_section_header(
-                    "Signal Strength Analysis",
-                    "Top signals ranked by magnitude — Momentum (A) · Crossover (B) · Threshold (C) · Squeeze (D)",
-                    icon="target",
-                    accent="emerald"
+                    "Abnormal Acceleration (Pulse)",
+                    "Top signals ranked by Pulse — Momentum (A) · Crossover (B) · Threshold (C) · Squeeze (D)",
+                    icon="zap",
+                    accent="amber"
                 )
 
                 # Strength metrics
                 avg_signal_str = results_df['Signal'].abs().mean()
                 avg_trend_str = results_df['Trend'].abs().mean()
+                avg_conv_str = results_df['Conviction'].abs().mean()
                 strong_trend_count = len(results_df[results_df['Trend'].abs() > 30])
 
-                col_s1, col_s2, col_s3 = st.columns(3)
+                avg_pulse = results_df['Pulse'].abs().mean()
+                avg_conv = results_df['Conviction'].abs().mean()
+                strong_pulse_count = len(results_df[results_df['Pulse'].abs() > 10]) # Arbitrary threshold for "strong"
+
+                col_s1, col_s2, col_s3, col_s4 = st.columns(4)
                 with col_s1:
-                    ui.render_metric_card("Avg Signal Magnitude", f"{avg_signal_str:.1f}", "Average across all symbols", "neutral")
+                    ui.render_metric_card("Avg Pulse", f"{avg_pulse:.1f}", "Abnormal Acceleration", "neutral")
                 with col_s2:
-                    ui.render_metric_card("Avg Trend Value", f"{avg_trend_str:.1f}", "Directional strength", "neutral")
+                    ui.render_metric_card("Avg Conviction", f"{avg_conv:.1f}", "Blended confluence", "neutral")
                 with col_s3:
+                    ui.render_metric_card("Strong Pulse", str(strong_pulse_count), f"{strong_pulse_count/len(results_df)*100:.0f}% of universe", "info")
+                with col_s4:
                     ui.render_metric_card("Strong Trends", str(strong_trend_count), f"{strong_trend_count/len(results_df)*100:.0f}% of universe", "info")
 
                 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -4017,11 +4050,11 @@ def main():
                 """, unsafe_allow_html=True)
 
                 # Show all data with historical signals
-                display_df = results_df[[
-                    "DisplayName", "Price", "Signal", "Trend", "Wave", "Zone",
-                    "SignalType", "L_Today", "L_1d", "L_2d", "L_3d", "L_5d",
+                display_df = results_df.sort_values("Pulse", ascending=False)[[
+                    "DisplayName", "Price", "Signal", "Trend", "Pulse", "Conviction", "Wave",
+                    "L_Today", "L_1d", "L_2d", "L_3d", "L_5d",
                     "S_Today", "S_1d", "S_2d", "S_3d", "S_5d"
-                ]].sort_values("Signal", ascending=False)
+                ]]
 
                 st.dataframe(display_df, width='stretch', height=600)
 
@@ -4041,8 +4074,8 @@ def main():
                 </p>
                 """, unsafe_allow_html=True)
 
-                # Signal guide grid
-                st.markdown('<div class="signal-guide-grid"><div class="signal-type momentum"><div class="signal-type-label">Set A: Momentum</div><div class="signal-type-desc">Composite Line crosses Signal Line anywhere • No zone filter • Captures building momentum</div></div><div class="signal-type crossover"><div class="signal-type-label">Set B: Crossover</div><div class="signal-type-desc">Lines cross in extreme zones (±40) • Momentum exhaustion • High precision timing</div></div><div class="signal-type threshold"><div class="signal-type-label">Set C: Threshold</div><div class="signal-type-desc">Freshly enters OS/OB zone from neutral • First bar of entry • Earliest actionable signal</div></div><div class="signal-type squeeze"><div class="signal-type-label">Set D: Squeeze</div><div class="signal-type-desc">Volatility squeeze firing • Bollinger Bands inside Keltner Channels • Expansion incoming</div></div></div>', unsafe_allow_html=True)
+                # Signal guide grid — Rearranged to 2x2 logical flow
+                st.markdown('<div class="signal-guide-grid"><div class="signal-type momentum"><div class="signal-type-label">Set A: Momentum</div><div class="signal-type-desc">Composite Line crosses Signal Line anywhere • No zone filter • Captures building momentum</div></div><div class="signal-type crossover"><div class="signal-type-label">Set B: Crossover</div><div class="signal-type-desc">Lines cross in extreme zones (±40) • Momentum exhaustion • High precision timing</div></div><div class="signal-type threshold"><div class="signal-type-label">Set C: Threshold</div><div class="signal-type-desc">Freshly enters OS/OB zone from neutral • Earliest actionable signal • Sorted by Pulse</div></div><div class="signal-type squeeze"><div class="signal-type-label">Set D: Squeeze</div><div class="signal-type-desc">Volatility squeeze firing • Bollinger Bands inside Keltner Channels • Expansion incoming</div></div></div>', unsafe_allow_html=True)
 
                 # ── EXPORT SECTION ─────────────────────────────────────────────────────────
                 st.markdown('<div class="section-divider" style="margin-top: 2rem;"></div>', unsafe_allow_html=True)
@@ -4089,7 +4122,7 @@ def main():
                         mime="text/csv",
                         width='stretch',
                         key="dl_top10_bullish",
-                        help="Top 10 bullish signals ranked by signal magnitude"
+                        help="Top 10 bullish signals ranked by Abnormal Acceleration (Pulse)"
                     )
                 with dl_col4:
                     st.download_button(
@@ -4099,7 +4132,7 @@ def main():
                         mime="text/csv",
                         width='stretch',
                         key="dl_top10_bearish",
-                        help="Top 10 bearish signals ranked by signal magnitude"
+                        help="Top 10 bearish signals ranked by Abnormal Acceleration (Pulse)"
                     )
 
             render_footer()
