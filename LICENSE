@@ -1,11 +1,11 @@
 SANKET — Proprietary Software License
 
-Copyright (c) 2026 Antigravity. All rights reserved.
+Copyright (c) 2026 @thebullishvalue. All rights reserved.
 
-SANKET is proprietary software developed by Antigravity as part of the
+SANKET is proprietary software developed by @thebullishvalue as part of the
 Pragyam product family. This software and all associated source code,
 documentation, design assets, and analytical methodologies are the
-exclusive intellectual property of Antigravity.
+exclusive intellectual property of @thebullishvalue.
 
 PERMITTED USES
 
@@ -15,7 +15,7 @@ under which it was provided to you.
 
 RESTRICTIONS
 
-Without the prior written consent of Antigravity, you may not:
+Without the prior written consent of @thebullishvalue, you may not:
 
   1. Copy, reproduce, or distribute this software or any portion of it,
      in source or binary form, to any third party.
@@ -51,18 +51,18 @@ MARKET DATA NOTICE
 
 This software fetches market data from third-party providers (NSE India,
 Yahoo Finance, nsepython). Use of that data is subject to the respective
-providers' terms of service. Antigravity makes no representations
+providers' terms of service. @thebullishvalue makes no representations
 regarding the accuracy, completeness, or timeliness of data obtained
 from these sources.
 
 CONTACT
 
 For licensing enquiries, custom deployments, or permissions beyond the
-scope of this licence, contact Antigravity.
+scope of this licence, contact @thebullishvalue.
 
 ---
 
 Product: SANKET v3.1.0
 Family:  Pragyam
-Author:  Antigravity · @thebullishvalue
+Author:  @thebullishvalue
 Year:    2026

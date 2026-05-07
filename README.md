@@ -566,11 +566,11 @@ The indicator is Pine Script v6, published as an overlay-false indicator with pr
 
 Proprietary — institutional usage only.
 
-Copyright © 2026 Antigravity · [@thebullishvalue](https://github.com/thebullishvalue)
+Copyright © 2026 [@thebullishvalue](https://github.com/thebullishvalue). All rights reserved.
 
-This software, including the WRCI engine, signal detection logic, Pulse computation, priority scoring methodology, and UI design system, is the exclusive intellectual property of Antigravity. Distribution, modification, sublicensing, and commercial exploitation are prohibited without prior written consent.
+This software, including the WRCI engine, signal detection logic, Pulse computation, priority scoring methodology, and UI design system, is the exclusive intellectual property of @thebullishvalue. Distribution, modification, sublicensing, and commercial exploitation are prohibited without prior written consent.
 
-Signals produced by this system do not constitute financial advice. Antigravity accepts no liability for trading or investment losses.
+Signals produced by this system do not constitute financial advice. @thebullishvalue accepts no liability for trading or investment losses.
 
 See [`LICENSE`](LICENSE) for full terms.
 

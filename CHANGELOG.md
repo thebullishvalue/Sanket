@@ -103,4 +103,4 @@ Architectural rebuild from standalone script to the Pragyam modular product fram
 ---
 
 *Full technical specifications: [README.md](README.md)*
-*Author: [@thebullishvalue](https://github.com/thebullishvalue) · Antigravity · Pragyam Family*
+*Author: [@thebullishvalue](https://github.com/thebullishvalue) · Pragyam Family*
