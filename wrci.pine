@@ -304,7 +304,7 @@ plot(-100,  "Conviction Delta Trace", color=conv_delta  > 0 ? C_POS    : C_NEG, 
 plot(100, "Pulse Delta Trace",      color=pulse_delta > 0 ? C_ACCENT : C_WARN, linewidth=3)
  
 // ── 5D · Intelligence Table ──
-var table intel_tbl = table.new(position.top_right, 2, 8, bgcolor=C_BG_DARK, border_width=0, frame_width=1, frame_color=#333333)
+var table intel_tbl = table.new(position.middle_right, 2, 9, bgcolor=C_BG_DARK, border_width=0, frame_width=1, frame_color=#333333)
 if barstate.islast
     // Header
     table.cell(intel_tbl, 0, 0, "METRIC",     text_halign=text.align_left,  text_color=C_TXT_DIM, bgcolor=C_BG_HEADER, text_size=size.tiny)
@@ -337,6 +337,11 @@ if barstate.islast
     // Row 7: Priority (BP Equivalent)
     table.cell(intel_tbl, 0, 7, "Priority L (bp)", text_halign=text.align_left,  text_color=C_TXT_NORM, bgcolor=C_BG_EVEN, text_size=size.small)
     table.cell(intel_tbl, 1, 7, str.tostring(priority_val, "#.##"), text_halign=text.align_right, text_color=priority_val > 0 ? C_POS : C_NEG, bgcolor=C_BG_EVEN, text_size=size.small)
+
+    // Row 8: RSI (14)
+    rsi_col = rsi_14 >= 70 ? C_NEG : rsi_14 <= 30 ? C_POS : C_TXT_BRIGHT
+    table.cell(intel_tbl, 0, 8, "RSI (14)",        text_halign=text.align_left,  text_color=C_TXT_NORM, bgcolor=C_BG_DARK, text_size=size.small)
+    table.cell(intel_tbl, 1, 8, str.tostring(rsi_14, "#.##"), text_halign=text.align_right, text_color=rsi_col, bgcolor=C_BG_DARK, text_size=size.small)
 
 
 // ╔═════════════════════════════════════════════════════════════════════════╗
