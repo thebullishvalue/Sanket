@@ -638,7 +638,27 @@ footer {
     overflow: hidden;
     cursor: default;
     height: 100%;
-    min-height: 280px;
+    min-height: 320px;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Push the spec list to the bottom regardless of paragraph length —
+   keeps all three landing cards visually aligned even if one card's
+   paragraph wraps to a different number of lines. */
+.system-card .spec {
+    margin-top: auto;
+}
+
+/* Force the column row containing system-cards to stretch all columns
+   to the height of the tallest card. Targets only Streamlit horizontal
+   blocks that contain a system-card, so the rest of the app is unaffected. */
+[data-testid="stHorizontalBlock"]:has(.system-card) {
+    align-items: stretch;
+}
+[data-testid="stHorizontalBlock"]:has(.system-card) > [data-testid="stColumn"],
+[data-testid="stHorizontalBlock"]:has(.system-card) > [data-testid="stColumn"] > div {
+    height: 100%;
     display: flex;
     flex-direction: column;
 }
@@ -4264,4 +4284,40 @@ footer {
     .interp-card {
         padding: var(--sp-3) var(--sp-4) !important;
     }
+}
+/* ================================================================
+   Narrative Matrix Guide
+   ================================================================ */
+.narrative-guide-grid { 
+    display: grid; 
+    grid-template-columns: repeat(4, 1fr); 
+    gap: 0.8rem; 
+    margin-bottom: 2rem; 
+}
+.crush-card { 
+    background: rgba(239, 68, 68, 0.06) !important; 
+    border-left: 3px solid rgba(239, 68, 68, 0.4) !important; 
+}
+.crush-card .signal-type-label { color: #ef4444 !important; }
+.soft-card { 
+    background: rgba(148, 163, 184, 0.06) !important; 
+    border-left: 3px solid rgba(148, 163, 184, 0.4) !important; 
+}
+.soft-card .signal-type-label { color: #94a3b8 !important; }
+.firm-card { 
+    background: rgba(74, 158, 255, 0.06) !important; 
+    border-left: 3px solid rgba(74, 158, 255, 0.4) !important; 
+}
+.firm-card .signal-type-label { color: #4a9eff !important; }
+.surge-card { 
+    background: rgba(34, 197, 94, 0.06) !important; 
+    border-left: 3px solid rgba(34, 197, 94, 0.4) !important; 
+}
+.surge-card .signal-type-label { color: #22c55e !important; }
+.narr-desc { 
+    font-size: 0.58rem; 
+    line-height: 1.3; 
+    color: #94A3B8; 
+    text-transform: uppercase; 
+    font-weight: 500; 
 }
