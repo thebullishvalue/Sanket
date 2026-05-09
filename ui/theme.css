@@ -4362,3 +4362,21 @@ footer {
 [data-testid="stToolbar"] {
     transition: opacity 120ms ease;
 }
+
+/* ================================================================
+   Forced Grid — prevents st.columns from stacking on Cloud
+   but allows vertical stacking on narrow mobile (<480px).
+   ================================================================ */
+@media (min-width: 480px) {
+    .forced-grid [data-testid="stHorizontalBlock"] {
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        gap: 1rem !important;
+    }
+
+    .forced-grid [data-testid="stColumn"] {
+        width: calc(50% - 0.5rem) !important;
+        flex: 1 1 50% !important;
+        min-width: 50% !important;
+    }
+}
