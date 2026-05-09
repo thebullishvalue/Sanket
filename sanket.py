@@ -5458,6 +5458,8 @@ def render_intelligence_center():
                 )
                 _is_overfit = train_v > 0.05 and val_v < train_v * 0.3
                 _is_low_ir  = val_v <= 0.0
+                # Force a 2x2 grid even on narrower Streamlit Cloud containers
+                st.markdown('<div class="forced-grid">', unsafe_allow_html=True)
                 d_r1c1, d_r1c2 = st.columns(2)
                 with d_r1c1:
                     ui.render_metric_card("Train IR", f"{train_v:+.4f}", "in-sample fit",
@@ -5481,6 +5483,7 @@ def render_intelligence_center():
                     else:
                         _risk_label, _risk_sub, _risk_kind = "Quality OK", "No overfit or IR issues detected", "success"
                     ui.render_metric_card("Quality Check", _risk_label, _risk_sub, _risk_kind)
+                st.markdown('</div>', unsafe_allow_html=True)
 
         with col_t2:
             ui.render_section_header(
