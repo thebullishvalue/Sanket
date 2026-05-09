@@ -5458,30 +5458,33 @@ def render_intelligence_center():
                 )
                 _is_overfit = train_v > 0.05 and val_v < train_v * 0.3
                 _is_low_ir  = val_v <= 0.0
-                # Structural 2-column layout (Bulletproof for Cloud)
-                # Col 1: Train IR + Stability | Col 2: Val IR + Quality Check
-                d_col1, d_col2 = st.columns(2)
-                
-                with d_col1:
-                    ui.render_metric_card("Train IR", f"{train_v:+.4f}", "in-sample fit",
-                                          "success" if train_v > 0 else "warning")
-                    st.markdown('<div style="margin-bottom: 1rem;"></div>', unsafe_allow_html=True)
-                    ui.render_metric_card("Stability", f"{stability:.0f}%", "Val / Train ratio",
-                                          "info" if 30 < stability < 130 else "warning")
-
-                with d_col2:
-                    _val_sub = "out-of-sample · IC rank corr"
-                    ui.render_metric_card("Validation IR", f"{val_v:+.4f}", _val_sub,
-                                          "success" if val_v > 0.02 else ("warning" if val_v > 0 else "danger"))
-                    st.markdown('<div style="margin-bottom: 1rem;"></div>', unsafe_allow_html=True)
-                    
-                    if _is_low_ir:
-                        _risk_label, _risk_sub, _risk_kind = "No Edge", "Val IR ≤ 0 — reset or recalibrate", "danger"
-                    elif _is_overfit:
-                        _risk_label, _risk_sub, _risk_kind = "Overfit", "Train >> Val — reduce trials or extend range", "warning"
-                    else:
-                        _risk_label, _risk_sub, _risk_kind = "Quality OK", "No overfit or IR issues detected", "success"
-                    ui.render_metric_card("Quality Check", _risk_label, _risk_sub, _risk_kind)
+                # NATIVE CSS GRID (Bypasses all Streamlit Cloud responsive issues)
+                st.markdown(f"""
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem;">
+                    <!-- Row 1 -->
+                    <div class="metric-card success" style="margin: 0;">
+                        <h4>Train IR</h4>
+                        <h2>{train_v:+.4f}</h2>
+                        <div class="sub-metric">in-sample fit</div>
+                    </div>
+                    <div class="metric-card {"success" if val_v > 0.02 else ("warning" if val_v > 0 else "danger")}" style="margin: 0;">
+                        <h4>Validation IR</h4>
+                        <h2>{val_v:+.4f}</h2>
+                        <div class="sub-metric">out-of-sample · IC rank corr</div>
+                    </div>
+                    <!-- Row 2 -->
+                    <div class="metric-card {"info" if 30 < stability < 130 else "warning"}" style="margin: 0;">
+                        <h4>Stability</h4>
+                        <h2>{stability:.0f}%</h2>
+                        <div class="sub-metric">Val / Train ratio</div>
+                    </div>
+                    <div class="metric-card {("danger" if _is_low_ir else ("warning" if _is_overfit else "success"))}" style="margin: 0;">
+                        <h4>Quality Check</h4>
+                        <h2>{("No Edge" if _is_low_ir else ("Overfit" if _is_overfit else "Quality OK"))}</h2>
+                        <div class="sub-metric">{("Val IR ≤ 0 — reset or recalibrate" if _is_low_ir else ("Train >> Val — reduce trials or extend range" if _is_overfit else "No overfit or IR issues detected"))}</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
         with col_t2:
             ui.render_section_header(
