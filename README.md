@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Wave-Regime Composite Index · Obsidian Quant · Pragyam Family · `v3.1.0`
+### Wave-Regime Composite Index · Obsidian Quant · Pragyam Family · `v3.2.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -388,10 +388,10 @@ console.line()                          # Separator
 
 ```
 Sanket/
-├── sanket.py               # Main entry — Streamlit UI + analysis dispatch (5,400 lines)
-├── priority_engine.py      # Asymmetric priority engine + profile persistence (372 lines)
-├── intelligence.py         # Self-tuning Bayesian calibration via Optuna (408 lines)
-├── logger.py               # Structured terminal logging system (250+ lines)
+├── sanket.py               # Main entry — Streamlit UI + analysis dispatch (5,759 lines)
+├── priority_engine.py      # Asymmetric priority engine + profile persistence (381 lines)
+├── intelligence.py         # Self-tuning Bayesian calibration via Optuna (411 lines)
+├── logger.py               # Structured terminal logging system (226 lines)
 ├── wrci.pine               # TradingView Pine Script v6 — mathematical mirror (378 lines)
 ├── requirements.txt        # Pinned runtime dependencies
 ├── LICENSE                 # Proprietary institutional license
@@ -522,7 +522,7 @@ The **Model Passport** panel (sidebar) provides:
 
 ## TradingView Pine Script Indicator
 
-`wrci.pine` is the companion TradingView indicator — **WRCI [Sanket Core]** (`v3.1.0`). It implements the same mathematical pipeline as the Python engine:
+`wrci.pine` is the companion TradingView indicator — **WRCI [Sanket Core]** (`v3.2.0`). It implements the same mathematical pipeline as the Python engine:
 
 | Calculation | Python | Pine Script |
 |:---|:---|:---|
@@ -576,4 +576,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v3.1.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v3.2.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

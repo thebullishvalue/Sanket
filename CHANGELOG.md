@@ -7,6 +7,47 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v3.2.0] · 2026-05-09
+### System Hardening, Fidelity & UI Polish
+
+**"Precision Instrument"**
+
+Comprehensive institutional-grade hardening pass across the full stack — data correctness, multi-session isolation, calibration reliability, and terminal UI smoothness. No surface-level UX changes; all improvements are under-the-hood quality and fidelity improvements.
+
+#### System Architecture
+- **Per-session weight isolation**: Active weights now stored in `st.session_state["active_weights"]` per session, eliminating cross-user bleed when the app is deployed for multiple users simultaneously
+- **Smart data registry**: TTL-aware fetch cache keyed by universe + date — avoids redundant OHLCV fetches across mode switches (15 min during market hours, 90 min outside)
+- **Registry DataFrame copies**: Registry stores `.copy()` of each DataFrame, preventing downstream mutations from silently corrupting cached data
+- **Reproducible calibration**: Optuna TPE sampler seeded with `seed=42` — calibration results are now reproducible across identical inputs
+- **`HOLD_HORIZONS` constant**: Fibonacci-spaced horizons `[2, 3, 5, 8, 13]` extracted to `priority_engine.py` as a single source of truth, imported by `sanket.py` and `intelligence.py` — previously hardcoded in five separate places
+
+#### Correctness Fixes
+- **L/S Ratio division guard**: Long/Short signal ratio now emits `NaN` instead of `Inf` when short signal count is zero
+- **Divergence order scaled to timeframe**: `argrelextrema` order parameter set to `2` for weekly and `3` for daily data — was fixed at `3` regardless of timeframe, causing missed weekly divergences
+- **Regime detector warmup**: HMM state estimator now runs a 20-bar warm-up period before recording signal history, preventing false regime transitions at the start of the analysis window
+- **ymax NaN/Inf guard**: Bar chart y-axis maximum now guarded against `NaN`/`Inf` values that caused silent chart rendering failures on short date ranges
+- **Confluence score clipped**: `Confluence_Score` clamped to `[0.0, 1.0]` on both calibrated-priority and fallback paths — previously could exceed 1.0 on wide-spread cross-sections
+- **% Change Since sentinel**: Percentage-change-since-analysis field now uses `None` sentinel instead of `0.0` when the analysis date equals the latest available date — eliminates spurious 0.00% displays
+
+#### Calibration Improvements
+- **Overfit detection split**: Separated `low_ir` (Val IR ≤ 0) and `overfit` (Train IR >> Val IR) flags — both are now detected independently with distinct user messages
+- **Quality Check card**: Fourth metric card added to Calibration Diagnostics showing `No Edge` / `Overfit` / `Quality OK` status with semantic color coding
+- **Small universe warning**: Calibration warns when average symbols per date falls below 20 — IC-based ranking is statistically unreliable on sparse cross-sections
+- **Exception logging**: All `except: pass` patterns replaced with typed exception logging via `console.detail()` — silent failures are now surfaced in the terminal
+
+#### Display & Data Quality
+- **Run stats header**: Results header now shows total universe size, symbols fetched, analyzed, and failed — provides context that was previously invisible
+- **Column display rename**: Result table columns use human-readable names (`Priority_Long_pct` → `Long Priority %ile`, `F1_PriceMom` → `Price Momentum`, etc.)
+- **Widget state persistence**: All sidebar widgets keyed with `sb_*` session-state keys — widget selections persist across reruns without unexpected resets
+- **Timeframe-aware passport**: Calibration profile keys now include timeframe — daily and weekly calibrations are stored and loaded independently under the same universe
+
+#### UI Smoothness (No Visual Changes)
+- **Skeleton shimmer suppressed**: `[data-testid="stSkeleton"] { display: none !important }` eliminates the native Streamlit shimmer that briefly appears between a button click and the first progress bar render
+- **CSS loading cached**: `@st.cache_resource` on `_load_theme_css()` — the 4,300-line `theme.css` is read from disk once per process; subsequent reruns pay zero I/O cost
+- **Equal-height metric cards**: `:has(.metric-card)` CSS block extends the flex chain through `element-container` and `stMarkdownContainer` — metric card rows are now equal height on all pages (Single Date, Pulse Narrative, Calibration Diagnostics, Historical Range, Intelligence, Correlation) regardless of content length or screen size
+
+---
+
 ## [v3.1.0] · 2026-05-07
 ### Documentation & Version Unification
 

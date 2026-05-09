@@ -62,7 +62,104 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v3.1.0"
+VERSION = "v3.2.0"
+
+# IST timezone offset — used wherever "today" matters for data or display
+_IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
+def _today_ist() -> datetime.date:
+    """Return the current calendar date in IST (UTC+5:30)."""
+    return datetime.datetime.now(_IST).date()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SESSION-STATE DATA REGISTRY
+#
+# Unified OHLCV pool per session.  Instead of re-fetching the same universe
+# on every mode switch, all analysis paths share one in-memory store keyed by
+# frozenset(stock_list).  The registry is always populated with _MAX_DAYS_BACK
+# days of history so every mode (screener, intelligence, correlation) can slice
+# what it needs without an extra round-trip.
+#
+# Two-tier caching:
+#   L1 — session-state registry (per-user, sub-millisecond lookup)
+#   L2 — @st.cache_data on fetch_batch_data (cross-user, process-level, 5 min TTL)
+#   L3 — yfinance network fetch (slow path, only on true misses)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_REGISTRY_KEY  = "data_registry"
+_MAX_DAYS_BACK = 500  # fetch the maximum once; all modes slice what they need
+
+
+def _registry_ttl_seconds() -> int:
+    """15 min during NSE market hours (Mon–Fri 09:15–15:30 IST), 90 min outside."""
+    now = datetime.datetime.now(_IST)
+    mo  = now.replace(hour=9,  minute=15, second=0, microsecond=0)
+    mc  = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    if now.weekday() < 5 and mo <= now <= mc:
+        return 15 * 60
+    return 90 * 60
+
+
+def _registry_get(stock_list: list, end_date: datetime.date):
+    """Return cached data_dict if still fresh for this universe+date, else None."""
+    reg   = st.session_state.get(_REGISTRY_KEY, {})
+    key   = frozenset(stock_list)
+    entry = reg.get(key)
+    if entry is None or entry["end_date"] != end_date:
+        return None
+    age = (datetime.datetime.now(_IST) - entry["fetched_at"]).total_seconds()
+    if age > _registry_ttl_seconds():
+        return None
+    return entry["data"]
+
+
+def _registry_put(stock_list: list, end_date: datetime.date, data_dict: dict):
+    """Store data_dict in the session-state registry under frozenset(stock_list).
+
+    DataFrames are stored as copies so downstream mutation (adding indicator
+    columns) never corrupts the cached source data.
+    """
+    if _REGISTRY_KEY not in st.session_state:
+        st.session_state[_REGISTRY_KEY] = {}
+    st.session_state[_REGISTRY_KEY][frozenset(stock_list)] = {
+        "data":       {k: v.copy() for k, v in data_dict.items()},
+        "end_date":   end_date,
+        "fetched_at": datetime.datetime.now(_IST),
+    }
+
+
+def get_universe_data(stock_list: list, end_date: datetime.date = None):
+    """Fetch OHLCV data for a universe, checking the session-state registry first.
+
+    Always fetches _MAX_DAYS_BACK days so screener, intelligence, and correlation
+    can all slice from the same pool without re-fetching.  Correlation callers
+    should pass only the universe symbols here, then supplement the returned dict
+    with a single-ticker fetch for the target asset if it is missing.
+
+    Returns: (data_dict, message_str) — same contract as fetch_batch_data.
+    """
+    if end_date is None:
+        end_date = _today_ist()
+
+    cached = _registry_get(stock_list, end_date)
+    if cached is not None:
+        console.detail(
+            f"Data registry HIT — {len(cached)} symbols available "
+            f"(requested {len(stock_list)}, end_date={end_date})"
+        )
+        return cached, f"✓ {len(cached)} symbols (session registry)"
+
+    console.detail(
+        f"Data registry MISS — fetching {len(stock_list)} symbols "
+        f"from yfinance (end_date={end_date}, days_back={_MAX_DAYS_BACK})"
+    )
+    data_dict, msg = fetch_batch_data(
+        stock_list, end_date=end_date, days_back=_MAX_DAYS_BACK
+    )
+    if data_dict:
+        _registry_put(stock_list, end_date, data_dict)
+    return data_dict, msg
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE INITIALIZATION
@@ -70,6 +167,8 @@ VERSION = "v3.1.0"
 
 if "results_df" not in st.session_state:
     st.session_state["results_df"] = None
+if "active_weights" not in st.session_state:
+    st.session_state["active_weights"] = pe.DEFAULT_W.copy()
 if "run_screener_flag" not in st.session_state:
     st.session_state["run_screener_flag"] = False
 if "timeseries_done" not in st.session_state:
@@ -82,6 +181,25 @@ if "run_error" not in st.session_state:
     st.session_state["run_error"] = None
 if "corr_data" not in st.session_state:
     st.session_state["corr_data"] = None
+if "screener_meta" not in st.session_state:
+    st.session_state["screener_meta"] = None
+if _REGISTRY_KEY not in st.session_state:
+    st.session_state[_REGISTRY_KEY] = {}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Per-session weight helpers — keep calibrated weights in session_state so that
+# concurrent users on shared Streamlit Cloud deployments cannot overwrite each
+# other's active profile (the module-level `active_W` global in priority_engine
+# is shared across all sessions in the same process).
+# ──────────────────────────────────────────────────────────────────────────────
+def _set_active_weights(w: dict):
+    """Activate weights in both session_state (per-user) and pe module global (fallback)."""
+    st.session_state["active_weights"] = w
+    pe.set_active_weights(w)
+
+def _get_active_weights() -> dict:
+    """Return the active weights for this session, falling back to pe defaults."""
+    return st.session_state.get("active_weights", pe.DEFAULT_W)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INITIALIZE UI
@@ -471,8 +589,8 @@ def get_fno_stock_list():
                 if symbols:
                     symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
                     return symbols_ns, f"✓ Fetched {len(symbols_ns)} F&O securities"
-    except Exception:
-        pass
+    except Exception as e:
+        console.detail(f"F&O source 1 (NSE JSON) failed: {type(e).__name__}: {e}")
 
     try:
         stock_data = nse_get_advances_declines()
@@ -489,8 +607,8 @@ def get_fno_stock_list():
                 symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
                 if symbols_ns:
                     return symbols_ns, f"✓ Fetched {len(symbols_ns)} F&O securities"
-    except Exception:
-        pass
+    except Exception as e:
+        console.detail(f"F&O source 2 (advances/declines) failed: {type(e).__name__}: {e}")
 
     try:
         url = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
@@ -503,8 +621,8 @@ def get_fno_stock_list():
                 symbols = stock_df['Symbol'].tolist()
                 symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
                 return symbols_ns, f"✓ Fetched {len(symbols_ns)} stocks (NIFTY 500 fallback)"
-    except Exception:
-        pass
+    except Exception as e:
+        console.detail(f"F&O source 3 (NSE archive CSV) failed: {type(e).__name__}: {e}")
 
     return None, "Failed to fetch F&O list from all sources"
 
@@ -538,8 +656,8 @@ def get_index_stock_list(index):
                 if symbols:
                     symbols_ns = [str(s) + ".NS" for s in symbols]
                     return symbols_ns, f"✓ Fetched {len(symbols_ns)} constituents (NSE API)"
-    except Exception:
-        pass
+    except Exception as e:
+        console.detail(f"Index source 1 (NSE JSON API) failed for '{index}': {type(e).__name__}: {e}")
 
     # --- Source 2: NSE archives CSV ---
     url = INDEX_URL_MAP.get(index)
@@ -565,8 +683,8 @@ def get_index_stock_list(index):
                 symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
                 if symbols_ns:
                     return symbols_ns, f"✓ Fetched {len(symbols_ns)} constituents (NSE archive)"
-        except Exception:
-            pass
+        except Exception as e:
+            console.detail(f"Index source 2 (NSE archive CSV) failed for '{index}': {type(e).__name__}: {e}")
 
     # --- Source 3: Wikipedia fallback ---
     wiki_result = _fetch_index_from_wikipedia(index)
@@ -711,11 +829,11 @@ def get_etf_symbols():
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True):
     if end_date is None:
-        end_date = datetime.date.today()
-    
+        end_date = _today_ist()
+
     download_end = end_date + datetime.timedelta(days=5)
     start_date = end_date - datetime.timedelta(days=days_back + 365)
-    
+
     try:
         all_data = yf.download(
             stock_list,
@@ -730,27 +848,38 @@ def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True
         if all_data.empty:
             return None, "No data returned"
             
+        _ohlc_cols = ['Open', 'High', 'Low', 'Close']
+
+        def _clean_ticker_df(tdf):
+            """Drop rows where all core OHLC columns are NaN; keep rows with partial data."""
+            core = [c for c in _ohlc_cols if c in tdf.columns]
+            if core:
+                tdf = tdf.dropna(subset=core, how='all')
+            return tdf
+
         if isinstance(all_data, pd.DataFrame) and isinstance(all_data.columns, pd.MultiIndex):
             data_dict = {}
             for ticker in stock_list:
                 try:
                     ticker_df = all_data.xs(ticker, level=0, axis=1)
                     if not ticker_df.empty and not ticker_df['Close'].isnull().all():
-                        data_dict[ticker] = ticker_df.copy()
+                        data_dict[ticker] = _clean_ticker_df(ticker_df.copy())
                 except KeyError:
                     pass
         elif isinstance(all_data, dict):
-            data_dict = {t:df.copy() for t,df in all_data.items() if not df.empty and not df['Close'].isnull().all()}
+            data_dict = {t: _clean_ticker_df(df.copy()) for t, df in all_data.items()
+                         if not df.empty and not df['Close'].isnull().all()}
         else:
              return None, "Unexpected data structure"
 
-        if include_live and end_date == datetime.date.today() and data_dict:
+        if include_live and end_date == _today_ist() and data_dict:
             sample_df = list(data_dict.values())[0]
             sample_df.index = pd.to_datetime(sample_df.index)
             if sample_df.index.tz is not None:
-                 sample_df.index = sample_df.index.tz_localize(None)
-            
-            has_today = any(idx.date() == datetime.date.today() for idx in sample_df.index)
+                sample_df.index = sample_df.index.tz_convert(None)
+
+            _ist_today = _today_ist()
+            has_today = any(idx.date() == _ist_today for idx in sample_df.index)
             if not has_today:
                 try:
                     live_data = yf.download(list(data_dict.keys()), period="1d", progress=False, auto_adjust=True, group_by='ticker')
@@ -761,14 +890,16 @@ def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True
                                 if not live_ticker.empty and not live_ticker['Close'].isnull().all():
                                     hist_df = data_dict[ticker]
                                     hist_df.index = pd.to_datetime(hist_df.index)
-                                    if hist_df.index.tz is not None: hist_df.index = hist_df.index.tz_localize(None)
+                                    if hist_df.index.tz is not None: hist_df.index = hist_df.index.tz_convert(None)
                                     live_ticker.index = pd.to_datetime(live_ticker.index)
-                                    if live_ticker.index.tz is not None: live_ticker.index = live_ticker.index.tz_localize(None)
+                                    if live_ticker.index.tz is not None: live_ticker.index = live_ticker.index.tz_convert(None)
                                     new_dates = live_ticker.index.difference(hist_df.index)
                                     if len(new_dates) > 0:
                                         data_dict[ticker] = pd.concat([hist_df, live_ticker.loc[new_dates]]).sort_index()
-                            except KeyError: pass
-                except Exception: pass
+                            except KeyError:
+                                pass
+                except Exception as e:
+                    console.detail(f"Live-data append failed: {type(e).__name__}: {e}")
         return data_dict, f"✓ Downloaded {len(data_dict)} tickers"
     except Exception as e:
         return None, f"Download error: {e}"
@@ -779,13 +910,17 @@ def resample_to_weekly(df):
         return df
     df = df.copy()
     df.index = pd.to_datetime(df.index)
-    weekly = df.resample('W-MON', closed='left', label='left').agg({
+    weekly_raw = df.resample('W-MON', closed='left', label='left').agg({
         'Open': 'first',
         'High': 'max',
         'Low': 'min',
         'Close': 'last',
         'Volume': 'sum'
-    }).dropna()
+    })
+    weekly = weekly_raw.dropna()
+    dropped = len(weekly_raw) - len(weekly)
+    if dropped > 0:
+        console.detail(f"resample_to_weekly: dropped {dropped} incomplete week(s) with NaN OHLCV")
     return weekly
 
 
@@ -984,6 +1119,14 @@ def calculate_trend_count(series, length):
 
 
 def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40):
+    reg_len = max(reg_len, 2)
+    # Auto-correct inverted OB levels (obLevel1 must be the stronger/higher bound)
+    if obLevel1 < obLevel2:
+        obLevel1, obLevel2 = obLevel2, obLevel1
+    # Auto-correct inverted OS levels (osLevel1 must be the stronger/lower bound)
+    if osLevel1 > osLevel2:
+        osLevel1, osLevel2 = osLevel2, osLevel1
+
     hlc3 = (df['High'] + df['Low'] + df['Close']) / 3.0
     vol = df['Volume']
     
@@ -1005,7 +1148,7 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     ap = hlc3
     esa = calculate_ema(ap, n1)
     d = calculate_ema((ap - esa).abs(), n1)
-    ci = (ap - esa) / (0.015 * d).replace(0, np.nan)
+    ci = (ap - esa) / np.maximum(0.015 * d, 1e-6)
     tci = calculate_ema(ci, n2)
 
     wt1 = tci
@@ -1327,7 +1470,9 @@ class AdaptiveHMM:
         if total > 1e-10:
             updated /= total
         else:
-            updated = np.array([0.33, 0.34, 0.33])
+            # Carry forward prior state rather than resetting to uniform —
+            # preserves regime belief when all emissions are numerically tiny.
+            updated = self.state_probabilities.copy()
         self.state_probabilities = updated
         most_likely = np.argmax(updated)
         self.state_history.append(most_likely)
@@ -1413,8 +1558,9 @@ class CUSUMDetector:
             self.running_std = max(np.std(recent), 0.1)
         
         z = (value - self.running_mean) / self.running_std
-        self.positive_cusum = max(0, self.positive_cusum + z - self.drift)
-        self.negative_cusum = max(0, self.negative_cusum - z - self.drift)
+        # 0.99 decay prevents unreleased drift from accumulating during quiet periods
+        self.positive_cusum = max(0, self.positive_cusum * 0.99 + z - self.drift)
+        self.negative_cusum = max(0, self.negative_cusum * 0.99 - z - self.drift)
         
         change_detected = self.positive_cusum > self.threshold or self.negative_cusum > self.threshold
         
@@ -1483,6 +1629,23 @@ def run_regime_analysis(df):
     f2_vals = df['F2_VolQual'].values
     cv_vals = (df['Conviction'] / 20.0).values  # rescale to ~[-5, +5]
 
+    # Warmup pass: prime detectors on first bars so that bar-0 output isn't
+    # determined purely by uninformed priors. State is carried forward into the
+    # main recording loop; the warmup output is discarded.
+    _warmup = min(20, len(df) // 4)
+    for _wi in range(_warmup):
+        _f1 = 0.0 if np.isnan(f1_vals[_wi]) else f1_vals[_wi]
+        _f2 = 0.0 if np.isnan(f2_vals[_wi]) else f2_vals[_wi]
+        _cv = 0.0 if np.isnan(cv_vals[_wi]) else cv_vals[_wi]
+        _obs = 0.40 * _f1 + 0.25 * _f2 + 0.35 * _cv
+        _filt = kalman.update(_obs)
+        _shock = _obs - (signal_history[-1] if signal_history else 0.0)
+        garch.update(_shock)
+        hmm.update(_filt)
+        cusum.update(_filt)
+        signal_history.append(_obs)
+    signal_history.clear()   # reset history list; detector internal state is kept
+
     for i in range(len(df)):
         # Joint observation: weighted mean of orthogonal views
         f1 = 0.0 if np.isnan(f1_vals[i]) else f1_vals[i]
@@ -1522,7 +1685,25 @@ def run_regime_analysis(df):
     return df
 
 
-def calculate_divergences(df, lookback: int = 20):
+def _classify_signal_type(row) -> str:
+    """Return priority-ordered signal type for a single bar row (pandas Series).
+
+    Priority: B (composite) > A (momentum) > C (threshold) > D (squeeze) > Zone.
+    Matches the vectorised np.select used in the timeseries harvest path.
+    """
+    if row.get('long_cond_comp'):  return "B: Long"
+    if row.get('short_cond_comp'): return "B: Short"
+    if row.get('long_cond'):       return "A: Long"
+    if row.get('short_cond'):      return "A: Short"
+    if row.get('long_cond_wt'):    return "C: Long"
+    if row.get('short_cond_wt'):   return "C: Short"
+    if row.get('long_cond_sqz'):   return "D: Long"
+    if row.get('short_cond_sqz'):  return "D: Short"
+    cond = row.get('Condition', 'Neutral')
+    return cond if cond != 'Neutral' else '-'
+
+
+def calculate_divergences(df, lookback: int = 20, timeframe: str = "Daily"):
     """
     Peak-trough divergence over `lookback` bars. Replaces 1-bar comparison
     which produced ~30% false positives.
@@ -1531,6 +1712,10 @@ def calculate_divergences(df, lookback: int = 20):
                         but latest WT1 local-low is HIGHER (in OS context).
     Bearish divergence: latest local price-high is HIGHER than previous,
                         but latest WT1 local-high is LOWER (in OB context).
+
+    `order` is scaled to timeframe so that the neighborhood covers a similar
+    real-time span on both daily and weekly charts: order=3 ≈ 1 week on daily,
+    order=2 ≈ 4 weeks on weekly.
     """
     from scipy.signal import argrelextrema
     close = df['Close'].values
@@ -1538,24 +1723,31 @@ def calculate_divergences(df, lookback: int = 20):
     n     = len(df)
     bull  = np.zeros(n, dtype=bool)
     bear  = np.zeros(n, dtype=bool)
+    order = 2 if timeframe == "Weekly" else 3
 
     for i in range(lookback, n):
         wc = close[i - lookback : i + 1]
         wo = osc[i - lookback : i + 1]
-        c_lows  = argrelextrema(wc, np.less,    order=3)[0]
-        c_highs = argrelextrema(wc, np.greater, order=3)[0]
-        o_lows  = argrelextrema(wo, np.less,    order=3)[0]
-        o_highs = argrelextrema(wo, np.greater, order=3)[0]
+        c_lows  = argrelextrema(wc, np.less,    order=order)[0]
+        c_highs = argrelextrema(wc, np.greater, order=order)[0]
+        o_lows  = argrelextrema(wo, np.less,    order=order)[0]
+        o_highs = argrelextrema(wo, np.greater, order=order)[0]
+
+        # Adaptive OS/OB thresholds: use the 30th/70th percentile of the window
+        # so the trigger scales with the actual oscillator range for this asset,
+        # rather than assuming a fixed [-100, +100] normalized range.
+        bull_thresh = min(-30.0, float(np.percentile(wo, 30)))
+        bear_thresh = max( 30.0, float(np.percentile(wo, 70)))
 
         if len(c_lows) >= 2 and len(o_lows) >= 2:
             if (wc[c_lows[-1]] < wc[c_lows[-2]]
                 and wo[o_lows[-1]] > wo[o_lows[-2]]
-                and wo[o_lows[-1]] < -30):
+                and wo[o_lows[-1]] < bull_thresh):
                 bull[i] = True
         if len(c_highs) >= 2 and len(o_highs) >= 2:
             if (wc[c_highs[-1]] > wc[c_highs[-2]]
                 and wo[o_highs[-1]] < wo[o_highs[-2]]
-                and wo[o_highs[-1]] > 30):
+                and wo[o_highs[-1]] > bear_thresh):
                 bear[i] = True
 
     df['Bullish_Div'] = bull
@@ -1683,21 +1875,21 @@ def render_sidebar():
 
         # Analysis Depth
         st.markdown('<div class="sidebar-title">Analysis Depth</div>', unsafe_allow_html=True)
-        timeframe = st.selectbox("Timeframe", TIMEFRAME_OPTIONS, label_visibility="collapsed")
+        timeframe = st.selectbox("Timeframe", TIMEFRAME_OPTIONS, key="sb_timeframe", label_visibility="collapsed")
 
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
         # Universe Selection
         st.markdown('<div class="sidebar-title">Universe Selection</div>', unsafe_allow_html=True)
-        universe = st.selectbox("Universe", UNIVERSE_OPTIONS, label_visibility="collapsed")
+        universe = st.selectbox("Universe", UNIVERSE_OPTIONS, key="sb_universe", label_visibility="collapsed")
         selected_index = None
 
         if universe == "India Indexes":
-            selected_index = st.selectbox("Index", INDEX_LIST, index=INDEX_LIST.index("Benchmark Indexes"), label_visibility="collapsed")
+            selected_index = st.selectbox("Index", INDEX_LIST, index=INDEX_LIST.index("Benchmark Indexes"), key="sb_india_index", label_visibility="collapsed")
         elif universe == "Global Indexes":
             selected_index = "Global Benchmark Indexes"
         elif universe == "US Indexes":
-            selected_index = st.selectbox("Index", US_INDEX_LIST, index=US_INDEX_LIST.index("DOW JONES"), label_visibility="collapsed")
+            selected_index = st.selectbox("Index", US_INDEX_LIST, index=US_INDEX_LIST.index("DOW JONES"), key="sb_us_index", label_visibility="collapsed")
         elif universe == "ETF Index":
             selected_index = "NSE ETF Universe"
         elif universe == "Commodities":
@@ -1716,38 +1908,39 @@ def render_sidebar():
         analysis_mode = st.selectbox(
             "Mode",
             ["Single Date", "Historical Range", "Correlation Analysis", "Pulse Narrative", "Intelligence (Self-Tuning)"],
+            key="sb_mode",
             label_visibility="collapsed",
         )
 
         if analysis_mode in ["Single Date", "Pulse Narrative"]:
             st.markdown('<div class="sidebar-title">Analysis Date</div>', unsafe_allow_html=True)
-            analysis_date = st.date_input("Date", datetime.date.today(), max_value=datetime.date.today(), label_visibility="collapsed")
+            analysis_date = st.date_input("Date", _today_ist(), max_value=_today_ist(), key="sb_analysis_date", label_visibility="collapsed")
             start_date_hist, end_date_hist = None, None
             corr_target_ticker, corr_lookback, corr_method = None, 90, "Pearson"
         elif analysis_mode in ["Historical Range", "Intelligence (Self-Tuning)"]:
             st.markdown('<div class="sidebar-title">Analysis Range</div>', unsafe_allow_html=True)
-            analysis_date = datetime.date.today()
-            today = datetime.date.today()
+            analysis_date = _today_ist()
+            today = _today_ist()
             col_date1, col_date2 = st.columns(2)
             with col_date1:
                 start_date_hist = st.date_input(
                     "Start", today - datetime.timedelta(days=300),
-                    max_value=today, label_visibility="collapsed",
+                    max_value=today, key="sb_start_date", label_visibility="collapsed",
                 )
             with col_date2:
                 end_date_hist = st.date_input(
-                    "End", today, max_value=today, label_visibility="collapsed",
+                    "End", today, max_value=today, key="sb_end_date", label_visibility="collapsed",
                 )
             corr_target_ticker, corr_lookback, corr_method = None, 90, "Pearson"
         else:  # Correlation Analysis mode
             st.markdown('<div class="sidebar-title">Analysis Date</div>', unsafe_allow_html=True)
-            analysis_date = st.date_input("Analysis Date", datetime.date.today(), max_value=datetime.date.today(), label_visibility="collapsed")
+            analysis_date = st.date_input("Analysis Date", _today_ist(), max_value=_today_ist(), key="sb_corr_date", label_visibility="collapsed")
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             start_date_hist, end_date_hist = None, None
 
             # Target Asset Panel
             st.markdown('<div class="sidebar-title">Target Asset</div>', unsafe_allow_html=True)
-            target_class = st.selectbox("Asset Class", ["Commodities", "Currency", "Crypto", "Global Indexes"], label_visibility="collapsed")
+            target_class = st.selectbox("Asset Class", ["Commodities", "Currency", "Crypto", "Global Indexes"], key="sb_target_class", label_visibility="collapsed")
 
             # Build target asset options from maps
             if target_class == "Commodities":
@@ -1763,14 +1956,14 @@ def render_sidebar():
                 target_map = GLOBAL_INDEXES_MAP
                 target_display_names = list(GLOBAL_INDEXES_MAP.keys())
 
-            target_selected = st.selectbox("Asset", target_display_names, label_visibility="collapsed")
+            target_selected = st.selectbox("Asset", target_display_names, key="sb_target_asset", label_visibility="collapsed")
             corr_target_ticker = target_map.get(target_selected, target_selected)
 
             # Correlation params
             st.markdown('<div class="sidebar-title">Analysis Params</div>', unsafe_allow_html=True)
-            corr_lookback_str = st.selectbox("Lookback", ["30D", "60D", "90D", "180D"], label_visibility="collapsed")
+            corr_lookback_str = st.selectbox("Lookback", ["30D", "60D", "90D", "180D"], key="sb_corr_lookback", label_visibility="collapsed")
             corr_lookback = int(corr_lookback_str.replace("D", ""))
-            corr_method = st.selectbox("Method", ["Pearson", "Spearman"], label_visibility="collapsed")
+            corr_method = st.selectbox("Method", ["Pearson", "Spearman"], key="sb_corr_method", label_visibility="collapsed")
 
         # WRCI Engine — hardcoded defaults
         reg_len, wt_n1, wt_n2 = 20, 10, 21
@@ -1785,6 +1978,7 @@ def render_sidebar():
             # a bit more exploration than the symmetric (13-dim) era's 50-default.
             calib_trials = st.slider(
                 "Search Trials", min_value=20, max_value=200, value=75, step=5,
+                key="sb_calib_trials",
                 help=(
                     "Number of weight configurations Optuna's TPE sampler will try. "
                     "Independent of date range and universe size. Asymmetric search "
@@ -1795,6 +1989,7 @@ def render_sidebar():
             # Slider is in percentage units to match the body summary line ("Split 70 / 30").
             calib_train_pct = st.slider(
                 "Train / Val Split", min_value=50, max_value=90, value=70, step=5,
+                key="sb_calib_train_pct",
                 help=(
                     "Percent of dates used to fit weights. Remainder is held out "
                     "for out-of-sample (validation) IR."
@@ -1808,7 +2003,7 @@ def render_sidebar():
         calib_settings = {
             "trials":     calib_trials,
             "train_frac": calib_train_frac,
-            "horizons":   [2, 3, 5, 8, 13],
+            "horizons":   pe.HOLD_HORIZONS,
         }
 
         # ── Date-range validation (Historical Range / Intelligence only) ──
@@ -1840,17 +2035,17 @@ def render_sidebar():
         )
 
         # ── Per-universe profile sync (must run BEFORE Passport renders) ──
-        # When the (universe, selected_index) pair changes — including the click
-        # that triggered THIS rerun — load the matching profile from disk so the
-        # Passport reflects the new universe in the same render frame instead of
-        # lagging by one interaction.
-        _current_uni_key = (universe, selected_index)
+        # When the (universe, selected_index, timeframe) triple changes — including
+        # the click that triggered THIS rerun — load the matching profile from disk
+        # so the Passport reflects the new universe/depth in the same render frame
+        # instead of lagging by one interaction.
+        _current_uni_key = (universe, selected_index, timeframe)
         _previous_uni_key = st.session_state.get("_last_universe_key")
         if _previous_uni_key != _current_uni_key:
-            _profile = pe.load_profile_for(universe, selected_index)
+            _profile = pe.load_profile_for(universe, selected_index, timeframe)
             _uni_label = (selected_index or universe or "—")
             if _profile and isinstance(_profile.get("weights"), dict):
-                pe.set_active_weights(_profile["weights"])
+                _set_active_weights(_profile["weights"])
                 st.session_state["opt_results"] = _profile
                 # Don't log the very first sync of a session (already covered by the
                 # session-start banner); only log genuine universe transitions.
@@ -1861,7 +2056,7 @@ def render_sidebar():
                         f"Profile loaded · {_uni_label} · val IR {_ir_s}"
                     )
             else:
-                pe.set_active_weights(pe.DEFAULT_W)
+                _set_active_weights(pe.DEFAULT_W)
                 if "opt_results" in st.session_state:
                     del st.session_state["opt_results"]
                 if _previous_uni_key is not None:
@@ -1873,7 +2068,7 @@ def render_sidebar():
         # Model Passport — rendered in every mode. Surfaces the active priority
         # profile (default vs calibrated) and warns when the calibrated universe
         # differs from the current sidebar selection.
-        _render_model_passport_sidebar(universe, selected_index)
+        _render_model_passport_sidebar(universe, selected_index, timeframe)
 
         # System Spec Card — always rendered as the LAST block in the sidebar.
         try:
@@ -1972,8 +2167,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (15 * progress_scale / 100)
         progress_bar(progress_slot, pct_val, "Fetching Market Data", f"{len(stock_list)} stocks")
-    # Fetch data up to today to allow calculating performance "since" a past analysis date
-    data_dict, fetch_msg = fetch_batch_data(stock_list, end_date=datetime.date.today())
+    # Fetch up to today (IST) — always hits registry first; only goes to yfinance on miss
+    data_dict, fetch_msg = get_universe_data(stock_list, end_date=_today_ist())
 
     if not data_dict:
         console.error(fetch_msg)
@@ -1997,6 +2192,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         progress_bar(progress_slot, pct_val, "Analyzing WRCI momentum", f"{len(data_dict)} stocks")
 
     results = []
+    _failed_symbols = []
 
     _tf_label = "weekly" if timeframe == "Weekly" else "daily"
     console.section(f"Signal Analysis — {len(data_dict)} {_tf_label} instruments")
@@ -2016,7 +2212,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
             df = run_full_analysis(df, reg_len, wt_n1, wt_n2, obLevel1, obLevel2, osLevel1, osLevel2)
             df = run_regime_analysis(df)        # adds HMM_Bull/Bear, Vol_Regime, Change_Point, Regime_Confidence
-            df = calculate_divergences(df)      # adds Bullish_Div, Bearish_Div
+            df = calculate_divergences(df, timeframe=timeframe)      # adds Bullish_Div, Bearish_Div
 
             # Sample at analysis_date or last available
             df.index = pd.to_datetime(df.index)
@@ -2026,6 +2222,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 idx_pos = df.index.get_loc(target_dt)
             else:
                 idx_pos = len(df) - 1
+                console.detail(f"{ticker}: analysis_date {analysis_date} not in data — using nearest available {df.index[idx_pos].date()}")
 
             if idx_pos < 5:
                 continue
@@ -2035,26 +2232,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
             last_row = df.iloc[idx_pos]
 
-            # Build Signal String — priority: Set B > Set A > Set C > Set D > Zone
-            signal_type = "-"
-            if last_row['long_cond_comp']:
-                signal_type = "B: Long"
-            elif last_row['short_cond_comp']:
-                signal_type = "B: Short"
-            elif last_row['long_cond']:
-                signal_type = "A: Long"
-            elif last_row['short_cond']:
-                signal_type = "A: Short"
-            elif last_row['long_cond_wt']:
-                signal_type = "C: Long"
-            elif last_row['short_cond_wt']:
-                signal_type = "C: Short"
-            elif last_row['long_cond_sqz']:
-                signal_type = "D: Long"
-            elif last_row['short_cond_sqz']:
-                signal_type = "D: Short"
-            elif last_row['Condition'] != 'Neutral':
-                signal_type = last_row['Condition']
+            signal_type = _classify_signal_type(last_row)
 
             # Clean display names
             simple_name = ticker.replace(".NS", "").lstrip("^")
@@ -2068,15 +2246,17 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             prev_close = df.iloc[idx_pos - 1]['Close'] if idx_pos > 0 else last_row['Close']
             pct_change = ((last_row['Close'] - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
 
-            # Calculate % change since analysis date if it's in the past relative to latest bar
-            pct_chng_since = 0.0
+            # Calculate % change since analysis date if it's in the past relative to latest bar.
+            # Use None sentinel for missing data so downstream display can show "—" rather than 0.0.
+            pct_chng_since = None
             if idx_pos < len(df) - 1:
                 analysis_price = last_row['Close']
                 latest_price = df.iloc[-1]['Close']
-                pct_chng_since = ((latest_price - analysis_price) / analysis_price * 100) if analysis_price > 0 else 0.0
+                if pd.notna(analysis_price) and pd.notna(latest_price) and analysis_price > 0:
+                    pct_chng_since = round((latest_price - analysis_price) / analysis_price * 100, 2)
 
             results.append({
-                "% Chng Since": round(pct_chng_since, 2),
+                "% Chng Since": pct_chng_since,  # None when data unavailable — displays as NaN / "—"
                 "Symbol": ticker,
                 "DisplayName": display_name,
                 "SimpleName": simple_name,
@@ -2175,19 +2355,29 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             
         except Exception as e:
             console.failure(f"Analysis Failed: {ticker}", str(e))
+            _failed_symbols.append(ticker)
             continue
 
     console.end_phase("WRCI MOMENTUM ANALYSIS")
-    
+
+    _fail_count = len(_failed_symbols)
     console.summary("RUN SUMMARY", {
         "Universe": universe,
         "Universe Index": selected_index,
         "Total Symbols": len(stock_list),
         "Data Success": len(data_dict),
         "Analyzed Stocks": len(results),
+        "Failed Symbols": f"{_fail_count} ({', '.join(_failed_symbols[:5])}{'…' if _fail_count > 5 else ''})" if _fail_count else "0",
         "Analysis Date": analysis_date,
-        "Status": "COMPLETE"
+        "Status": "COMPLETE",
     })
+    # Surface run stats so body renders can show "47 / 50 symbols · Daily · 2025-01-15"
+    st.session_state["screener_run_stats"] = {
+        "total_in_universe": len(stock_list),
+        "data_fetched":      len(data_dict),
+        "analyzed":          len(results),
+        "failed":            _fail_count,
+    }
     console.line('═', 70)
     
     if show_progress or external_progress_slot is not None:
@@ -2197,7 +2387,20 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             progress_slot.empty()
 
     if not results:
-        st.info("No stocks met the analysis criteria.")
+        _n_fetched = len(data_dict)
+        _n_total   = len(stock_list)
+        if _n_fetched == 0:
+            st.warning(
+                f"**No market data retrieved** for {selected_index} as of {analysis_date}. "
+                "The exchange may have been closed, or yfinance may be rate-limiting. "
+                "Try refreshing or selecting a recent trading day."
+            )
+        else:
+            st.info(
+                f"**No signals found** — {_n_fetched} of {_n_total} symbols had data for {analysis_date}, "
+                "but none produced a WRCI signal in the current timeframe. "
+                "Try an adjacent trading date, or check that the selected date is a market session."
+            )
         # Return empty DataFrame with expected columns to prevent downstream KeyErrors
         expected_cols = [
             "Symbol", "DisplayName", "SimpleName", "Signal", "Trend", "Wave", "Zone", "SignalType", "Price", "PctChange",
@@ -2212,9 +2415,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     results_df = pd.DataFrame(results)
     
-    # Global ranking via Priority Engine
+    # Global ranking via Priority Engine — pass weights explicitly from session_state
+    # to prevent cross-session weight bleed on shared Streamlit Cloud deployments.
     if not results_df.empty:
-        results_df = compute_priority(results_df)
+        results_df = compute_priority(results_df, weights=_get_active_weights())
         # Default sort by Long Percentile for the global table
         results_df = results_df.sort_values('Priority_Long', ascending=False)
         
@@ -2267,7 +2471,8 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
     console.success(f"Fetched {len(stock_list)} symbols for {selected_index}")
     console.section("Mass Historical Download")
-    data_dict, msg = fetch_batch_data(stock_list, end_date=end_date, days_back=500)
+    # Registry-first: if the same universe was fetched recently it won't hit yfinance again
+    data_dict, msg = get_universe_data(stock_list, end_date=end_date)
 
     if not data_dict:
         console.error("No historical data available")
@@ -2297,10 +2502,10 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                 df = resample_to_weekly(df)
             df = run_full_analysis(df, reg_len, wt_n1, wt_n2, *levels)
             df = run_regime_analysis(df)
-            df = calculate_divergences(df)
+            df = calculate_divergences(df, timeframe=timeframe)
 
-            # Calculate forward returns for training [2, 3, 5, 8, 13]
-            for h in [2, 3, 5, 8, 13]:
+            # Calculate forward returns for each training horizon
+            for h in pe.HOLD_HORIZONS:
                 df[f'Ret_{h}b'] = df['Close'].shift(-h) / df['Close'] - 1
 
             # Vectorized SignalType per bar (priority order: B > A > C > D > Zone)
@@ -2420,11 +2625,11 @@ def _aggregate_timeseries(ts_df):
         'Wave': 'mean',
         'LongSignal': 'sum',
         'ShortSignal': 'sum',
-        'Zone': lambda x: x.mode()[0] if len(x.mode()) > 0 else 'Neutral',
-        'Regime': lambda x: x.mode()[0] if len(x.mode()) > 0 else 'NEUTRAL',
+        'Zone': lambda x: x.value_counts().idxmax() if len(x) > 0 else 'Neutral',
+        'Regime': lambda x: x.value_counts().idxmax() if len(x) > 0 else 'NEUTRAL',
         'HMM_Bull': 'mean',
         'HMM_Bear': 'mean',
-        'Vol_Regime': lambda x: x.mode()[0] if len(x.mode()) > 0 else 'NORMAL',
+        'Vol_Regime': lambda x: x.value_counts().idxmax() if len(x) > 0 else 'NORMAL',
         'Change_Point': 'sum',
         'Regime_Confidence': 'mean',
         'Bullish_Div': 'sum',
@@ -2432,7 +2637,11 @@ def _aggregate_timeseries(ts_df):
     })
 
     daily_agg['TotalSignals'] = daily_agg['LongSignal'] + daily_agg['ShortSignal']
-    daily_agg['L_S_Ratio']    = daily_agg['LongSignal'] / (daily_agg['ShortSignal'] + 0.01)
+    daily_agg['L_S_Ratio']    = np.where(
+        daily_agg['ShortSignal'] == 0,
+        np.nan,                          # undefined (all longs, no shorts) — show as NaN in charts
+        daily_agg['LongSignal'] / daily_agg['ShortSignal'],
+    )
     daily_agg['Conviction']   = daily_agg['Signal'].abs()
 
     zone_counts   = ts_df.groupby('Date')['Zone'].apply(lambda x: (x.isin(['OB Extreme', 'OB'])).sum())
@@ -2533,20 +2742,23 @@ def render_timeseries_dashboard():
                                        mode='lines', name='Overbought %',
                                        fill='tozeroy', fillcolor='rgba(251,113,133,0.12)',
                                        line=dict(color='#E8555A', width=2)))
-        ymax = max(daily_agg['Oversold_Pct'].max(), daily_agg['Overbought_Pct'].max()) * 1.15
-        fig_zones.update_layout(title='', height=350, hovermode='x unified', yaxis=dict(range=[0, ymax]))
+        _pct_raw = max(daily_agg['Oversold_Pct'].max(), daily_agg['Overbought_Pct'].max())
+        _pct_raw = float(_pct_raw) if pd.notna(_pct_raw) and np.isfinite(_pct_raw) else 0.0
+        ymax = max(_pct_raw * 1.15, 5.0)   # floor at 5 so axis always renders sensibly
+        fig_zones.update_layout(title='', height=350, hovermode='x unified',
+                                yaxis=dict(range=[0, ymax], title='% of Universe'))
         apply_chart_theme(fig_zones)
         st.plotly_chart(fig_zones, width='stretch', key='chart_zones')
 
         st.markdown("<br>", unsafe_allow_html=True)
-        ui.render_section_header("Signal Volume Trends", "Raw Counts Over Time",
+        ui.render_section_header("Signal Count by Date", "Long vs Short Signal Count per Session",
                                  icon="bar-chart", accent="info")
         fig_counts = go.Figure()
         fig_counts.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['LongSignal'],
-                                    name='Oversold',
+                                    name='Long Signals',
                                     marker=dict(color='#2DD4A8', line=dict(color='#2DD4A8', width=1))))
         fig_counts.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['ShortSignal'],
-                                    name='Overbought',
+                                    name='Short Signals',
                                     marker=dict(color='#E8555A', line=dict(color='#E8555A', width=1))))
         fig_counts.update_layout(title='', height=300, hovermode='x unified', barmode='group')
         apply_chart_theme(fig_counts)
@@ -2620,7 +2832,8 @@ def render_timeseries_dashboard():
                                         mode='lines', name='Bear Regime %',
                                         fill='tozeroy', fillcolor='rgba(232,85,90,0.12)',
                                         line=dict(color='#E8555A', width=2)))
-        fig_regime.update_layout(title='', height=300, hovermode='x unified', yaxis=dict(range=[0, 100]))
+        fig_regime.update_layout(title='', height=300, hovermode='x unified',
+                                 yaxis=dict(range=[0, 100], title='% of Universe'))
         apply_chart_theme(fig_regime)
         st.plotly_chart(fig_regime, width='stretch', key='chart_regime')
 
@@ -2636,9 +2849,13 @@ def render_timeseries_dashboard():
                                      line=dict(color='#D4A853', width=2),
                                      marker=dict(size=5)))
         fig_vol.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['Change_Point'],
-                                 name='Change Points',
+                                 name='Symbols with Regime Change',
                                  marker=dict(color='#A855F7', opacity=0.7)))
-        fig_vol.update_layout(title='', height=250, hovermode='x unified')
+        fig_vol.update_layout(
+            title='', height=250, hovermode='x unified',
+            yaxis=dict(title='# Symbols'),
+            yaxis2=dict(title='High-Vol %', overlaying='y', side='right'),
+        )
         apply_chart_theme(fig_vol)
         st.plotly_chart(fig_vol, width='stretch', key='chart_volatility')
 
@@ -2727,7 +2944,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
     plus WRCI confluence scoring for trade intelligence.
     """
     if analysis_date is None:
-        analysis_date = datetime.date.today()
+        analysis_date = _today_ist()
     progress_slot = st.empty()
     progress_bar(progress_slot, 5, "Initializing Correlation Engine", "Fetching Market Data")
 
@@ -2757,20 +2974,37 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         console.item("Symbols fetched", len(stock_list))
 
-        # Combine with target asset
-        combined_list = list(set(stock_list + [target_ticker]))
-        console.item("Combined symbols", len(combined_list))
+        progress_bar(progress_slot, 15, "Fetching OHLCV Data", f"Symbols: {len(stock_list)}")
 
-        progress_bar(progress_slot, 15, "Fetching OHLCV Data", f"Symbols: {len(combined_list)}")
-
-        # Fetch data
-        data_dict, fetch_msg = fetch_batch_data(combined_list, days_back=lookback + 60)
+        # ── Universe data from registry (shared pool with screener / intelligence) ──
+        # Passing only the universe symbols so the registry key is consistent with
+        # the screener and timeseries paths.  The target ticker is supplemented
+        # below with a single small fetch if it is not already in the pool.
+        data_dict, fetch_msg = get_universe_data(stock_list, end_date=analysis_date)
         if data_dict is None:
             st.error(f"Data fetch failed: {fetch_msg}")
             console.item("Data fetch error", fetch_msg)
             return None
 
-        console.item("Data fetched for symbols", len(data_dict))
+        # ── Supplement with target ticker if not already in the universe pool ──
+        if target_ticker not in data_dict:
+            console.detail(
+                f"Target ticker '{target_ticker}' not in registry — fetching individually"
+            )
+            target_raw, _ = fetch_batch_data(
+                [target_ticker], end_date=analysis_date, days_back=_MAX_DAYS_BACK
+            )
+            if target_raw and target_ticker in target_raw:
+                # Merge into a new dict so we don't mutate the registry entry
+                data_dict = {**data_dict, target_ticker: target_raw[target_ticker]}
+                console.detail(f"Target ticker '{target_ticker}' merged into data pool")
+            else:
+                st.error(f"Could not fetch target asset '{target_ticker}'")
+                return None
+        else:
+            console.detail(f"Target ticker '{target_ticker}' already in registry pool")
+
+        console.item("Data available for symbols", len(data_dict))
 
         progress_bar(progress_slot, 25, "Building Price Matrix", "Pivoting Close Prices")
 
@@ -2847,7 +3081,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
             for col in universe_returns.columns:
                 try:
-                    col_vals = universe_returns[col].ffill().bfill().values
+                    col_vals = universe_returns[col].fillna(0.0).values
 
                     # Compute rolling correlation using DataFrame.rolling.corr()
                     temp_df = pd.DataFrame({
@@ -2899,12 +3133,25 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 elif abs_corr >= 0.2: return "Weak-"
                 else: return "Neutral"
 
-        # Run WRCI analysis on the universe for confluence
-        # Pass progress tracking to show detailed per-symbol analysis (75-90% of correlation progress)
-        wrci_results = run_screener_analysis(
-            universe, selected_index, analysis_date, 20, 10, 21, (80, 40, -80, -40), timeframe,
-            show_progress=False, external_progress_slot=progress_slot, progress_offset=75, progress_scale=15
+        # Reuse screener results from session state when they match the current run —
+        # avoids a full re-fetch+re-analysis just to enrich the correlation output.
+        _smeta = st.session_state.get("screener_meta")
+        _sdf   = st.session_state.get("results_df")
+        _can_reuse = (
+            _smeta is not None and _sdf is not None and not _sdf.empty
+            and _smeta.get("universe")       == universe
+            and _smeta.get("selected_index") == selected_index
+            and _smeta.get("analysis_date")  == analysis_date
+            and _smeta.get("timeframe")      == timeframe
         )
+        if _can_reuse:
+            console.detail("Correlation: reusing cached screener results from session state")
+            wrci_results = _sdf
+        else:
+            wrci_results = run_screener_analysis(
+                universe, selected_index, analysis_date, 20, 10, 21, (80, 40, -80, -40), timeframe,
+                show_progress=False, external_progress_slot=progress_slot, progress_offset=75, progress_scale=15
+            )
 
         progress_bar(progress_slot, 90, "Building Results DataFrame", "Computing Divergence Metrics")
 
@@ -2987,13 +3234,20 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             ).max(axis=1).fillna(0)
             pri_norm = abs_pri / max(abs_pri.max(), 1e-6)        # [0, 1]
             corr_df['Priority_Strength'] = pri_norm
-            corr_df['Confluence_Score'] = corr_df['Corr_Current'].abs() * pri_norm
+            corr_df['Confluence_Score'] = (corr_df['Corr_Current'].abs() * pri_norm).clip(0.0, 1.0)
             console.item("Confluence formula", "|Corr| × calibrated Priority strength")
         else:
+            # Normalise by the 95th-percentile absolute oscillator value so the
+            # scale adapts to the current universe (weekly ≈ ±40, crypto ≈ ±200)
+            # rather than assuming a fixed ±80 range.
+            _osc_p95 = max(corr_df['WRCI_Signal'].abs().quantile(0.95), 1.0)
             corr_df['Confluence_Score'] = (
-                corr_df['Corr_Current'].abs() * (corr_df['WRCI_Signal'].fillna(0).abs() / 80.0)
+                corr_df['Corr_Current'].abs() * (corr_df['WRCI_Signal'].fillna(0).abs() / _osc_p95)
+            ).clip(0.0, 1.0)
+            console.item(
+                "Confluence formula",
+                f"|Corr| × |WRCI_Signal|/{_osc_p95:.1f} (fallback — no priority data; scale from p95)"
             )
-            console.item("Confluence formula", "|Corr| × |WRCI_Signal|/80 (fallback — no priority data)")
 
         # Get target name from maps (maps are display_name -> ticker, so reverse lookup)
         target_name = target_ticker
@@ -3025,7 +3279,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         st.error(f"Correlation analysis error: {str(e)}")
         console.item("Exception", str(e))
         import traceback
-        console.item("Traceback", traceback.format_exc()[-500:])
+        console.item("Traceback", traceback.format_exc()[:2000])
         return None
 
 
@@ -3145,10 +3399,10 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
                 <th class="numeric">Corr</th>
                 <th>Zone</th>
                 <th>Type</th>
-                <th class="numeric">Actual %</th>
-                <th class="numeric">Expected %</th>
-                <th class="numeric">Div %</th>
-                <th class="numeric">Confluence</th>
+                <th class="numeric" title="Symbol's price change on the analysis date">Actual %</th>
+                <th class="numeric" title="Expected move = target asset return × rolling correlation">Expected %</th>
+                <th class="numeric" title="Divergence = Actual − Expected (positive = outperforming expectation)">Div %</th>
+                <th class="numeric" title="Confluence = |Correlation| × normalised Priority strength [0–1]">Confluence</th>
             </tr>
         </thead>
         <tbody>
@@ -3302,19 +3556,24 @@ def render_correlation_results(corr_data: dict) -> None:
         </div>
         """, unsafe_allow_html=True)
 
-        # Trade setup classification
+        # Trade setup classification.
+        # Thresholds: corr ±0.4 = meaningful directional relationship;
+        # div ±2 = at least 2% price divergence from the target asset;
+        # zone conditions ensure the oscillator agrees with the setup direction.
+        _CORR_THRESH = 0.4   # minimum |correlation| to consider a relationship directional
+        _DIV_THRESH  = 2.0   # minimum % divergence to flag a laggard / runaway
         def classify_setup(row):
             corr = row['Corr_Current']
             div = row['Divergence']
             zone = row['WRCI_Zone']
 
-            if corr > 0.4 and div > 2 and zone in ['OS', 'OS Extreme']:
+            if corr > _CORR_THRESH and div > _DIV_THRESH and zone in ['OS', 'OS Extreme']:
                 return "LAGGARD"
-            elif corr > 0.4 and div < -2 and zone in ['OB', 'OB Extreme']:
+            elif corr > _CORR_THRESH and div < -_DIV_THRESH and zone in ['OB', 'OB Extreme']:
                 return "RUNAWAY"
             elif abs(corr) < 0.2:
                 return "CONVERGING"
-            elif corr < -0.4 and div < -2 and zone in ['OB', 'OB Extreme']:
+            elif corr < -_CORR_THRESH and div < -_DIV_THRESH and zone in ['OB', 'OB Extreme']:
                 return "CONTRA"
             else:
                 return "NEUTRAL"
@@ -4141,7 +4400,12 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width='stretch',
             key="sysdata_dl_full",
-            help=f"All {len(results_df)} symbols with every computed factor + a Legend sheet.",
+            help=(
+                f"All {len(results_df)} symbols with every computed factor. "
+                "Includes a Legend sheet defining each column: signal conditions (A/B/C/D), "
+                "factor descriptions (Price Momentum, Vol Quality, Conviction, Pulse, Wave), "
+                "and zone/regime definitions."
+            ),
         )
     with dl2:
         st.download_button(
@@ -4182,18 +4446,24 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     )
     cols = ["DisplayName", "Price", "Signal", "Narrative", "Priority_Long",
             "Priority_Long_pct", "F1_PriceMom", "F2_VolQual"]
-    if "% Chng Since" in results_df.columns and results_df["% Chng Since"].abs().sum() > 0:
+    if "% Chng Since" in results_df.columns and results_df["% Chng Since"].notna().any():
         cols.insert(2, "% Chng Since")
     cols += ["Conviction", "Conviction_Delta", "Pulse", "Pulse_Delta", "Wave"]
     l_cols = [c for c in results_df.columns
               if c.startswith('L_') and (c[2:].replace('d', '').isdigit() or c == 'L_Today')]
     cols += sorted(l_cols)
-    cols = [c for c in cols if c in results_df.columns]   # filter to existing cols
-    st.dataframe(
-        results_df[cols].sort_values("Priority_Long", ascending=False),
-        width='stretch',
-        height=500,
-    )
+    cols = [c for c in cols if c in results_df.columns]
+    # Rename internal factor column names to domain-readable labels for display
+    _col_display_names = {
+        "DisplayName":       "Symbol",
+        "F1_PriceMom":       "Price Momentum",
+        "F2_VolQual":        "Vol Quality",
+        "Priority_Long_pct": "Long Priority %ile",
+        "Conviction_Delta":  "Conv Δ",
+        "Pulse_Delta":       "Pulse Δ",
+    }
+    display_frame = results_df[cols].sort_values("Priority_Long", ascending=False).rename(columns=_col_display_names)
+    st.dataframe(display_frame, width='stretch', height=500)
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
@@ -4548,6 +4818,13 @@ def main():
             if results_df is None:
                 st.session_state["run_error"] = f"Failed to fetch constituents for '{selected_index}'."
             st.session_state["results_df"] = results_df
+            # Store metadata so correlation analysis can reuse these results
+            st.session_state["screener_meta"] = {
+                "universe":      universe,
+                "selected_index": selected_index,
+                "analysis_date": analysis_date,
+                "timeframe":     timeframe,
+            }
 
         elif mode == "Historical Range":
             console.header("SANKET TERMINAL — Bulk Range Intelligence", VERSION)
@@ -4610,14 +4887,22 @@ def main():
             if mode == "Pulse Narrative":
                 tab_narrative, tab_strength, tab_raw = st.tabs(["Pulse Narrative Dashboard", "Signal Strength", "System Data"])
                 with tab_narrative:
-                    ui.render_section_header(f"Pulse Narrative — {timeframe} Universe State", "Full universe ranking by Abnormal Acceleration.", icon="zap", accent="amber")
+                    _pn_stats   = st.session_state.get("screener_run_stats", {})
+                    _pn_n       = _pn_stats.get("analyzed", len(results_df))
+                    _pn_total   = _pn_stats.get("total_in_universe", _pn_n)
+                    _pn_date    = analysis_date.strftime("%d %b %Y") if hasattr(analysis_date, "strftime") else str(analysis_date)
+                    ui.render_section_header(
+                        f"Pulse Narrative — {timeframe} Universe State",
+                        f"{_pn_n} / {_pn_total} symbols · {_pn_date} · Full universe ranking by Abnormal Acceleration",
+                        icon="zap", accent="amber"
+                    )
                     avg_pulse = results_df['Pulse'].mean()
                     avg_conv = results_df['Conviction'].mean()
                     strong_pulse = len(results_df[results_df['Pulse'].abs() > 10])
                     bullish_bias = (results_df['Signal'] > 0).sum() / len(results_df) * 100 if len(results_df) > 0 else 0
                     m1, m2, m3, m4 = st.columns(4)
-                    with m1: ui.render_metric_card("Universe Pulse", f"{avg_pulse:+.2f}", "Avg Acceleration", "neutral")
-                    with m2: ui.render_metric_card("Universe Conv", f"{avg_conv:+.2f}", "Avg Conviction", "neutral")
+                    with m1: ui.render_metric_card("Universe Pulse", f"{avg_pulse:+.2f}", "Avg Acceleration (range ±100)", "neutral")
+                    with m2: ui.render_metric_card("Universe Conv", f"{avg_conv:+.2f}", "Avg Conviction (range ±100)", "neutral")
                     with m3: ui.render_metric_card("High Pulse", str(strong_pulse), f"{strong_pulse/len(results_df)*100 if len(results_df)>0 else 0:.0f}% Universe", "info")
                     with m4: ui.render_metric_card("Bullish Bias", f"{bullish_bias:.0f}%", "Signal > 0", "success" if bullish_bias > 50 else "danger")
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -4645,8 +4930,8 @@ def main():
                     pn_strong_t   = len(results_df[results_df['Trend'].abs() > 30])
 
                     s1, s2, s3, s4 = st.columns(4)
-                    with s1: ui.render_metric_card("Avg Pulse",      f"{pn_avg_pulse:.1f}", "Abnormal Acceleration", "neutral")
-                    with s2: ui.render_metric_card("Avg Conviction", f"{pn_avg_conv:.1f}",  "Blended confluence",    "neutral")
+                    with s1: ui.render_metric_card("Avg Pulse",      f"{pn_avg_pulse:.1f}", "Abnormal Acceleration (abs, ±100)", "neutral")
+                    with s2: ui.render_metric_card("Avg Conviction", f"{pn_avg_conv:.1f}",  "Blended confluence (abs, ±100)",    "neutral")
                     with s3: ui.render_metric_card("Strong Pulse",   str(pn_strong_p),
                                                    f"{pn_strong_p/len(results_df)*100:.0f}% of universe", "info")
                     with s4: ui.render_metric_card("Strong Trends",  str(pn_strong_t),
@@ -4685,9 +4970,14 @@ def main():
                 tab_signals, tab_strength, tab_raw = st.tabs(["Action Dashboard", "Signal Strength", "System Data"])
                 with tab_signals:
                     timeframe_label = "This Week's" if timeframe == 'Weekly' else "Today's"
+                    _run_stats = st.session_state.get("screener_run_stats", {})
+                    _n_analyzed = _run_stats.get("analyzed", len(results_df))
+                    _n_universe = _run_stats.get("total_in_universe", _n_analyzed)
+                    _date_str   = analysis_date.strftime("%d %b %Y") if hasattr(analysis_date, "strftime") else str(analysis_date)
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
-                        "Multi-condition momentum signals — Momentum (A) · Crossover (B) · Threshold (C) · Squeeze (D)",
+                        f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
+                        "Momentum (A) · Crossover (B) · Threshold (C) · Squeeze (D)",
                         icon="zap",
                         accent="amber"
                     )
@@ -4793,7 +5083,11 @@ def main():
                                 _r = sum(sd_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(sd_html, height=max(70 + _g * 46 + _r * 44, 110))
                     else:
-                        st.info("No signals detected in the specified universe and timeframe.")
+                        st.info(
+                            f"**No signals found** for {selected_index} on {analysis_date} ({timeframe}). "
+                            "All symbols were analyzed but none crossed the WRCI signal thresholds. "
+                            "Try an adjacent trading date or switch to a broader universe."
+                        )
 
 
                 # Omni-channel base: include any stock with a signal in ANY set (A, B, C, or D)
@@ -4889,15 +5183,16 @@ def main():
         # Always render footer
         render_footer()
 
-def _render_model_passport_sidebar(current_universe: str, current_index):
+def _render_model_passport_sidebar(current_universe: str, current_index, current_timeframe=None):
     """Sidebar Passport — visible in every mode.
 
     Surfaces:
       • Profile state (Default / Calibrated)
-      • The universe the profile was fit on
+      • The universe + timeframe the profile was fit on
       • Train + Val IR + last-updated timestamp
-      • A mismatch banner when the calibrated universe ≠ current sidebar selection
-        (since the screener applies these weights to whatever universe is active).
+      • A mismatch banner when the calibrated universe or timeframe ≠ current
+        sidebar selection (weights learned on daily data don't generalize to
+        weekly and vice-versa).
 
     Caller must be inside a ``with st.sidebar:`` context.
     """
@@ -4906,12 +5201,16 @@ def _render_model_passport_sidebar(current_universe: str, current_index):
 
     res = st.session_state.get("opt_results")
 
-    # What universe is this profile from? What's selected now?
-    cal_universe = (res.get("universe")       if res else None) or None
-    cal_index    = (res.get("selected_index") if res else None) or None
-    cal_label    = cal_index or cal_universe or "—"
-    cur_label    = (current_index or current_universe or "—")
-    mismatch     = bool(res) and cal_label != "—" and cur_label != "—" and cal_label != cur_label
+    # What universe/timeframe is this profile from? What's selected now?
+    cal_universe  = (res.get("universe")       if res else None) or None
+    cal_index     = (res.get("selected_index") if res else None) or None
+    cal_timeframe = (res.get("timeframe")      if res else None) or None
+    cal_label     = cal_index or cal_universe or "—"
+    cur_label     = (current_index or current_universe or "—")
+    universe_mismatch  = bool(res) and cal_label != "—" and cur_label != "—" and cal_label != cur_label
+    timeframe_mismatch = (bool(res) and cal_timeframe and current_timeframe
+                          and cal_timeframe != current_timeframe)
+    mismatch = universe_mismatch or timeframe_mismatch
 
     if res:
         train_v = res.get('train_score', 0.0) or 0.0
@@ -4921,6 +5220,7 @@ def _render_model_passport_sidebar(current_universe: str, current_index):
         updated   = res.get('timestamp', '—')
         train_color = "var(--emerald)" if train_v > 0 else "var(--rose)"
         val_color   = "var(--emerald)" if val_v   > 0 else "var(--rose)"
+        cal_tf_disp = cal_timeframe or "—"
         if mismatch:
             profile_label = "Calibrated · ⚠"
             card_class    = "warning"
@@ -4930,6 +5230,7 @@ def _render_model_passport_sidebar(current_universe: str, current_index):
     else:
         profile_label = "Default"
         train_str = val_str = updated = "—"
+        cal_tf_disp = "—"
         train_color = val_color = "var(--ink-secondary)"
         card_class  = "neutral"
 
@@ -4954,6 +5255,10 @@ def _render_model_passport_sidebar(current_universe: str, current_index):
                 <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Trained on</span>
                 <span style="color:var(--ink-secondary); font-weight:500; max-width:62%; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{cal_label_disp}</span>
             </div>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
+                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Depth</span>
+                <span style="color:var(--ink-secondary); font-weight:500;">{cal_tf_disp}</span>
+            </div>
             <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.65rem;">
                 <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Train IR</span>
                 <span style="color:{train_color}; font-weight:600;">{train_str}</span>
@@ -4971,16 +5276,29 @@ def _render_model_passport_sidebar(current_universe: str, current_index):
     """, unsafe_allow_html=True)
 
     if mismatch:
+        mismatch_lines = []
+        if universe_mismatch:
+            mismatch_lines.append(
+                f"Profile fit on <b>{_trim(cal_label, 28)}</b><br>"
+                f"Active universe is <b>{_trim(cur_label, 28)}</b>"
+            )
+        if timeframe_mismatch:
+            mismatch_lines.append(
+                f"Profile depth is <b>{cal_timeframe}</b><br>"
+                f"Active depth is <b>{current_timeframe}</b>"
+            )
+        mismatch_body = "<br>".join(mismatch_lines)
         st.markdown(f"""
         <div style="font-family:var(--data); font-size:0.62rem; color:var(--amber);
                     background:rgba(212,168,83,0.08);
                     border:1px solid rgba(212,168,83,0.22);
                     border-radius:6px; padding:0.55rem 0.65rem;
                     margin-bottom:0.7rem; line-height:1.45;">
-            <span style="font-weight:700;">Universe mismatch.</span><br>
-            Profile fit on <b>{_trim(cal_label, 28)}</b><br>
-            Active universe is <b>{_trim(cur_label, 28)}</b><br>
-            <span style="color:var(--ink-tertiary);">Rankings may not generalize — recalibrate or reset.</span>
+            <span style="font-weight:700;">Profile mismatch — calibrated weights are still active.</span><br>
+            {mismatch_body}<br>
+            <span style="color:var(--ink-tertiary);">Rankings are using weights fit on a different universe or timeframe.
+            Factors learned for one market do not generalise to another.
+            Reset to defaults or run a new calibration for the current selection.</span>
         </div>
         """, unsafe_allow_html=True)
 
@@ -4991,17 +5309,24 @@ def _render_model_passport_sidebar(current_universe: str, current_index):
                 payload = json.load(uploaded)
                 # Accept the v2 full opt_results shape AND legacy weights-only dicts.
                 if isinstance(payload, dict) and isinstance(payload.get("weights"), dict):
-                    pe.set_active_weights(payload["weights"])
+                    _set_active_weights(payload["weights"])
                     st.session_state["opt_results"] = payload
                     pe.save_profile(payload)
                     _imp_label = payload.get("selected_index") or payload.get("universe") or "—"
                     console.success(f"Profile imported · {_imp_label} · persisted to disk")
                 else:
-                    pe.set_active_weights(payload)  # legacy: file IS a weights dict
-                    if "opt_results" in st.session_state:
+                    _set_active_weights(payload)  # legacy: file IS a weights dict
+                    _had_calibration = "opt_results" in st.session_state
+                    if _had_calibration:
                         del st.session_state["opt_results"]
                     pe.delete_profile()
                     console.success("Profile imported · legacy weights (no calibration metadata)")
+                    if _had_calibration:
+                        st.warning(
+                            "Legacy weights-only file imported. Your previous calibrated profile "
+                            "(train/val scores, sensitivity data) has been cleared. "
+                            "Re-run Intelligence mode to produce a new calibrated profile."
+                        )
                 # Toast survives the rerun; success card alone would blink-and-disappear.
                 # Note: Streamlit's icon= validates against an emoji whitelist — '✓' (U+2713)
                 # is rejected as a "shortcode". Using '✅' (U+2705) which IS a valid emoji.
@@ -5014,17 +5339,20 @@ def _render_model_passport_sidebar(current_universe: str, current_index):
     # Filename: sanket_profile_<universe_slug>_<timestamp>.json so the file
     # is self-describing — important when users keep multiple profiles.
     res = st.session_state.get("opt_results")
-    export_payload = res or {"weights": pe.get_active_weights()}
+    export_payload = res or {"weights": _get_active_weights()}
     if res:
-        export_universe = res.get("universe") or current_universe
-        export_index    = res.get("selected_index") or current_index
+        # Always use the profile's own universe/index — never the sidebar selection.
+        # If the profile pre-dates universe stamping (None), omit those parts rather
+        # than silently substituting the sidebar value, which could mislabel the file.
+        export_universe = res.get("universe")
+        export_index    = res.get("selected_index")
         # Timestamp from opt_results may be 'YYYY-MM-DD HH:MM' — convert to date slug.
         ts = res.get("timestamp") or ""
         export_date = ts.split(" ")[0] if ts else None
     else:
         export_universe = current_universe
         export_index    = current_index
-        export_date     = datetime.date.today()
+        export_date     = _today_ist()
     st.download_button(
         "↓ Export Profile",
         data=json.dumps(export_payload, indent=2, default=str),
@@ -5037,11 +5365,11 @@ def _render_model_passport_sidebar(current_universe: str, current_index):
         key="passport_export",
     )
     if st.button("↺ Reset to Defaults", width='stretch', key="passport_reset"):
-        pe.set_active_weights(pe.DEFAULT_W)
+        _set_active_weights(pe.DEFAULT_W)
         if "opt_results" in st.session_state:
             del st.session_state["opt_results"]
-        # Only delete THIS universe's profile — other calibrated universes are preserved.
-        pe.delete_profile(current_universe, current_index)
+        # Only delete THIS universe+timeframe profile — others are preserved.
+        pe.delete_profile(current_universe, current_index, current_timeframe)
         _reset_label = (current_index or current_universe or "—")
         console.detail(f"Profile reset · {_reset_label} · disk profile cleared")
         st.rerun()
@@ -5062,10 +5390,10 @@ def render_intelligence_center():
 
     ts_data = st.session_state.get("ts_results_df")
     settings = st.session_state.get("_calib_settings",
-                                    {"trials": 50, "train_frac": 0.70, "horizons": [2, 3, 5, 8, 13]})
+                                    {"trials": 50, "train_frac": 0.70, "horizons": pe.HOLD_HORIZONS})
     s_trials  = int(settings.get("trials", 50))
     s_split   = float(settings.get("train_frac", 0.70))
-    s_horizon = settings.get("horizons", [2, 3, 5, 8, 13])
+    s_horizon = settings.get("horizons", pe.HOLD_HORIZONS)
     train_pct = int(round(s_split * 100))
 
     # ── Dataset summary row (mirrors bulk-range "Total Signals / Avg Oversold / …" rhythm) ──
@@ -5075,7 +5403,7 @@ def render_intelligence_center():
     n_train_d  = max(1, int(ts_dates * s_split))
     n_val_d    = max(0, ts_dates - n_train_d)
 
-    active_weights = pe.get_active_weights()
+    active_weights = _get_active_weights()
     is_default = (active_weights == pe.DEFAULT_W)
 
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -5128,16 +5456,27 @@ def render_intelligence_center():
                     f"Last run · {res.get('timestamp', '—')}",
                     icon="activity", accent="emerald",
                 )
-                d1, d2, d3 = st.columns(3)
+                _is_overfit = train_v > 0.05 and val_v < train_v * 0.3
+                _is_low_ir  = val_v <= 0.0
+                d1, d2, d3, d4 = st.columns(4)
                 with d1:
                     ui.render_metric_card("Train IR", f"{train_v:+.4f}", "in-sample fit",
                                           "success" if train_v > 0 else "warning")
                 with d2:
-                    ui.render_metric_card("Validation IR", f"{val_v:+.4f}", "out-of-sample",
-                                          "success" if val_v > 0 else "danger")
+                    _val_sub = "out-of-sample · IC rank corr"
+                    ui.render_metric_card("Validation IR", f"{val_v:+.4f}", _val_sub,
+                                          "success" if val_v > 0.02 else ("warning" if val_v > 0 else "danger"))
                 with d3:
                     ui.render_metric_card("Stability", f"{stability:.0f}%", "Val / Train ratio",
                                           "info" if 30 < stability < 130 else "warning")
+                with d4:
+                    if _is_low_ir:
+                        _risk_label, _risk_sub, _risk_kind = "No Edge", "Val IR ≤ 0 — reset or recalibrate", "danger"
+                    elif _is_overfit:
+                        _risk_label, _risk_sub, _risk_kind = "Overfit", "Train >> Val — reduce trials or extend range", "warning"
+                    else:
+                        _risk_label, _risk_sub, _risk_kind = "Quality OK", "No overfit or IR issues detected", "success"
+                    ui.render_metric_card("Quality Check", _risk_label, _risk_sub, _risk_kind)
 
         with col_t2:
             ui.render_section_header(
@@ -5242,7 +5581,7 @@ def run_priority_optimization(ts_data, calib_settings):
     """
     n_trials   = int(calib_settings.get("trials", 50))
     train_frac = float(calib_settings.get("train_frac", 0.70))
-    horizons   = list(calib_settings.get("horizons", [2, 3, 5, 8, 13]))
+    horizons   = list(calib_settings.get("horizons", pe.HOLD_HORIZONS))
 
     progress_slot = st.empty()
     start_time    = time.time()
@@ -5282,6 +5621,23 @@ def run_priority_optimization(ts_data, calib_settings):
             f"(need ≥ {MIN_TRAIN_DATES})."
         )
         return
+
+    # Soft warning: sparse cross-section makes IC-based ranking unreliable.
+    # IC measures rank correlation across symbols per date; with fewer than ~20
+    # symbols per date the rank has too few positions to produce stable IC estimates.
+    MIN_SYMBOLS_FOR_IC = 20
+    avg_symbols_per_date = n_train_rows / max(n_train_dates, 1)
+    if avg_symbols_per_date < MIN_SYMBOLS_FOR_IC:
+        st.warning(
+            f"**Small universe detected** — {avg_symbols_per_date:.0f} symbols/date on average "
+            f"(recommended ≥ {MIN_SYMBOLS_FOR_IC}). IC-based calibration can produce noisy, "
+            f"overfit weights with sparse cross-sections. Proceed, but treat the calibrated "
+            f"profile as experimental and validate out-of-sample carefully."
+        )
+        console.warning(
+            f"Small universe: ~{avg_symbols_per_date:.0f} symbols/date — "
+            f"IC estimates may be noisy (recommend ≥ {MIN_SYMBOLS_FOR_IC})."
+        )
 
     progress_bar(progress_slot, _CALIB_PHASES[0][1], "Calibration Engine", "Phase 1 / 4 · Dataset built")
     console.detail("[1/4] Dataset built ✓")
@@ -5342,7 +5698,7 @@ def run_priority_optimization(ts_data, calib_settings):
     )
     console.detail("[4/4] Activating weights · storing profile")
 
-    pe.set_active_weights(best_w)
+    _set_active_weights(best_w)
     ts_meta = st.session_state.get("ts_meta") or {}
     opt_results = {
         "weights":        best_w,
@@ -5352,6 +5708,7 @@ def run_priority_optimization(ts_data, calib_settings):
         "timestamp":      datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "universe":       ts_meta.get("universe"),
         "selected_index": ts_meta.get("selected_index"),
+        "timeframe":      ts_meta.get("timeframe"),
     }
     st.session_state["opt_results"] = opt_results
     _persist_ok = pe.save_profile(opt_results)  # best-effort disk persistence
@@ -5363,7 +5720,17 @@ def run_priority_optimization(ts_data, calib_settings):
 
     # ─── Final summary ────────────────────────────────────────────────────
     duration_str = time.strftime("%M:%S", time.gmtime(time.time() - start_time))
-    overfit = (train_score > 0.05 and val_score < train_score * 0.3)
+    # Three distinct quality states — overfit and low-IR are separate failure modes.
+    overfit  = train_score > 0.05 and val_score < train_score * 0.3
+    low_ir   = val_score <= 0.0   # negative or zero validation IC — profile adds no edge
+    cal_risk = overfit or low_ir
+
+    if low_ir:
+        cal_quality = "negative val IR — profile has no demonstrated edge"
+    elif overfit:
+        cal_quality = "overfit — train IR significantly exceeds validation IR"
+    else:
+        cal_quality = "none"
 
     progress_bar(progress_slot, 100, "Calibration Engine",
                  f"Complete · Train {train_score:+.3f} · Val {val_score:+.3f} · {duration_str}")
@@ -5376,16 +5743,14 @@ def run_priority_optimization(ts_data, calib_settings):
         "Top factor":    f"{top_factor} ({top_share:.1f}%)",
         "Trials":        n_trials,
         "Duration":      duration_str,
-        "Overfit risk":  "yes" if overfit else "no",
+        "Quality risk":  cal_quality,
         "Profile saved": "yes" if _persist_ok else "no (disk error)",
     })
 
-    # Toast survives the upcoming st.rerun() so the user gets a durable
-    # confirmation of completion (the in-progress status banner gets cleared on rerun).
-    overfit_suffix = " ⚠ overfit risk" if overfit else ""
+    overfit_suffix = f" ⚠ {cal_quality}" if cal_risk else ""
     st.toast(
         f"Calibration complete · Train {train_score:+.3f} · Val {val_score:+.3f}{overfit_suffix}",
-        icon="🎯" if not overfit else "⚠️",
+        icon="🎯" if not cal_risk else "⚠️",
     )
 
     st.rerun()

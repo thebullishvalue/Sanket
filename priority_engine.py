@@ -24,6 +24,11 @@ import pandas as pd
 VOL_REGIME_W   = {'LOW': 1.20, 'NORMAL': 1.00, 'HIGH': 0.85, 'EXTREME': 0.55}
 VOL_REGIME_IDX = {'LOW': 0,    'NORMAL': 1,    'HIGH': 2,    'EXTREME': 3}
 
+# Fibonacci-spaced forward-return horizons (bars) used by the calibration engine
+# and the timeseries harvest loop.  Single source of truth shared by sanket.py
+# and intelligence.py (both import priority_engine).
+HOLD_HORIZONS = [2, 3, 5, 8, 13]
+
 # Asymmetric defaults — symmetric values to start; the optimizer finds the asymmetry.
 DEFAULT_W = {
     # Factor weights, per side
@@ -100,13 +105,15 @@ PROFILES_PATH = Path.home() / ".sanket" / "profiles.json"
 _LEGACY_SINGLE_PATH = Path.home() / ".sanket" / "profile.json"
 
 
-def _profile_key(universe, selected_index) -> str:
-    """Stable string key combining universe + index."""
+def _profile_key(universe, selected_index, timeframe=None) -> str:
+    """Stable string key combining universe + index + timeframe."""
     if not universe:
         return "—"
     parts = [str(universe)]
     if selected_index:
         parts.append(str(selected_index))
+    if timeframe:
+        parts.append(str(timeframe).lower())
     return " · ".join(parts)
 
 
@@ -156,10 +163,11 @@ _maybe_migrate_legacy_profile()
 
 
 def save_profile(opt_results: dict) -> bool:
-    """Persist a calibration profile, keyed by the universe it was fit on."""
+    """Persist a calibration profile, keyed by universe + timeframe it was fit on."""
     universe       = opt_results.get("universe")
     selected_index = opt_results.get("selected_index")
-    key = _profile_key(universe, selected_index)
+    timeframe      = opt_results.get("timeframe")
+    key = _profile_key(universe, selected_index, timeframe)
     profiles = _profiles_load_all()
     profiles[key] = {
         "weights":        opt_results.get("weights", {}),
@@ -169,15 +177,16 @@ def save_profile(opt_results: dict) -> bool:
         "timestamp":      opt_results.get("timestamp"),
         "universe":       universe,
         "selected_index": selected_index,
+        "timeframe":      timeframe,
     }
     return _profiles_save_all(profiles)
 
 
-def load_profile_for(universe, selected_index):
-    """Load the profile that was fit on the given universe selection. None if missing."""
+def load_profile_for(universe, selected_index, timeframe=None):
+    """Load the profile that was fit on the given universe + timeframe. None if missing."""
     if not universe:
         return None
-    key = _profile_key(universe, selected_index)
+    key = _profile_key(universe, selected_index, timeframe)
     profiles = _profiles_load_all()
     p = profiles.get(key)
     if p and isinstance(p, dict) and isinstance(p.get("weights"), dict):
@@ -202,8 +211,8 @@ def load_profile():
     return valid[0]
 
 
-def delete_profile(universe=None, selected_index=None) -> bool:
-    """Remove a specific universe's profile. With ``universe=None``, wipes ALL profiles."""
+def delete_profile(universe=None, selected_index=None, timeframe=None) -> bool:
+    """Remove a specific universe+timeframe profile. With ``universe=None``, wipes ALL profiles."""
     if universe is None:
         try:
             if PROFILES_PATH.exists():
@@ -212,7 +221,7 @@ def delete_profile(universe=None, selected_index=None) -> bool:
         except Exception:
             return False
 
-    key = _profile_key(universe, selected_index)
+    key = _profile_key(universe, selected_index, timeframe)
     profiles = _profiles_load_all()
     if key in profiles:
         del profiles[key]

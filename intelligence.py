@@ -294,11 +294,11 @@ def _evaluate_ic(precomp: _PrecomputedDataset, weights: dict, min_xsect: int = 5
 class PriorityTuner:
     def __init__(self,
                  historical_data: pd.DataFrame,
-                 hold_periods=(2, 3, 5, 8, 13),
+                 hold_periods=None,
                  train_frac: float = 0.70,
                  l2_alpha: float = 0.001,
                  min_xsect: int = 5):
-        self.hold_periods = list(hold_periods)
+        self.hold_periods = list(hold_periods) if hold_periods is not None else list(pe.HOLD_HORIZONS)
         self.train_frac   = train_frac
         self.l2_alpha     = l2_alpha
         self.min_xsect    = min_xsect
@@ -378,7 +378,10 @@ class PriorityTuner:
                 progress_callback(trial.number, n_trials, score)
             return score
 
-        self.study = optuna.create_study(direction='maximize')
+        self.study = optuna.create_study(
+            direction='maximize',
+            sampler=optuna.samplers.TPESampler(seed=42),
+        )
         self.study.optimize(objective, n_trials=n_trials)
 
         self.best_weights = {**pe.DEFAULT_W, **self.study.best_params}
