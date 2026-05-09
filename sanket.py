@@ -5458,24 +5458,23 @@ def render_intelligence_center():
                 )
                 _is_overfit = train_v > 0.05 and val_v < train_v * 0.3
                 _is_low_ir  = val_v <= 0.0
-                # Force a 2x2 grid even on narrower Streamlit Cloud containers
-                st.markdown('<div class="forced-grid">', unsafe_allow_html=True)
-                d_r1c1, d_r1c2 = st.columns(2)
-                with d_r1c1:
+                # Single row of 4, forced into 2x2 via CSS markers
+                c1, c2, c3, c4 = st.columns(4)
+                with c1:
+                    st.markdown('<div class="cal-card"></div>', unsafe_allow_html=True)
                     ui.render_metric_card("Train IR", f"{train_v:+.4f}", "in-sample fit",
                                           "success" if train_v > 0 else "warning")
-                with d_r1c2:
+                with c2:
+                    st.markdown('<div class="cal-card"></div>', unsafe_allow_html=True)
                     _val_sub = "out-of-sample · IC rank corr"
                     ui.render_metric_card("Validation IR", f"{val_v:+.4f}", _val_sub,
                                           "success" if val_v > 0.02 else ("warning" if val_v > 0 else "danger"))
-
-                st.markdown('<div style="margin-bottom: 0.8rem;"></div>', unsafe_allow_html=True)
-
-                d_r2c1, d_r2c2 = st.columns(2)
-                with d_r2c1:
+                with c3:
+                    st.markdown('<div class="cal-card"></div>', unsafe_allow_html=True)
                     ui.render_metric_card("Stability", f"{stability:.0f}%", "Val / Train ratio",
                                           "info" if 30 < stability < 130 else "warning")
-                with d_r2c2:
+                with c4:
+                    st.markdown('<div class="cal-card"></div>', unsafe_allow_html=True)
                     if _is_low_ir:
                         _risk_label, _risk_sub, _risk_kind = "No Edge", "Val IR ≤ 0 — reset or recalibrate", "danger"
                     elif _is_overfit:
@@ -5483,7 +5482,6 @@ def render_intelligence_center():
                     else:
                         _risk_label, _risk_sub, _risk_kind = "Quality OK", "No overfit or IR issues detected", "success"
                     ui.render_metric_card("Quality Check", _risk_label, _risk_sub, _risk_kind)
-                st.markdown('</div>', unsafe_allow_html=True)
 
         with col_t2:
             ui.render_section_header(
