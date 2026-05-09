@@ -663,6 +663,31 @@ footer {
     flex-direction: column;
 }
 
+/* Equal-height metric cards — complete the flex/height chain from stColumn
+   all the way down to .metric-card regardless of Streamlit DOM depth.
+   Covers both testid variants (element-container / stElementContainer)
+   used across Streamlit versions, plus stMarkdownContainer. */
+[data-testid="stHorizontalBlock"]:has(.metric-card) {
+    align-items: stretch !important;
+}
+/* Propagate height through every unnamed intermediate div inside the column */
+[data-testid="stHorizontalBlock"]:has(.metric-card) > [data-testid="stColumn"] > div,
+[data-testid="stHorizontalBlock"]:has(.metric-card) > [data-testid="stColumn"] > div > div,
+[data-testid="stHorizontalBlock"]:has(.metric-card) > [data-testid="stColumn"] > div > div > div,
+[data-testid="stHorizontalBlock"]:has(.metric-card) > [data-testid="stColumn"] > div > div > div > div {
+    height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+/* Cover both testid variants for element container + markdown wrapper */
+[data-testid="stHorizontalBlock"]:has(.metric-card) [data-testid="element-container"],
+[data-testid="stHorizontalBlock"]:has(.metric-card) [data-testid="stElementContainer"],
+[data-testid="stHorizontalBlock"]:has(.metric-card) [data-testid="stMarkdownContainer"] {
+    height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+
 /* Diagonal accent line */
 .system-card::before {
     content: "";
@@ -4316,8 +4341,24 @@ footer {
 .surge-card .signal-type-label { color: #22c55e !important; }
 .narr-desc { 
     font-size: 0.58rem; 
-    line-height: 1.3; 
-    color: #94A3B8; 
-    text-transform: uppercase; 
-    font-weight: 500; 
+    line-height: 1.3;
+    color: #94A3B8;
+    text-transform: uppercase;
+    font-weight: 500;
+}
+
+/* ================================================================
+   Smoothness overrides — eliminate flash / shimmer on reruns
+   ================================================================ */
+
+/* Suppress Streamlit's native skeleton shimmer that appears briefly
+   when a widget triggers a full-page rerun. Custom skeleton-pulse
+   classes (defined in this file) are unaffected. */
+[data-testid="stSkeleton"] {
+    display: none !important;
+}
+
+/* Remove the brief white-flash on the top app chrome during rerun */
+[data-testid="stToolbar"] {
+    transition: opacity 120ms ease;
 }

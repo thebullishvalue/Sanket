@@ -18,7 +18,7 @@ from pathlib import Path
 
 import streamlit as st
 
-VERSION = "v3.1.0"
+VERSION = "v3.2.0"
 PRODUCT_NAME = "Sanket"
 COMPANY = "@thebullishvalue"
 
@@ -131,18 +131,21 @@ def style_axes(fig, y_title: str = "", x_title: str = "", y_range=None, row=None
     )
 
 
+@st.cache_resource
+def _load_theme_css() -> str:
+    """Read theme.css once per process; cached so reruns skip the file read."""
+    if CSS_PATH.exists():
+        return CSS_PATH.read_text()
+    return "/* theme.css not found */"
+
+
 def inject_css() -> None:
     """Inject the Obsidian Quant Terminal CSS into the Streamlit app.
 
-    Loads from external theme.css file for maintainability.
-    Injects on every render — Streamlit deduplicates identical <style> blocks.
+    CSS is read once per process (cached) and deduped by Streamlit, so
+    repeated reruns pay zero I/O and zero DOM patching cost.
     """
-    if CSS_PATH.exists():
-        css = CSS_PATH.read_text()
-    else:
-        css = "/* theme.css not found */"
-
-    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+    st.markdown(f"<style>{_load_theme_css()}</style>", unsafe_allow_html=True)
 
 
 def progress_bar(slot, pct: int, label: str, sub: str = "") -> None:
