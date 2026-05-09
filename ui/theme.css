@@ -4365,18 +4365,18 @@ footer {
 
 /* ================================================================
    Forced Grid — prevents st.columns from stacking on Cloud
-   but allows vertical stacking on narrow mobile (<480px).
+   targets the parent horizontal block via internal card markers.
    ================================================================ */
-@media (min-width: 480px) {
-    .forced-grid [data-testid="stHorizontalBlock"] {
-        flex-direction: row !important;
-        flex-wrap: nowrap !important;
-        gap: 1rem !important;
-    }
+[data-testid="stHorizontalBlock"]:has(.cal-card) {
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    gap: 0.8rem 1rem !important; /* vertical horizontal */
+}
 
-    .forced-grid [data-testid="stColumn"] {
-        width: calc(50% - 0.5rem) !important;
-        flex: 1 1 50% !important;
-        min-width: 50% !important;
-    }
+[data-testid="stHorizontalBlock"]:has(.cal-card) > [data-testid="stColumn"],
+[data-testid="stHorizontalBlock"]:has(.cal-card) > [data-testid="column"] {
+    width: calc(50% - 0.5rem) !important;
+    flex: 1 1 45% !important;
+    min-width: 45% !important;
+    margin-bottom: 0.8rem !important;
 }
