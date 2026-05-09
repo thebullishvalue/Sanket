@@ -4362,21 +4362,3 @@ footer {
 [data-testid="stToolbar"] {
     transition: opacity 120ms ease;
 }
-
-/* ================================================================
-   Forced Grid — prevents st.columns from stacking on Cloud
-   targets the parent horizontal block via internal card markers.
-   ================================================================ */
-[data-testid="stHorizontalBlock"]:has(.cal-card) {
-    flex-direction: row !important;
-    flex-wrap: wrap !important;
-    gap: 0.8rem 1rem !important; /* vertical horizontal */
-}
-
-[data-testid="stHorizontalBlock"]:has(.cal-card) > [data-testid="stColumn"],
-[data-testid="stHorizontalBlock"]:has(.cal-card) > [data-testid="column"] {
-    width: calc(50% - 0.5rem) !important;
-    flex: 1 1 45% !important;
-    min-width: 45% !important;
-    margin-bottom: 0.8rem !important;
-}
