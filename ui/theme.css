@@ -1,12 +1,12 @@
 /* ================================================================
-   Pragyam v7.0.5 — Obsidian Quant Terminal CSS
+   Pragyam v3.2.1 — Obsidian Quant Terminal CSS
    Extracted to theme.css for maintainability
    
    Aesthetic: "Obsidian Quant" — Institutional Research Terminal
    Primary Accent: Amber Gold (#D4A853) — matching Pragyam branding
    ================================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600;700&family=Syne:wght@400;500;600;700;800&family=Instrument+Serif:wght@400&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600;700&family=Syne:wght@400;500;600;700;800&family=Instrument+Serif:wght@400&family=IBM+Plex+Mono:wght@300;400;500;600&family=Noto+Sans+Devanagari:wght@400;500&display=swap');
 
 /* ================================================================
    DESIGN TOKENS — Obsidian Quant
@@ -73,6 +73,7 @@
     --display: 'Space Grotesk', 'Syne', -apple-system, sans-serif;
     --display-serif: 'Instrument Serif', Georgia, serif;
     --data: 'IBM Plex Mono', 'JetBrains Mono', 'Fira Code', monospace;
+    --devanagari: 'Noto Sans Devanagari', 'Mangal', sans-serif;
 
     /* ---- Card shared variables (DRY) ---- */
     --card-base: linear-gradient(145deg, var(--glass) 0%, rgba(17, 24, 39, 0.4) 100%);
@@ -234,11 +235,11 @@ footer {
 }
 
 .premium-header h1::after {
-    content: "संकेत";
+    content: "\0938\0902\0915\0947\0924";
     position: absolute;
     right: 0;
     top: 0;
-    font-family: var(--display-serif);
+    font-family: var(--devanagari);
     font-size: 2rem;
     font-weight: 400;
     color: var(--amber-dim);

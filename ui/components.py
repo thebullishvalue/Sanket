@@ -1,5 +1,5 @@
 """
-Pragyam v7.1.0 — Reusable UI components: metric cards, signal badges, headers, section headers.
+Pragyam v3.2.1 — Reusable UI components: metric cards, signal badges, headers, section headers.
 
 UI — Obsidian Quant Terminal design language.
 """
@@ -100,11 +100,16 @@ def render_metric_card(
             f'</div>'
         )
 
+    subtext_html = (
+        f'<div class="sub-metric">{html_mod.escape(str(subtext))}</div>'
+        if subtext else ""
+    )
+
     st.markdown(
         f'<div class="metric-card {html_mod.escape(str(color_class))}">'
         f"<h4>{html_mod.escape(str(label))}</h4>"
         f"<h2>{html_mod.escape(str(value))}</h2>"
-        f'{f"<div class=\"sub-metric\">{html_mod.escape(str(subtext))}</div>" if subtext else ""}'
+        f"{subtext_html}"
         f"{tooltip_html}"
         f"</div>",
         unsafe_allow_html=True,
@@ -503,17 +508,22 @@ def render_signal_guide() -> None:
             <div class="signal-guide-grid">
                 <div class="signal-type momentum">
                     <div class="signal-type-label">Set A: Momentum</div>
-                    <div class="signal-type-desc">Composite Line crosses Signal Line anywhere • No zone filter • Captures building momentum</div>
+                    <div class="signal-type-desc">WT1/WT2 crossover, gated by Conviction Δ and Pulse Δ polarity • Vetoed by the opposite-side Set B • Tactical trend entry</div>
                 </div>
 
                 <div class="signal-type crossover">
                     <div class="signal-type-label">Set B: Crossover</div>
-                    <div class="signal-type-desc">Lines cross in extreme zones (±40) • Momentum exhaustion • High precision timing</div>
+                    <div class="signal-type-desc">Regime Filter voltrend crossing trend, Δ-polarity gated • Cross-indicator confirmation • Highest tier weight (1.30×)</div>
                 </div>
 
                 <div class="signal-type threshold">
                     <div class="signal-type-label">Set C: Threshold</div>
-                    <div class="signal-type-desc">Freshly enters OS/OB zone from neutral • First bar of entry • Earliest actionable signal</div>
+                    <div class="signal-type-desc">WT1 freshly enters OS/OB zone (±40) with signal line wt2 still outside • Earliest oscillator entry</div>
+                </div>
+
+                <div class="signal-type squeeze">
+                    <div class="signal-type-label">Set D: Squeeze</div>
+                    <div class="signal-type-desc">Regime Filter trend crossing zero, Δ-polarity gated • Structural regime flip • Lowest tier weight (0.75×)</div>
                 </div>
             </div>
 
