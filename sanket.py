@@ -17,11 +17,12 @@ import io
 import urllib3
 import priority_engine as pe
 import intelligence as intel
-from io import BytesIO
 from priority_engine import compute_priority
 import warnings
 import logging
 import time
+from dataclasses import dataclass
+from typing import Any, Optional
 from nsepython import nse_get_advances_declines
 from logger import console
 
@@ -62,7 +63,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v3.2.0"
+VERSION = "v3.2.1"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -1118,6 +1119,34 @@ def calculate_trend_count(series, length):
     return trend
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# REGIME FILTER [BigBeluga] — Python port
+# Source: regime_filter.pine (CC BY-NC-SA 4.0 © BigBeluga)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def regime_filter(df: pd.DataFrame, length: int = 20):
+    """Faithful port of `Regime Filter [BigBeluga]`.
+
+    Returns (trend, voltrend) as pandas Series scaled to Pine's [-10, +10].
+    Mirrors the Pine `for i = 0 to len` loop exactly (len+1 comparisons,
+    including i=0 which is always self-compare → contributes -1).
+    """
+    hlc3 = (df['High'] + df['Low'] + df['Close']) / 3.0
+    vol  = df['Volume']
+
+    hma  = calculate_hma(hlc3, 15)
+    volh = calculate_hma(vol,  15)
+
+    trend    = pd.Series(0.0, index=df.index)
+    voltrend = pd.Series(0.0, index=df.index)
+    for i in range(0, length + 1):
+        trend    += np.where(hma  > hma.shift(i),  1.0, -1.0)
+        voltrend += np.where(volh > volh.shift(i), 1.0, -1.0)
+
+    coeff = 10.0 / length
+    return trend * coeff, voltrend * coeff
+
+
 def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40):
     reg_len = max(reg_len, 2)
     # Auto-correct inverted OB levels (obLevel1 must be the stronger/higher bound)
@@ -1144,6 +1173,10 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     coeff = 10.0 / reg_len
     norm_trend = (trend * coeff) * 10.0
     voltrend = voltrend_raw * coeff
+
+    # Regime Filter [BigBeluga] — independent indicator (separate from WRCI's
+    # internal trend/voltrend above). Used by Set B / Set D signal gates only.
+    rf_trend, rf_voltrend = regime_filter(df, length=reg_len)
 
     ap = hlc3
     esa = calculate_ema(ap, n1)
@@ -1251,6 +1284,8 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     df['Conviction']       = conviction
     df['Pulse']            = pulse
     df['VolTrend']         = voltrend
+    df['RF_Trend']         = rf_trend
+    df['RF_VolTrend']      = rf_voltrend
     df['WT1_5ago']         = wt1.shift(5)
     df['Recent_Travel']    = wt1 - wt1.shift(5)
     df['Conviction_Delta'] = conviction.diff().fillna(0)
@@ -1327,42 +1362,85 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     df['Bull_Zone_Depth'] = bull_zone_depth
     df['Bear_Zone_Depth'] = bear_zone_depth
 
+    df = compute_signal_sets(df, wt1, wt2, rf_trend, rf_voltrend, obLevel1, obLevel2, osLevel1, osLevel2)
+
+    return df
+
+
+def compute_signal_sets(df: pd.DataFrame,
+                        wt1: pd.Series, wt2: pd.Series,
+                        rf_trend: pd.Series, rf_voltrend: pd.Series,
+                        obLevel1: float, obLevel2: float,
+                        osLevel1: float, osLevel2: float) -> pd.DataFrame:
+    """Compute the four signal sets and the zone Condition.
+
+    Set A (Momentum):  base wt1/wt2 crossings, Δ-polarity gated (long needs
+                       Conviction Δ > 0 and Pulse Δ > 0; short needs both < 0),
+                       AND vetoed by the opposite-side Set B (long A suppressed
+                       if Set B short fires on the same bar, vice versa). The
+                       opposite-side veto is a cross-indicator safety filter,
+                       not same-side mutual exclusion: A reads the WRCI
+                       oscillator and B reads the regime filter, so they can
+                       fire independently; the veto kills A when the regime
+                       filter is flipping against it.
+    Set B (Crossover): regime-filter voltrend/trend crossover, Δ-polarity gated.
+    Set C (Threshold): fresh entry into OS/OB zone, confirmed by the signal
+                       line wt2 still sitting on the outside — wt2 lags wt1,
+                       so "wt2 hasn't crossed yet" means the entry is fresh.
+    Set D (Squeeze):   regime-filter trend zero-cross, Δ-polarity gated.
+
+    Writes long_cond/short_cond (A), *_comp (B), *_wt (C), *_sqz (D), and
+    Condition. Also invokes compute_squeeze_momentum, which appends its
+    indicator columns (returned df).
+    """
     # Base Crossings
     sig_bull_cross = (wt1 > wt2) & (wt1.shift(1) <= wt2.shift(1))
     sig_bear_cross = (wt1 < wt2) & (wt1.shift(1) >= wt2.shift(1))
 
-    # Set B: Crossover — Contrarian signals inside extreme zones
-    crossover_long  = sig_bear_cross & (wt1 < osLevel2)
-    crossover_short = sig_bull_cross & (wt1 > obLevel2)
+    # Regime Filter [BigBeluga] crossing: rf_voltrend crossing above rf_trend.
+    rf_volcross_above_trend = (rf_voltrend > rf_trend) & (rf_voltrend.shift(1) <= rf_trend.shift(1))
 
-    # Set A: Momentum — Trend signals (Mutually Exclusive with Set B)
-    momentum_long   = sig_bull_cross & (~crossover_short)
-    momentum_short  = sig_bear_cross & (~crossover_long)
+    # Set B: Crossover — Regime-Filter cross gated by Conviction Δ + Pulse Δ polarity
+    crossover_long  = rf_volcross_above_trend & (df['Conviction_Delta'] > 0) & (df['Pulse_Delta'] > 0)
+    crossover_short = rf_volcross_above_trend & (df['Conviction_Delta'] < 0) & (df['Pulse_Delta'] < 0)
 
-    # Set C: Threshold — freshly entering OS/OB zone with signal-line validation
+    # Set A: Momentum — base WRCI crossings, vetoed by the opposite-side Set B
+    # (long A blocked when B-short fires; short A blocked when B-long fires),
+    # and gated by Δ-polarity: long requires Conviction Δ and Pulse Δ both > 0,
+    # short requires both < 0. Same Δ gate used by Sets B and D.
+    momentum_long   = sig_bull_cross & (~crossover_short) & (df['Conviction_Delta'] > 0) & (df['Pulse_Delta'] > 0)
+    momentum_short  = sig_bear_cross & (~crossover_long)  & (df['Conviction_Delta'] < 0) & (df['Pulse_Delta'] < 0)
+
+    # Set C: Threshold — wt1 freshly dipping below osLevel2 (or above obLevel2)
+    # while wt2 is still on the outside. wt2 lags wt1; the wt2 clause confirms
+    # the entry is fresh (signal line hasn't crossed yet), not a re-test.
     threshold_long  = (wt1 < osLevel2) & (wt1.shift(1) >= osLevel2) & (wt2 > osLevel2)
     threshold_short = (wt1 > obLevel2) & (wt1.shift(1) <= obLevel2) & (wt2 < obLevel2)
 
-    df['long_cond'] = momentum_long
-    df['short_cond'] = momentum_short
-    df['long_cond_comp'] = crossover_long
+    df['long_cond']       = momentum_long
+    df['short_cond']      = momentum_short
+    df['long_cond_comp']  = crossover_long
     df['short_cond_comp'] = crossover_short
-    df['long_cond_wt'] = threshold_long
-    df['short_cond_wt'] = threshold_short
+    df['long_cond_wt']    = threshold_long
+    df['short_cond_wt']   = threshold_short
 
+    # Zone label. Predicate order is load-bearing: stricter (Extreme) bound
+    # must precede looser bound — np.select returns the first match.
     df['Condition'] = np.select(
         [wt1 > obLevel1, wt1 > obLevel2, wt1 < osLevel1, wt1 < osLevel2],
         ['OB Extreme', 'OB', 'OS Extreme', 'OS'],
         default='Neutral'
     )
 
-    # Set D: Squeeze — Squeeze Momentum
+    # Set D: Squeeze — Regime-Filter trend crossing zero, gated by Conviction Δ + Pulse Δ
     df = compute_squeeze_momentum(df, length=20)
-    sqz_release = df['SQZ_Off'] & df['SQZ_On'].shift(1)
-    df['long_cond_sqz'] = sqz_release & (df['SQZ_Val'] > df['SQZ_Val'].shift(1))
-    df['short_cond_sqz'] = sqz_release & (df['SQZ_Val'] < df['SQZ_Val'].shift(1))
+    rf_trend_cross_up = (rf_trend > 0) & (rf_trend.shift(1) <= 0)
+    rf_trend_cross_dn = (rf_trend < 0) & (rf_trend.shift(1) >= 0)
+    df['long_cond_sqz']  = rf_trend_cross_up & (df['Conviction_Delta'] > 0) & (df['Pulse_Delta'] > 0)
+    df['short_cond_sqz'] = rf_trend_cross_dn & (df['Conviction_Delta'] < 0) & (df['Pulse_Delta'] < 0)
 
     return df
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SQUEEZE MOMENTUM ENGINE
@@ -1862,7 +1940,32 @@ def get_signal_strength_score(row):
 # UI COMPONENTS & SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def render_sidebar():
+@dataclass
+class SidebarState:
+    """Inputs collected from the sidebar for one render frame.
+
+    Returned by render_sidebar(). Fields are named (not positional) so adding
+    or reordering inputs no longer requires updating a 16-element unpack.
+    """
+    universe: str
+    selected_index: Optional[str]
+    analysis_date: datetime.date
+    reg_len: int
+    wt_n1: int
+    wt_n2: int
+    levels: tuple  # (obLevel1, obLevel2, osLevel1, osLevel2)
+    timeframe: str
+    mode: str
+    start_date: Optional[datetime.date]
+    end_date: Optional[datetime.date]
+    run_clicked: bool
+    corr_target_ticker: Optional[str]
+    corr_lookback: int
+    corr_method: str
+    calib_settings: dict[str, Any]
+
+
+def render_sidebar() -> SidebarState:
     with st.sidebar:
         # Centered Masthead
         st.markdown("""
@@ -2030,7 +2133,7 @@ def render_sidebar():
         }
         run_clicked = st.button(
             _RUN_LABELS.get(analysis_mode, "◈ RUN ANALYSIS"),
-            type="primary", width='stretch',
+            type="primary", use_container_width=True,
             disabled=not date_range_valid,
         )
 
@@ -2105,7 +2208,24 @@ def render_sidebar():
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         st.markdown(spec_html, unsafe_allow_html=True)
 
-        return universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, (obLevel1, obLevel2, osLevel1, osLevel2), timeframe, analysis_mode, start_date_hist, end_date_hist, run_clicked, corr_target_ticker, corr_lookback, corr_method, calib_settings
+        return SidebarState(
+            universe=universe,
+            selected_index=selected_index,
+            analysis_date=analysis_date,
+            reg_len=reg_len,
+            wt_n1=wt_n1,
+            wt_n2=wt_n2,
+            levels=(obLevel1, obLevel2, osLevel1, osLevel2),
+            timeframe=timeframe,
+            mode=analysis_mode,
+            start_date=start_date_hist,
+            end_date=end_date_hist,
+            run_clicked=run_clicked,
+            corr_target_ticker=corr_target_ticker,
+            corr_lookback=corr_lookback,
+            corr_method=corr_method,
+            calib_settings=calib_settings,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2285,13 +2405,14 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "Bearish_Div":   bool(last_row.get('Bearish_Div', False)),
                 "F1_PriceMom":   float(last_row.get('F1_PriceMom', 0)),
                 "F2_VolQual":    float(last_row.get('F2_VolQual', 0)),
-                # Set C: Momentum — Historical Long Signals (kept for Range Study compat)
+                # Set A: Momentum — legacy L_/S_ alias of LA_/SA_ below
+                # (kept for Range Study compat; reads the same long_cond column).
                 "L_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
                 "L_1d": "●" if sample_range.iloc[-2]['long_cond'] else "—",
                 "L_2d": "●" if sample_range.iloc[-3]['long_cond'] else "—",
                 "L_3d": "●" if sample_range.iloc[-4]['long_cond'] else "—",
                 "L_5d": "●" if sample_range.tail(5)['long_cond'].any() else "—",
-                # Set C: Momentum — Historical Short Signals
+                # (short side of the same legacy alias)
                 "S_Today": "●" if sample_range.iloc[-1]['short_cond'] else "—",
                 "S_1d": "●" if sample_range.iloc[-2]['short_cond'] else "—",
                 "S_2d": "●" if sample_range.iloc[-3]['short_cond'] else "—",
@@ -2748,7 +2869,7 @@ def render_timeseries_dashboard():
         fig_zones.update_layout(title='', height=350, hovermode='x unified',
                                 yaxis=dict(range=[0, ymax], title='% of Universe'))
         apply_chart_theme(fig_zones)
-        st.plotly_chart(fig_zones, width='stretch', key='chart_zones')
+        st.plotly_chart(fig_zones, use_container_width=True, key='chart_zones')
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("Signal Count by Date", "Long vs Short Signal Count per Session",
@@ -2762,7 +2883,7 @@ def render_timeseries_dashboard():
                                     marker=dict(color='#E8555A', line=dict(color='#E8555A', width=1))))
         fig_counts.update_layout(title='', height=300, hovermode='x unified', barmode='group')
         apply_chart_theme(fig_counts)
-        st.plotly_chart(fig_counts, width='stretch', key='chart_signal_counts')
+        st.plotly_chart(fig_counts, use_container_width=True, key='chart_signal_counts')
 
     # ── TAB 2 · Transaction Dynamics ───────────────────────────────────────
     with tab2:
@@ -2780,7 +2901,7 @@ def render_timeseries_dashboard():
                                          marker=dict(size=6, color='#E8555A')))
         fig_signals.update_layout(title='', height=300, hovermode='x unified')
         apply_chart_theme(fig_signals)
-        st.plotly_chart(fig_signals, width='stretch', key='chart_signals_overtime')
+        st.plotly_chart(fig_signals, use_container_width=True, key='chart_signals_overtime')
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("Divergence Persistence", "Divergence Signals Over Time",
@@ -2794,7 +2915,7 @@ def render_timeseries_dashboard():
                                  marker=dict(color='#06B6D4', line=dict(color='#06B6D4', width=1))))
         fig_div.update_layout(title='', height=300, hovermode='x unified', barmode='relative')
         apply_chart_theme(fig_div)
-        st.plotly_chart(fig_div, width='stretch', key='chart_divergence')
+        st.plotly_chart(fig_div, use_container_width=True, key='chart_divergence')
 
     # ── TAB 3 · Regime Analysis ────────────────────────────────────────────
     with tab3:
@@ -2817,7 +2938,7 @@ def render_timeseries_dashboard():
         fig_avg.add_hline(y=0,   line=dict(color='rgba(255,255,255,0.3)', width=1))
         fig_avg.update_layout(title='', height=300, hovermode='x unified', yaxis=dict(range=[-80, 80]))
         apply_chart_theme(fig_avg)
-        st.plotly_chart(fig_avg, width='stretch', key='chart_avg_signal')
+        st.plotly_chart(fig_avg, use_container_width=True, key='chart_avg_signal')
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("HMM Regime Distribution Over Time",
@@ -2835,7 +2956,7 @@ def render_timeseries_dashboard():
         fig_regime.update_layout(title='', height=300, hovermode='x unified',
                                  yaxis=dict(range=[0, 100], title='% of Universe'))
         apply_chart_theme(fig_regime)
-        st.plotly_chart(fig_regime, width='stretch', key='chart_regime')
+        st.plotly_chart(fig_regime, use_container_width=True, key='chart_regime')
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("Volatility Dynamics",
@@ -2857,7 +2978,7 @@ def render_timeseries_dashboard():
             yaxis2=dict(title='High-Vol %', overlaying='y', side='right'),
         )
         apply_chart_theme(fig_vol)
-        st.plotly_chart(fig_vol, width='stretch', key='chart_volatility')
+        st.plotly_chart(fig_vol, use_container_width=True, key='chart_volatility')
 
         st.markdown("<br>", unsafe_allow_html=True)
         col_r1, col_r2 = st.columns(2)
@@ -2871,7 +2992,7 @@ def render_timeseries_dashboard():
                           f"{summary['total_change_points']}",
                           f"{vol_high.mean():.1f}%"],
             }
-            st.dataframe(pd.DataFrame(regime_stats), width='stretch', hide_index=True)
+            st.dataframe(pd.DataFrame(regime_stats), use_container_width=True, hide_index=True)
         with col_r2:
             ui.render_section_header("Distribution Metrics", "Signal Statistics",
                                      icon="database", accent="rose")
@@ -2883,7 +3004,7 @@ def render_timeseries_dashboard():
                           f"{daily_agg['Signal'].max():.2f}",
                           f"{daily_agg['Signal'].std():.2f}"],
             }
-            st.dataframe(pd.DataFrame(signal_stats), width='stretch', hide_index=True)
+            st.dataframe(pd.DataFrame(signal_stats), use_container_width=True, hide_index=True)
 
     # ── TAB 4 · Data Terminal ──────────────────────────────────────────────
     with tab4:
@@ -2902,7 +3023,7 @@ def render_timeseries_dashboard():
                               'Oversold %', 'Overbought %',
                               'Bull Regime %', 'Bear Regime %', 'Change Pts']
         st.dataframe(
-            display_ts, width='stretch', hide_index=True,
+            display_ts, use_container_width=True, hide_index=True,
             column_config={
                 'Date':         st.column_config.TextColumn(help="Trading day (YYYY-MM-DD)."),
                 'Long Sig':     st.column_config.NumberColumn(help="Daily count of symbols firing a long-momentum signal (Set A long_cond)."),
@@ -3287,6 +3408,36 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 # CORRELATION MODE — HELPER FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Shared HTML-builder palette helpers ──────────────────────────────────────
+# Used by _build_confluence_table_html, _build_signal_table_html,
+# _build_narrative_table_html, _build_signal_strength_table_html. Keep these
+# in sync — changing one color here propagates to every signal table.
+_GREEN  = "#34D399"
+_RED    = "#FB7185"
+
+def _side_palette(side: str) -> dict:
+    """Side-keyed accent colors for long/short signal tables."""
+    if side == 'long':
+        return {
+            "accent_light": _GREEN,
+            "border_color": "rgba(45, 212, 168, 0.3)",
+            "header_bg":    "rgba(45, 212, 168, 0.15)",
+        }
+    return {
+        "accent_light": _RED,
+        "border_color": "rgba(232, 85, 90, 0.3)",
+        "header_bg":    "rgba(232, 85, 90, 0.15)",
+    }
+
+def _signed_color(value: float, pos: str = _GREEN, neg: str = _RED) -> str:
+    """Green for non-negative, red for negative (or supplied overrides)."""
+    return pos if value >= 0 else neg
+
+def _delta_arrow(value: float) -> str:
+    """Up arrow for non-negative deltas, down arrow for negative."""
+    return "↑" if value >= 0 else "↓"
+
+
 def _build_confluence_table_html(df: pd.DataFrame) -> str:
     """Build ranked HTML table for confluence setups.
 
@@ -3294,8 +3445,6 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
 
     Returns: Complete HTML document string ready for st.components.v1.html().
     """
-    import html as html_module
-
     table_rows = []
     if df.empty:
         table_rows.append(f"""
@@ -3312,17 +3461,18 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
         """)
     else:
         for idx, (_, row) in enumerate(df.iterrows(), 1):
-            symbol = html_module.escape(str(row.get('SimpleName', '')))
+            symbol = html.escape(str(row.get('SimpleName', '')))
             corr = float(row.get('Corr_Current', 0))
-            zone = html_module.escape(str(row.get('WRCI_Zone', 'Neutral')))
-            signal_type = html_module.escape(str(row.get('WRCI_Signal_Type', '—')))
+            zone = html.escape(str(row.get('WRCI_Zone', 'Neutral')))
+            signal_type = html.escape(str(row.get('WRCI_Signal_Type', '—')))
             actual = float(row.get('PctChange', 0))
             expected = float(row.get('Expected_Change', 0))
             divergence = float(row.get('Divergence', 0))
             confluence = float(row.get('Confluence_Score', 0))
 
-            corr_color = "#34D399" if corr > 0 else "#FB7185"
-            div_color = "#34D399" if divergence > 0 else "#FB7185"
+            # Note: confluence uses strict > 0 (not >=), so zero is "red" here.
+            corr_color = _GREEN if corr > 0 else _RED
+            div_color  = _GREEN if divergence > 0 else _RED
             conf_color = "#A78BFA"
 
             rank_str = f"{idx:02d}"
@@ -3758,7 +3908,7 @@ def render_correlation_results(corr_data: dict) -> None:
             ))
             apply_chart_theme(fig)
             fig.update_layout(height=600, margin=dict(l=150, r=50, t=50, b=50))
-            st.plotly_chart(fig, width='stretch', key='chart_corr_0')
+            st.plotly_chart(fig, use_container_width=True, key='chart_corr_0')
         else:
             st.info("No correlation data available for heatmap")
 
@@ -3850,11 +4000,10 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
 
 def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = 'Daily') -> str:
     """Build organized HTML table for signals grouped by age with section headers."""
-    import html as html_module
-
-    accent_light = "#34D399" if side == 'long' else "#FB7185"
-    border_color = "rgba(45, 212, 168, 0.3)" if side == 'long' else "rgba(232, 85, 90, 0.3)"
-    header_bg = "rgba(45, 212, 168, 0.15)" if side == 'long' else "rgba(232, 85, 90, 0.15)"
+    _pal = _side_palette(side)
+    accent_light = _pal["accent_light"]
+    border_color = _pal["border_color"]
+    header_bg    = _pal["header_bg"]
 
     table_rows = []
     if timeframe == 'Weekly':
@@ -3883,7 +4032,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
         _zone_colors = {"OB Extreme": "#FB7185", "OB": "#FCA5A5",
                         "OS Extreme": "#34D399", "OS": "#86EFAC"}
         for row in stats[age]['rows']:
-            symbol = html_module.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
+            symbol = html.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
             price = float(row.get('Price', 0))
             pct_change = float(row.get('PctChange', 0))
             signal = float(row.get('Signal', 0))
@@ -3896,14 +4045,11 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
             narr_color = str(row.get('Narrative_Color', '#94a3b8'))
             signal_type = str(row.get('SignalType', '-'))
 
-            # Color % change: green for positive, red for negative
-            pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
-            
-            # Delta formatting
-            conv_delta_color = "#34D399" if conv_delta >= 0 else "#FB7185"
-            pulse_delta_color = "#4a9eff" if pulse_delta >= 0 else "#D4A853"
-            conv_delta_arrow = "↑" if conv_delta >= 0 else "↓"
-            pulse_delta_arrow = "↑" if pulse_delta >= 0 else "↓"
+            pct_color         = _signed_color(pct_change)
+            conv_delta_color  = _signed_color(conv_delta)
+            pulse_delta_color = _signed_color(pulse_delta, pos="#4a9eff", neg="#D4A853")
+            conv_delta_arrow  = _delta_arrow(conv_delta)
+            pulse_delta_arrow = _delta_arrow(pulse_delta)
 
             table_rows.append(f"""
             <tr>
@@ -4030,11 +4176,9 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
 
 def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
     """Build a simplified HTML table for Pulse Narrative mode showing all symbols."""
-    import html as html_module
+    _pal = _side_palette(side)
+    border_color = _pal["border_color"]  # accent_light unused in this builder
 
-    accent_light = "#34D399" if side == 'long' else "#FB7185"
-    border_color = "rgba(45, 212, 168, 0.3)" if side == 'long' else "rgba(232, 85, 90, 0.3)"
-    
     table_rows = []
     if df.empty:
         table_rows.append(f"""
@@ -4046,7 +4190,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
         </tr>""")
     else:
         for _, row in df.iterrows():
-            symbol = html_module.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
+            symbol = html.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
             price = float(row.get('Price', 0))
             pct_change = float(row.get('PctChange', 0))
             signal = float(row.get('Signal', 0))
@@ -4057,11 +4201,11 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
             narrative = str(row.get('Narrative', 'NEUTRAL'))
             narr_color = str(row.get('Narrative_Color', '#94a3b8'))
 
-            pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
-            conv_delta_color = "#34D399" if conv_delta >= 0 else "#FB7185"
-            pulse_delta_color = "#4a9eff" if pulse_delta >= 0 else "#D4A853"
-            conv_delta_arrow = "↑" if conv_delta >= 0 else "↓"
-            pulse_delta_arrow = "↑" if pulse_delta >= 0 else "↓"
+            pct_color         = _signed_color(pct_change)
+            conv_delta_color  = _signed_color(conv_delta)
+            pulse_delta_color = _signed_color(pulse_delta, pos="#4a9eff", neg="#D4A853")
+            conv_delta_arrow  = _delta_arrow(conv_delta)
+            pulse_delta_arrow = _delta_arrow(pulse_delta)
 
             table_rows.append(f"""
             <tr>
@@ -4171,10 +4315,9 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
 
     Returns: Complete HTML document string ready for st.components.v1.html().
     """
-    import html as html_module
-
-    accent_light = "#34D399" if side == 'long' else "#FB7185"
-    border_color = "rgba(45, 212, 168, 0.3)" if side == 'long' else "rgba(232, 85, 90, 0.3)"
+    _pal = _side_palette(side)
+    accent_light = _pal["accent_light"]
+    border_color = _pal["border_color"]
 
     table_rows = []
     if df.empty:
@@ -4194,7 +4337,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
         _zone_colors = {"OB Extreme": "#FB7185", "OB": "#FCA5A5",
                         "OS Extreme": "#34D399", "OS": "#86EFAC"}
         for idx, (_, row) in enumerate(df.iterrows(), 1):
-            symbol = html_module.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
+            symbol = html.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
             price = float(row.get('Price', 0))
             pct_change = float(row.get('PctChange', 0))
             signal = float(row.get('Signal', 0))
@@ -4205,25 +4348,25 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
             narr_color = str(row.get('Narrative_Color', '#94a3b8'))
 
             rank_str = f"{idx:02d}"
-            pct_color = "#34D399" if pct_change >= 0 else "#FB7185"
-            conv_delta_color = "#34D399" if conv_delta >= 0 else "#FB7185"
-            conv_delta_arrow = "↑" if conv_delta >= 0 else "↓"
+            pct_color        = _signed_color(pct_change)
+            conv_delta_color = _signed_color(conv_delta)
+            conv_delta_arrow = _delta_arrow(conv_delta)
 
             # v3 Metrics
             pct_rank = float(row.get(f'Priority_{side.capitalize()}_pct', 0))
             hmm_bull = float(row.get('HMM_Bull', 0.5))
             hmm_bear = float(row.get('HMM_Bear', 0.5))
             vol_reg  = str(row.get('Vol_Regime', 'NORMAL'))
-            
+
             # Regime Logic
             regime_tag = "NEUTRAL"
             regime_color = "#94a3b8"
             if side == 'long':
-                if hmm_bull > 0.7: regime_tag, regime_color = "BULL", "#34D399"
-                elif hmm_bull < 0.3: regime_tag, regime_color = "BEAR", "#FB7185"
+                if hmm_bull > 0.7: regime_tag, regime_color = "BULL", _GREEN
+                elif hmm_bull < 0.3: regime_tag, regime_color = "BEAR", _RED
             else:
-                if hmm_bear > 0.7: regime_tag, regime_color = "BEAR", "#FB7185"
-                elif hmm_bear < 0.3: regime_tag, regime_color = "BULL", "#34D399"
+                if hmm_bear > 0.7: regime_tag, regime_color = "BEAR", _RED
+                elif hmm_bear < 0.3: regime_tag, regime_color = "BULL", _GREEN
                 
             vol_color = {"LOW": "#60a5fa", "NORMAL": "#94a3b8", "HIGH": "#fbbf24", "EXTREME": "#f87171"}.get(vol_reg, "#94a3b8")
 
@@ -4398,7 +4541,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
                 dates=analysis_date, ext="xlsx",
             ),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width='stretch',
+            use_container_width=True,
             key="sysdata_dl_full",
             help=(
                 f"All {len(results_df)} symbols with every computed factor. "
@@ -4416,7 +4559,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
                 dates=analysis_date, ext="xlsx",
             ),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width='stretch',
+            use_container_width=True,
             key="sysdata_dl_bull",
             disabled=len(bull_df) == 0,
             help=f"{len(bull_df)} symbols with Signal > 0 (bullish-leaning composite).",
@@ -4430,7 +4573,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
                 dates=analysis_date, ext="xlsx",
             ),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width='stretch',
+            use_container_width=True,
             key="sysdata_dl_bear",
             disabled=len(bear_df) == 0,
             help=f"{len(bear_df)} symbols with Signal < 0 (bearish-leaning composite).",
@@ -4463,7 +4606,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
         "Pulse_Delta":       "Pulse Δ",
     }
     display_frame = results_df[cols].sort_values("Priority_Long", ascending=False).rename(columns=_col_display_names)
-    st.dataframe(display_frame, width='stretch', height=500)
+    st.dataframe(display_frame, use_container_width=True, height=500)
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
@@ -4783,8 +4926,26 @@ def main():
             console.item("Calibrated profiles", "0 (running on factory defaults)")
 
     # Render sidebar and get parameters + run button state
-    sidebar_out = render_sidebar()
-    universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, mode, start_date, end_date, run_clicked, corr_target_ticker, corr_lookback, corr_method, calib_settings = sidebar_out
+    sb = render_sidebar()
+    # Local aliases preserve the existing main() body unchanged; the win is that
+    # the data flow from the sidebar is now name-keyed (sb.field) instead of a
+    # 16-element positional tuple unpack.
+    universe           = sb.universe
+    selected_index     = sb.selected_index
+    analysis_date      = sb.analysis_date
+    reg_len            = sb.reg_len
+    wt_n1              = sb.wt_n1
+    wt_n2              = sb.wt_n2
+    levels             = sb.levels
+    timeframe          = sb.timeframe
+    mode               = sb.mode
+    start_date         = sb.start_date
+    end_date           = sb.end_date
+    run_clicked        = sb.run_clicked
+    corr_target_ticker = sb.corr_target_ticker
+    corr_lookback      = sb.corr_lookback
+    corr_method        = sb.corr_method
+    calib_settings     = sb.calib_settings
     st.session_state["_calib_settings"] = calib_settings
 
     # Per-universe profile sync now happens inside render_sidebar() right
@@ -4982,7 +5143,7 @@ def main():
                         accent="amber"
                     )
 
-                    # Set C: Momentum — sorted by Directional Priority v3
+                    # Set A: Momentum — legacy L_/S_ alias columns, sorted by Directional Priority v3
                     longs_df = results_df[results_df['L_5d'] != "—"].copy().sort_values('Priority_Long', ascending=False)
                     shorts_df = results_df[results_df['S_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False)
 
@@ -5361,10 +5522,10 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
             dates=export_date, ext="json",
         ),
         mime="application/json",
-        width='stretch',
+        use_container_width=True,
         key="passport_export",
     )
-    if st.button("↺ Reset to Defaults", width='stretch', key="passport_reset"):
+    if st.button("↺ Reset to Defaults", use_container_width=True, key="passport_reset"):
         _set_active_weights(pe.DEFAULT_W)
         if "opt_results" in st.session_state:
             del st.session_state["opt_results"]
@@ -5440,7 +5601,7 @@ def render_intelligence_center():
             </div>
             """, unsafe_allow_html=True)
 
-            if st.button("◈ START SELF-CALIBRATION", width='stretch', type="primary"):
+            if st.button("◈ START SELF-CALIBRATION", use_container_width=True, type="primary"):
                 run_priority_optimization(ts_data, settings)
 
             # Latest calibration diagnostics — same metric-row rhythm as the rest of the app
@@ -5542,7 +5703,7 @@ def render_intelligence_center():
                         yaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
                     )
                     apply_chart_theme(fig_sens)
-                    st.plotly_chart(fig_sens, width='stretch', key='chart_sensitivity')
+                    st.plotly_chart(fig_sens, use_container_width=True, key='chart_sensitivity')
 
                 with sc2:
                     ui.render_interpretation_card(

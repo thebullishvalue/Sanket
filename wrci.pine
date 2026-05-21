@@ -2,11 +2,11 @@
 // ║  WRCI · Wave-Regime Composite Index                                     ║
 // ║  INTELLIGENCE: Abnormal Acceleration (Pulse) Engine                     ║
 // ║  LOGIC: 5D Velocity * 20D Volatility Z-Score                            ║
-// ║  VERSION: v3.1.0                                                        ║
+// ║  VERSION: v3.2.1                                                        ║
 // ╚═════════════════════════════════════════════════════════════════════════╝
 
 //@version=5
-indicator("WRCI [Sanket Core]", "WRCI (v3.1.0)", overlay=false, precision=2, max_bars_back=500)
+indicator("WRCI [Sanket Core]", "WRCI", overlay=false, precision=2, max_bars_back=500)
 
 // ╔═════════════════════════════════════════════════════════════════════════╗
 // ║  SECTION 1 · INPUTS & CONFIGURATION                                     ║
@@ -16,6 +16,8 @@ indicator("WRCI [Sanket Core]", "WRCI (v3.1.0)", overlay=false, precision=2, max
 grp_fast   = "WRCI: Tactical (Fast)"
 n1         = input.int(10, "Channel Length",         group=grp_fast, display=display.none)
 n2         = input.int(21, "Average Length",         group=grp_fast, display=display.none)
+wt2_len    = input.int(4,  "Signal Line Length",     group=grp_fast, display=display.none, minval=2, tooltip="WT2 signal line smoothing period (default 4)")
+wt2_type   = input.string("SMA", "Signal Line Type", group=grp_fast, display=display.none, options=["SMA", "EMA", "HMA", "WMA", "VWMA"], tooltip="Smoothing function for WT2 signal line")
 
 // ── 1B · STRUCTURAL (MEDIUM) ──
 grp_med    = "WRCI: Structural (Medium)"
@@ -61,6 +63,15 @@ f_tanh(_x) =>
     _e2x = math.exp(2.0 * _xc)
     (_e2x - 1.0) / (_e2x + 1.0)
 
+// Configurable smoothing — dispatches to the selected MA type.
+f_smooth(_src, _len, _type) =>
+    switch _type
+        "EMA"  => ta.ema(_src, _len)
+        "HMA"  => ta.hma(_src, _len)
+        "WMA"  => ta.wma(_src, _len)
+        "VWMA" => ta.vwma(_src, _len)
+        =>        ta.sma(_src, _len)
+
 
 // ╔═════════════════════════════════════════════════════════════════════════╗
 // ║  SECTION 3 · CORE CALCULATIONS                                          ║
@@ -74,7 +85,7 @@ ci         = (ap - esa) / (0.015 * d)
 tci        = ta.ema(ci, n2)
 
 wt1        = tci
-wt2        = ta.sma(wt1, 4)
+wt2        = f_smooth(wt1, wt2_len, wt2_type)
 
 // ── 3B · CONVICTION ENGINE ──────────────────────────────────────────────────
 // Component 1: Trend Strength (structural, slow, magnitude-aware)
@@ -228,6 +239,28 @@ p4_f4 = pulse * 12.0
 priority_val = p4_f1 + p4_f2 + p4_f3 + p4_f4 + 25.0
 
 
+// ── 3D · REGIME FILTER [BigBeluga] (independent indicator) ─────────────────
+// Source: regime_filter.pine — © BigBeluga, CC BY-NC-SA 4.0
+// Faithful port; produces rf_trend and rf_voltrend in [-10, +10].
+rf_hma          = ta.hma(hlc3,   15)
+rf_volh         = ta.hma(volume, 15)
+rf_trend_int    = 0
+rf_voltrend_int = 0
+for i = 0 to reg_len
+    if rf_hma > rf_hma[i]
+        rf_trend_int += 1
+    else
+        rf_trend_int -= 1
+for i = 0 to reg_len
+    if rf_volh > rf_volh[i]
+        rf_voltrend_int += 1
+    else
+        rf_voltrend_int -= 1
+rf_coeff    = 10.0 / reg_len
+rf_trend    = rf_trend_int    * rf_coeff
+rf_voltrend = rf_voltrend_int * rf_coeff
+
+
 // ╔═════════════════════════════════════════════════════════════════════════╗
 // ║  SECTION 4 · SANKET ENGINE (SIGNAL LOGIC)                               ║
 // ╚═════════════════════════════════════════════════════════════════════════╝
@@ -252,21 +285,28 @@ sqz_val     = ta.linreg(close - math.avg(math.avg(ta.highest(high, sqz_len), ta.
 sig_bull_cross = ta.crossover(wt1,  wt2)
 sig_bear_cross = ta.crossunder(wt1, wt2)
 
-// Set B: Contrarian Zone Signals
-crossover_long  = sig_bear_cross and wt1 < osLevel2
-crossover_short = sig_bull_cross and wt1 > obLevel2
+// Set B: Crossover — Regime-Filter cross gated by Conviction Δ + Pulse Δ polarity
+// (rf_voltrend crossing above rf_trend; long when ΔConv > 0 and ΔPulse > 0,
+//                                       short when ΔConv < 0 and ΔPulse < 0)
+rf_volcross_above_trend = ta.crossover(rf_voltrend, rf_trend)
+crossover_long  = rf_volcross_above_trend and conv_delta > 0 and pulse_delta > 0
+crossover_short = rf_volcross_above_trend and conv_delta < 0 and pulse_delta < 0
 
-// Set A: Momentum Signals (Mutually Exclusive with Set B)
-momentum_long   = sig_bull_cross and not crossover_short
-momentum_short  = sig_bear_cross and not crossover_long
+// Set A: Momentum — base WRCI crossings, vetoed by the opposite-side Set B,
+// and gated by Δ-polarity: long requires ΔConv > 0 and ΔPulse > 0; short
+// requires both < 0. Same Δ gate used by Sets B and D.
+momentum_long   = sig_bull_cross and not crossover_short and conv_delta > 0 and pulse_delta > 0
+momentum_short  = sig_bear_cross and not crossover_long  and conv_delta < 0 and pulse_delta < 0
 
 // Set C: Threshold Zone Entry
 threshold_long  = wt1 < osLevel2 and wt1[1] >= osLevel2 and wt2 > osLevel2
 threshold_short = wt1 > obLevel2 and wt1[1] <= obLevel2 and wt2 < obLevel2
 
-// Set D: Squeeze Release
-squeeze_long    = sqz_release and sqz_val > sqz_val[1]
-squeeze_short   = sqz_release and sqz_val < sqz_val[1]
+// Set D: Squeeze — Regime-Filter trend crossing zero, gated by Conviction Δ + Pulse Δ
+// (long when rf_trend crosses above 0 with ΔConv > 0 and ΔPulse > 0;
+//  short when rf_trend crosses below 0 with ΔConv < 0 and ΔPulse < 0)
+squeeze_long    = ta.crossover(rf_trend,  0) and conv_delta > 0 and pulse_delta > 0
+squeeze_short   = ta.crossunder(rf_trend, 0) and conv_delta < 0 and pulse_delta < 0
 
 
 // ╔═════════════════════════════════════════════════════════════════════════╗

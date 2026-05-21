@@ -7,6 +7,33 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v3.2.1] · 2026-05-21
+### Set A Δ-Polarity Gate & Signal Engine Refactor
+
+**"Symmetric Conviction"**
+
+Behavior-changing tightening of the Momentum signal gate plus a focused refactor of `sanket.py` to extract long-lived inline blocks and surface the sidebar return as a typed dataclass. Pine indicator (`wrci.pine`) updated in lockstep to preserve 1:1 parity.
+
+#### Behavior Change — Set A
+- **Δ-polarity gate added to Set A** (Momentum): WT1/WT2 crossings now require `Conviction Δ` and `Pulse Δ` to be the same sign as the trade direction (long: both > 0; short: both < 0). Brings Set A in line with the gate already used by Sets B and D. Net effect: fewer but better-confirmed Set A signals; historical Set A counts will drop. The opposite-side Set B veto (long A blocked when B-short fires, and vice versa) is retained on top of the new gate.
+- **`wrci.pine` synchronized**: Pine `momentum_long` / `momentum_short` now carry the same Δ gate, preserving 1:1 mathematical parity between the Python screener and the TradingView indicator.
+
+#### Refactor (No Behavior Change)
+- **`compute_signal_sets` helper extracted**: Sets A/B/C/D logic and the zone `Condition` column moved out of `run_full_analysis` into a dedicated function with a docstring explaining each set's predicate, gating, and the load-bearing `np.select` ordering for the zone label.
+- **`SidebarState` dataclass**: `render_sidebar()` now returns a typed dataclass instead of a 16-element positional tuple. The data flow from sidebar to `main()` is name-keyed; new inputs no longer require updating a tuple unpack.
+- **Shared HTML-builder palette helpers**: `_side_palette`, `_signed_color`, `_delta_arrow`, and `_GREEN` / `_RED` constants dedupe the green/red and arrow ternaries that were repeated across `_build_confluence_table_html`, `_build_signal_table_html`, `_build_narrative_table_html`, and `_build_signal_strength_table_html`.
+- **Redundant imports removed**: Four local `import html as html_module` lines deleted — the top-level `import html` covers all `html.escape` callsites. Dead `from io import BytesIO` removed (all callers go through `io.BytesIO()`).
+
+#### Documentation
+- **README Signal Hierarchy table rewritten**: Sets B, C, D descriptions now accurately reflect the regime-filter crossover, signal-line-validated zone entry, and regime-zero-cross triggers respectively (previous text described unrelated logic).
+- **README search-space breakdown corrected**: Now correctly enumerates 12 betas + 4 gammas (reversion + divergence, each side) + 5 tier multipliers = 21 dimensions.
+- **README profile JSON example fixed**: Uses real field names (`val_score`/`train_score`/`sensitivity`/`tier_A_mult`) and the actual `" · "`-joined composite key format.
+- **README line counts refreshed**: `sanket.py` (5,928) and `wrci.pine` (412).
+- **`ui/components.py` Signal Types Reference rewritten**: Sets A and B descriptions match the actual triggers; Set D card added (CSS class `.signal-type.squeeze` already existed in `theme.css`, but the HTML card was missing).
+- **Mislabeled comments fixed**: Two `# Set C: Momentum` comments at `sanket.py:2402-2408` and `sanket.py:5147` corrected to `# Set A: Momentum` (these labelled the legacy `L_`/`S_` alias columns, which read `long_cond` / `short_cond` — Set A's columns, not Set C's).
+
+---
+
 ## [v3.2.0] · 2026-05-09
 ### System Hardening, Fidelity & UI Polish
 

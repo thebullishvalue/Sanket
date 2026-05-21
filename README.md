@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Wave-Regime Composite Index · Obsidian Quant · Pragyam Family · `v3.2.0`
+### Wave-Regime Composite Index · Obsidian Quant · Pragyam Family · `v3.2.1`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -152,17 +152,17 @@ Every market signal is classified into one of four non-redundant tiers. Tier mul
 
 | Set | Type | Trigger Condition | Use Case |
 |:---|:---|:---|:---|
-| **A** | Momentum | WT1/WT2 crossover outside extreme zones | Tactical trend-following in liquid regimes |
-| **B** | Contrarian | WT1/WT2 cross *inside* overbought/oversold zones | High-probability mean-reversion identification |
-| **C** | Threshold | Zone entry/exit gates (±60 level crossings) | Volatility regime transition detection |
-| **D** | Squeeze | Bollinger/Keltner volatility compression breakout | Positioning ahead of explosive expansion |
+| **A** | Momentum  | WT1 crosses WT2, with `ΔConviction` and `ΔPulse` both same-signed as the trade direction; vetoed if the opposite-side Set B fires on the same bar | Tactical trend entry with Δ-confirmed momentum |
+| **B** | Crossover | Regime Filter `rf_voltrend` crosses above `rf_trend`, gated by `ΔConviction` and `ΔPulse` polarity (long: both > 0; short: both < 0) | Cross-indicator regime confirmation — highest tier weight |
+| **C** | Threshold | WT1 freshly dips below `osLevel2` (−40) with signal line WT2 still above, or freshly exceeds `obLevel2` (+40) with WT2 still below | Earliest actionable oscillator entry, signal-line lag confirms freshness |
+| **D** | Squeeze   | Regime Filter `rf_trend` crosses zero, gated by the same `ΔConviction` and `ΔPulse` polarity as Set B | Structural regime flip — lowest default tier weight |
 
 **Signal firing rules**:
-- Sets A and B are mutually exclusive per bar (no double-counting crossovers)
-- Set C fires when price crosses threshold levels but WT1/WT2 alignment is not yet confirmed
-- Set D is independent — squeeze compression can co-exist with A/B/C
+- All four sets share the **Δ-polarity gate**: long signals require `ΔConviction > 0` *and* `ΔPulse > 0`; short signals require both `< 0`. On the first bar (deltas filled to 0) no set can fire.
+- Set A is additionally vetoed by the **opposite-side Set B** (long A blocked if B-short fires, and vice versa) — a cross-indicator safety filter, since A reads the WRCI oscillator and B reads the regime filter.
+- The four sets can otherwise co-fire on the same bar; `_classify_signal_type` resolves the display label by priority **B > A > C > D > Zone**.
 
-**Tier multipliers** are optimized per universe by the Intelligence engine. The sample F&O profile shows: `A=0.96, B=0.55, C=0.94, D=1.16`, meaning Set D squeeze signals are slightly overweighted relative to contrarian Set B in that universe.
+**Tier multipliers** are direction-agnostic damping coefficients applied during priority scoring. Defaults (`priority_engine.py`): `A=1.00, B=1.30, C=0.85, D=0.75`, default=`0.90`. The Intelligence engine learns universe-specific values during calibration.
 
 ---
 
@@ -216,15 +216,14 @@ The Intelligence module (`intelligence.py`) uses Bayesian hyperparameter optimiz
 
 ### Algorithm
 
-- **Optimizer**: Optuna Tree-structured Parzen Estimator (TPE) — Bayesian, not grid search
+- **Optimizer**: Optuna Tree-structured Parzen Estimator (TPE), seeded (`seed=42`) for reproducibility
 - **Search space**: 21-dimensional
-  - 6 × (long beta + short beta) = 12 factor weights
-  - 2 × reversion penalty (long + short) = 2 penalty weights
-  - 4 tier multipliers (A, B, C, D)
-  - Remaining: cross-sectional rank and damping parameters
-- **Objective**: Maximize out-of-sample Information Ratio (Spearman IC averaged across hold periods)
-- **Train/Val split**: 70% in-sample, 30% out-of-sample validation — results report **val IC only**
-- **L2 regularization**: Prevents runaway weight inflation
+  - **12 factor betas** — 6 factors (F1–F6) × `_long` and `_short` sides
+  - **4 penalty gammas** — `reversion` and `divergence` × `_long` and `_short`
+  - **5 tier multipliers** — `tier_A_mult`, `tier_B_mult`, `tier_C_mult`, `tier_D_mult`, `tier_default_mult`
+- **Objective**: Maximize out-of-sample Information Ratio (Spearman IC averaged across `HOLD_HORIZONS = [2, 3, 5, 8, 13]` bars)
+- **Train/Val split**: 70% in-sample, 30% out-of-sample validation — results report **val score** (held-out IR) as the primary metric
+- **L2 regularization**: Prevents runaway weight inflation in low-signal regimes
 
 ### Pre-computed Dataset (50× Speed Boost)
 
@@ -357,7 +356,7 @@ Sanket uses a custom structured logging system (`logger.py`) that writes directl
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  SANKET TERMINAL — Session Start  v3.1.0
+  SANKET TERMINAL — Session Start  v3.2.1
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Run ID     │  20260507_142301_a3f8
   Universe   │  NSE F&O
@@ -388,11 +387,11 @@ console.line()                          # Separator
 
 ```
 Sanket/
-├── sanket.py               # Main entry — Streamlit UI + analysis dispatch (5,759 lines)
+├── sanket.py               # Main entry — Streamlit UI + analysis dispatch (5,928 lines)
 ├── priority_engine.py      # Asymmetric priority engine + profile persistence (381 lines)
 ├── intelligence.py         # Self-tuning Bayesian calibration via Optuna (411 lines)
 ├── logger.py               # Structured terminal logging system (226 lines)
-├── wrci.pine               # TradingView Pine Script v6 — mathematical mirror (378 lines)
+├── wrci.pine               # TradingView Pine Script v6 — mathematical mirror (412 lines)
 ├── requirements.txt        # Pinned runtime dependencies
 ├── LICENSE                 # Proprietary institutional license
 ├── README.md               # This file
@@ -481,31 +480,35 @@ A `.devcontainer/devcontainer.json` is included for VSCode Remote Containers. Op
 
 Calibrated profiles are stored at `~/.sanket/profiles.json` on the host machine. Each profile is keyed by a composite `(universe, selected_index)` string.
 
-**Example profile structure:**
+**Example profile structure** (key format: `"<universe> · <selected_index> · <timeframe>"`, joined by `" · "`):
 
 ```json
 {
-  "NSE_FO__NIFTY50": {
+  "India Indexes · NIFTY 50 · daily": {
     "weights": {
       "beta_F1_pricemom_long":  3.8,
       "beta_F1_pricemom_short": 2.1,
       "beta_F4_pulse_long":     1.35,
       "beta_F4_pulse_short":    7.11,
-      "beta_F5_regime_long":    32.86,
-      "beta_F5_regime_short":   45.38,
-      "tier_multiplier_A":      0.96,
-      "tier_multiplier_B":      0.55,
-      "tier_multiplier_C":      0.94,
-      "tier_multiplier_D":      1.16
+      "beta_F5_regime_long":   32.86,
+      "beta_F5_regime_short":  45.38,
+      "tier_A_mult":            0.96,
+      "tier_B_mult":            0.55,
+      "tier_C_mult":            0.94,
+      "tier_D_mult":            1.16,
+      "tier_default_mult":      0.90
     },
-    "val_ic":   0.1556,
-    "train_ic": 0.2198,
-    "timestamp": "2026-05-07 12:35",
-    "importance": {
-      "beta_F4_pulse_long":    0.252,
-      "beta_F5_regime_short":  0.234,
-      "tier_multiplier_C":     0.147
-    }
+    "train_score": 0.2198,
+    "val_score":   0.1556,
+    "sensitivity": {
+      "beta_F4_pulse_long":   0.252,
+      "beta_F5_regime_short": 0.234,
+      "tier_C_mult":          0.147
+    },
+    "timestamp":      "2026-05-07 12:35",
+    "universe":       "India Indexes",
+    "selected_index": "NIFTY 50",
+    "timeframe":      "daily"
   }
 }
 ```
@@ -522,7 +525,7 @@ The **Model Passport** panel (sidebar) provides:
 
 ## TradingView Pine Script Indicator
 
-`wrci.pine` is the companion TradingView indicator — **WRCI [Sanket Core]** (`v3.2.0`). It implements the same mathematical pipeline as the Python engine:
+`wrci.pine` is the companion TradingView indicator — **WRCI [Sanket Core]** (`v3.2.1`). It implements the same mathematical pipeline as the Python engine:
 
 | Calculation | Python | Pine Script |
 |:---|:---|:---|
@@ -576,4 +579,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v3.2.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v3.2.1 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
