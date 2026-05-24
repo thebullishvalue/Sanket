@@ -5024,7 +5024,7 @@ def main():
         show_landing = True
 
     if show_landing:
-        ui.render_header("Sanket", "Market Signal Screener · संकेत · WRCI Engine")
+        ui.render_header("Sanket", "Market Signal Screener · WRCI Engine")
         if st.session_state.get("run_error"):
             st.error(st.session_state["run_error"])
         render_landing_page()
