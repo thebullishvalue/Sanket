@@ -59,6 +59,7 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 st.set_page_config(
     page_title="SANKET | Market Signal Screener",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
