@@ -13,6 +13,7 @@ optuna>=3.5.0
 # ── Data Sources ──────────────────────────────────────────────
 yfinance>=0.2.31
 nsepython
+NseKit          # preferred F&O underlyings source (official underlying-information API)
 requests>=2.31.0
 
 # ── HTML / Excel I/O (pandas.read_html + to_excel) ────────────

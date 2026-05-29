@@ -582,6 +582,24 @@ def _dedupe_preserve_order(items):
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_fno_stock_list():
     """Fetch F&O eligible stocks from NSE with multiple fallback sources."""
+    # ── Source 0: NseKit (preferred) ──────────────────────────────────────────
+    # Uses NSE's official "underlying-information" API (the authoritative F&O
+    # underlyings master), not the equity-stockIndices index view. No index
+    # aggregate header row, and NseKit handles NSE's cookie/session warmup itself,
+    # which tends to survive datacenter-IP blocking better. Lazy-imported so a
+    # missing/broken package simply falls through to the legacy sources below.
+    try:
+        from NseKit import NseKit
+        symbols = NseKit.Nse().nse_eom_fno_full_list(list_only=True)
+        if symbols:
+            symbols_ns = _dedupe_preserve_order(
+                [str(s).strip() + ".NS" for s in symbols if s and str(s).strip()]
+            )
+            if symbols_ns:
+                return symbols_ns, f"✓ Fetched {len(symbols_ns)} F&O securities (NseKit)"
+    except Exception as e:
+        console.detail(f"F&O source 0 (NseKit) failed: {type(e).__name__}: {e}")
+
     try:
         url = "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O"
         headers = {
