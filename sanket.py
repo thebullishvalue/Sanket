@@ -568,6 +568,17 @@ ASSET_NAME_LOOKUP = {v: k for k, v in {**COMMODITY_MAP, **CURRENCY_MAP, **CRYPTO
 # DATA FETCHING FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _dedupe_preserve_order(items):
+    """Return items with duplicates removed, keeping first-seen order."""
+    seen = set()
+    out = []
+    for it in items:
+        if it not in seen:
+            seen.add(it)
+            out.append(it)
+    return out
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_fno_stock_list():
     """Fetch F&O eligible stocks from NSE with multiple fallback sources."""
@@ -588,15 +599,21 @@ def get_fno_stock_list():
             data = response.json()
             if 'data' in data:
                 symbols = [item['symbol'] for item in data['data'] if 'symbol' in item]
+                # Skip the first entry — equity-stockIndices always returns the index
+                # aggregate row as data[0], not a constituent (same as get_index_stock_list).
+                symbols = [s for s in symbols[1:] if s and str(s).strip()]
                 if symbols:
-                    symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
+                    symbols_ns = _dedupe_preserve_order([str(s) + ".NS" for s in symbols])
                     return symbols_ns, f"✓ Fetched {len(symbols_ns)} F&O securities"
     except Exception as e:
         console.detail(f"F&O source 1 (NSE JSON) failed: {type(e).__name__}: {e}")
 
     try:
+        # NOTE: nse_get_advances_declines() hits the SAME "SECURITIES IN F&O" endpoint
+        # as source 1 (the name is misleading); it's a redundant retry via nsepython's
+        # session handling, and its data[0] is likewise the index aggregate row.
         stock_data = nse_get_advances_declines()
-        if isinstance(stock_data, pd.DataFrame):
+        if isinstance(stock_data, pd.DataFrame) and not stock_data.empty:
             symbols = None
             if 'SYMBOL' in stock_data.columns:
                 symbols = stock_data['SYMBOL'].tolist()
@@ -606,23 +623,32 @@ def get_fno_stock_list():
                 symbols = stock_data.index.tolist()
 
             if symbols:
-                symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
+                # Drop the leading index aggregate row, same as source 1.
+                symbols = [s for s in symbols[1:] if s and str(s).strip()]
+                symbols_ns = _dedupe_preserve_order([str(s) + ".NS" for s in symbols])
                 if symbols_ns:
                     return symbols_ns, f"✓ Fetched {len(symbols_ns)} F&O securities"
     except Exception as e:
         console.detail(f"F&O source 2 (advances/declines) failed: {type(e).__name__}: {e}")
 
     try:
+        # Last-resort fallback. NOTE: NIFTY 500 is a DIFFERENT, ~2.5x larger universe
+        # than the ~220 F&O securities (it is a superset that contains them). Surfaced
+        # with an explicit ⚠ so the user knows the screened universe is not pure F&O.
         url = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, verify=False, timeout=10)
         if response.status_code == 200:
             csv_file = io.StringIO(response.text)
             stock_df = pd.read_csv(csv_file)
-            if 'Symbol' in stock_df.columns:
-                symbols = stock_df['Symbol'].tolist()
-                symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
-                return symbols_ns, f"✓ Fetched {len(symbols_ns)} stocks (NIFTY 500 fallback)"
+            symbol_col = next((c for c in stock_df.columns if str(c).strip().lower() == 'symbol'), None)
+            if symbol_col:
+                symbols = stock_df[symbol_col].tolist()
+                symbols_ns = _dedupe_preserve_order(
+                    [str(s) + ".NS" for s in symbols if s and str(s).strip()]
+                )
+                return symbols_ns, (f"⚠ F&O endpoint unavailable — using NIFTY 500 superset "
+                                    f"({len(symbols_ns)} stocks, not pure F&O)")
     except Exception as e:
         console.detail(f"F&O source 3 (NSE archive CSV) failed: {type(e).__name__}: {e}")
 
