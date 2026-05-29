@@ -59,7 +59,7 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 st.set_page_config(
     page_title="SANKET | Market Signal Screener",
-    page_icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0Q0QTg1MyIgc3Ryb2tlLXdpZHRoPSIyIi8+PHBhdGggZD0iTTggMTRsMy01IDIgMyAzLTQiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0Q0QTg1MyIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L3N2Zz4=",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -706,31 +706,38 @@ def get_index_stock_list(index):
         console.detail(f"Index source 1 (NSE JSON API) failed for '{index}': {type(e).__name__}: {e}")
 
     # --- Source 2: NSE archives CSV ---
+    # NSE is migrating its archive host from archives.nseindia.com to the newer
+    # nsearchives.nseindia.com. Try both so the fallback keeps working if either
+    # host is retired or blocked; the static-file hosts are rarely IP-blocked.
     url = INDEX_URL_MAP.get(index)
     if url:
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Cache-Control': 'max-age=0',
-            }
-            session = requests.Session()
-            session.get("https://archives.nseindia.com", headers=headers, verify=False, timeout=10)
-            response = session.get(url, headers=headers, verify=False, timeout=15)
-            response.raise_for_status()
-            stock_df = pd.read_csv(io.StringIO(response.text))
-            symbol_col = next((c for c in stock_df.columns if c.lower() == 'symbol'), None)
-            if symbol_col:
-                symbols = stock_df[symbol_col].tolist()
-                symbols_ns = [str(s) + ".NS" for s in symbols if s and str(s).strip()]
-                if symbols_ns:
-                    return symbols_ns, f"✓ Fetched {len(symbols_ns)} constituents (NSE archive)"
-        except Exception as e:
-            console.detail(f"Index source 2 (NSE archive CSV) failed for '{index}': {type(e).__name__}: {e}")
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Cache-Control': 'max-age=0',
+        }
+        for host in ("archives.nseindia.com", "nsearchives.nseindia.com"):
+            candidate_url = re.sub(r"https://[^/]+", f"https://{host}", url)
+            try:
+                session = requests.Session()
+                session.get(f"https://{host}", headers=headers, verify=False, timeout=10)
+                response = session.get(candidate_url, headers=headers, verify=False, timeout=15)
+                response.raise_for_status()
+                stock_df = pd.read_csv(io.StringIO(response.text))
+                symbol_col = next((c for c in stock_df.columns if c.lower() == 'symbol'), None)
+                if symbol_col:
+                    symbols = stock_df[symbol_col].tolist()
+                    symbols_ns = _dedupe_preserve_order(
+                        [str(s) + ".NS" for s in symbols if s and str(s).strip()]
+                    )
+                    if symbols_ns:
+                        return symbols_ns, f"✓ Fetched {len(symbols_ns)} constituents (NSE archive · {host})"
+            except Exception as e:
+                console.detail(f"Index source 2 (NSE archive CSV · {host}) failed for '{index}': {type(e).__name__}: {e}")
 
     # --- Source 3: Wikipedia fallback ---
     wiki_result = _fetch_index_from_wikipedia(index)
@@ -5326,7 +5333,7 @@ def main():
                         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                         bull_tab, bear_tab = st.tabs(["Bullish Signals by Timing", "Bearish Signals by Timing"])
                         with bull_tab:
-                            mom_bull_tab, cross_bull_tab, thresh_bull_tab, sqz_bull_tab = st.tabs(["Momentum", "Crossover", "Threshold", "Squeeze"])
+                            cross_bull_tab, mom_bull_tab, thresh_bull_tab, sqz_bull_tab = st.tabs(["Crossover", "Momentum", "Threshold", "Squeeze"])
                             with mom_bull_tab:
                                 _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A', timeframe=timeframe)
                                 la_html = _build_signal_table_html(la_stats, side='long', timeframe=timeframe)
@@ -5352,7 +5359,7 @@ def main():
                                 _r = sum(ld_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(ld_html, height=max(70 + _g * 46 + _r * 44, 110))
                         with bear_tab:
-                            mom_bear_tab, cross_bear_tab, thresh_bear_tab, sqz_bear_tab = st.tabs(["Momentum", "Crossover", "Threshold", "Squeeze"])
+                            cross_bear_tab, mom_bear_tab, thresh_bear_tab, sqz_bear_tab = st.tabs(["Crossover", "Momentum", "Threshold", "Squeeze"])
                             with mom_bear_tab:
                                 _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A', timeframe=timeframe)
                                 sa_html = _build_signal_table_html(sa_stats, side='short', timeframe=timeframe)
