@@ -16,8 +16,8 @@ indicator("WRCI [Sanket Core]", "WRCI", overlay=false, precision=2, max_bars_bac
 grp_fast   = "WRCI: Tactical (Fast)"
 n1         = input.int(10, "Channel Length",         group=grp_fast, display=display.none)
 n2         = input.int(21, "Average Length",         group=grp_fast, display=display.none)
-wt2_len    = input.int(4,  "Signal Line Length",     group=grp_fast, display=display.none, minval=2, tooltip="WT2 signal line smoothing period (default 4)")
-wt2_type   = input.string("SMA", "Signal Line Type", group=grp_fast, display=display.none, options=["SMA", "EMA", "HMA", "WMA", "VWMA"], tooltip="Smoothing function for WT2 signal line")
+wt2_len    = input.int(20,  "Signal Line Length",     group=grp_fast, display=display.none, minval=2, tooltip="WT2 signal line smoothing period (default 4)")
+wt2_type   = input.string("ALMA", "Signal Line Type", group=grp_fast, display=display.none, options=["SMA", "EMA", "HMA", "WMA", "VWMA", "ALMA", "RMA"], tooltip="Smoothing function for WT2 signal line (ALMA = Arnaud Legoux MA, RMA = Wilder's MA)")
 
 // ── 1B · STRUCTURAL (MEDIUM) ──
 grp_med    = "WRCI: Structural (Medium)"
@@ -64,12 +64,15 @@ f_tanh(_x) =>
     (_e2x - 1.0) / (_e2x + 1.0)
 
 // Configurable smoothing — dispatches to the selected MA type.
+// ALMA uses standard defaults (offset 0.85, sigma 6); RMA is Wilder's smoothing.
 f_smooth(_src, _len, _type) =>
     switch _type
         "EMA"  => ta.ema(_src, _len)
         "HMA"  => ta.hma(_src, _len)
         "WMA"  => ta.wma(_src, _len)
         "VWMA" => ta.vwma(_src, _len)
+        "ALMA" => ta.alma(_src, _len, 0.85, 6)
+        "RMA"  => ta.rma(_src, _len)
         =>        ta.sma(_src, _len)
 
 
@@ -299,8 +302,8 @@ momentum_long   = sig_bull_cross and not crossover_short and conv_delta > 0 and 
 momentum_short  = sig_bear_cross and not crossover_long  and conv_delta < 0 and pulse_delta < 0
 
 // Set C: Threshold Zone Entry
-threshold_long  = wt1 < osLevel2 and wt1[1] >= osLevel2 and wt2 > osLevel2
-threshold_short = wt1 > obLevel2 and wt1[1] <= obLevel2 and wt2 < obLevel2
+threshold_long  = wt1 < osLevel2 and wt1[1] >= osLevel2 and wt2 > osLevel2 and conv_delta > 0 and pulse_delta > 0
+threshold_short = wt1 > obLevel2 and wt1[1] <= obLevel2 and wt2 < obLevel2 and conv_delta < 0 and pulse_delta < 0
 
 // Set D: Squeeze — Regime-Filter trend crossing zero, gated by Conviction Δ + Pulse Δ
 // (long when rf_trend crosses above 0 with ΔConv > 0 and ΔPulse > 0;

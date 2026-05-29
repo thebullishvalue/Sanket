@@ -59,7 +59,7 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 st.set_page_config(
     page_title="SANKET | Market Signal Screener",
-    page_icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0Q0QTg1MyIgc3Ryb2tlLXdpZHRoPSIyIi8+PHBhdGggZD0iTTggMTRsMy01IDIgMyAzLTQiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0Q0QTg1MyIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L3N2Zz4=",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -1080,6 +1080,80 @@ def calculate_ema(series, length):
     return pd.Series(ema_values, index=series.index)
 
 
+def calculate_sma(series, length):
+    if length <= 1:
+        return series
+    return series.rolling(window=length).mean()
+
+
+def calculate_rma(series, length):
+    """Wilder's smoothing (RMA), matched to TradingView's ta.rma.
+    Seeds with an SMA, then applies alpha = 1/length."""
+    if length <= 1:
+        return series
+    alpha = 1.0 / length
+    sma = series.rolling(window=length, min_periods=length).mean()
+    first_idx = sma.first_valid_index()
+    if first_idx is None:
+        return pd.Series(np.nan, index=series.index)
+    start_pos = series.index.get_loc(first_idx)
+    values = series.values
+    out = np.full(len(series), np.nan)
+    out[start_pos] = sma.loc[first_idx]
+    for i in range(start_pos + 1, len(series)):
+        prev = out[i - 1]
+        if np.isnan(prev):
+            prev = values[i]
+        out[i] = alpha * values[i] + (1.0 - alpha) * prev
+    return pd.Series(out, index=series.index)
+
+
+def calculate_vwma(series, volume, length):
+    """Volume-weighted moving average, matched to ta.vwma."""
+    if length <= 1:
+        return series
+    pv = (series * volume).rolling(window=length).sum()
+    v = volume.rolling(window=length).sum().replace(0, np.nan)
+    return pv / v
+
+
+def calculate_alma(series, length, offset=0.85, sigma=6.0):
+    """Arnaud Legoux Moving Average, matched to ta.alma(src, len, offset, sigma).
+    Gaussian-weighted window with the peak shifted toward the most recent bar."""
+    if length <= 1:
+        return series
+    m = offset * (length - 1)
+    s = length / sigma
+    idx = np.arange(length)
+    weights = np.exp(-((idx - m) ** 2) / (2.0 * s * s))
+    weights /= weights.sum()
+    # In a pandas rolling window y[0] is oldest, y[length-1] is newest — the same
+    # ordering as Pine's series[length-1-i], so weights apply directly.
+    return series.rolling(window=length).apply(lambda y: np.dot(y, weights), raw=True)
+
+
+def f_smooth(src, length, ma_type, volume=None):
+    """Configurable smoothing dispatcher — mirrors wrci.pine's f_smooth().
+    ALMA uses standard defaults (offset 0.85, sigma 6); RMA is Wilder's smoothing.
+    Falls back to SMA for unknown types (matching the Pine switch default)."""
+    t = (ma_type or "SMA").upper()
+    if t == "EMA":
+        return calculate_ema(src, length)
+    if t == "HMA":
+        return calculate_hma(src, length)
+    if t == "WMA":
+        return calculate_wma(src, length)
+    if t == "VWMA":
+        if volume is None:
+            return calculate_sma(src, length)
+        return calculate_vwma(src, volume, length)
+    if t == "ALMA":
+        return calculate_alma(src, length, 0.85, 6.0)
+    if t == "RMA":
+        return calculate_rma(src, length)
+    return calculate_sma(src, length)
+
+
 def calculate_linreg(series, length, offset=0):
     """Calculate the Linear Regression endpoint."""
     def _linreg_val(y):
@@ -1148,7 +1222,8 @@ def regime_filter(df: pd.DataFrame, length: int = 20):
     return trend * coeff, voltrend * coeff
 
 
-def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40):
+def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40,
+                      wt2_len=20, wt2_type="ALMA"):
     reg_len = max(reg_len, 2)
     # Auto-correct inverted OB levels (obLevel1 must be the stronger/higher bound)
     if obLevel1 < obLevel2:
@@ -1186,7 +1261,8 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     tci = calculate_ema(ci, n2)
 
     wt1 = tci
-    wt2 = wt1.rolling(window=4).mean()
+    # WT2 signal line — configurable smoothing, ALMA(20) by default (parity with wrci.pine).
+    wt2 = f_smooth(wt1, wt2_len, wt2_type, volume=vol)
 
     # ── CONVICTION V3 ENGINE ────────────────────────────────────────────────
     # Component 1: Trend Strength (structural, slow, magnitude-aware)
@@ -1954,6 +2030,8 @@ class SidebarState:
     reg_len: int
     wt_n1: int
     wt_n2: int
+    wt2_len: int     # WT2 signal-line smoothing length (wrci.pine: "Signal Line Length")
+    wt2_type: str    # WT2 signal-line MA type (wrci.pine: "Signal Line Type", ALMA default)
     levels: tuple  # (obLevel1, obLevel2, osLevel1, osLevel2)
     timeframe: str
     mode: str
@@ -2069,8 +2147,9 @@ def render_sidebar() -> SidebarState:
             corr_lookback = int(corr_lookback_str.replace("D", ""))
             corr_method = st.selectbox("Method", ["Pearson", "Spearman"], key="sb_corr_method", label_visibility="collapsed")
 
-        # WRCI Engine — hardcoded defaults
+        # WRCI Engine — hardcoded defaults (parity with wrci.pine inputs)
         reg_len, wt_n1, wt_n2 = 20, 10, 21
+        wt2_len, wt2_type = 20, "ALMA"   # Signal Line Length / Type (ALMA default)
         obLevel1, obLevel2, osLevel1, osLevel2 = 80, 40, -80, -40
 
         # ── Intelligence-mode-only inputs ────────────────────────────────
@@ -2216,6 +2295,8 @@ def render_sidebar() -> SidebarState:
             reg_len=reg_len,
             wt_n1=wt_n1,
             wt_n2=wt_n2,
+            wt2_len=wt2_len,
+            wt2_type=wt2_type,
             levels=(obLevel1, obLevel2, osLevel1, osLevel2),
             timeframe=timeframe,
             mode=analysis_mode,
@@ -2233,7 +2314,7 @@ def render_sidebar() -> SidebarState:
 # MAIN SCREENER FUNCTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True, external_progress_slot=None, progress_offset=0, progress_scale=100):
+def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True, external_progress_slot=None, progress_offset=0, progress_scale=100, wt2_len=20, wt2_type="ALMA"):
     """Execute WRCI momentum analysis on universe symbols and return ranked signals.
 
     Fetches market data for universe, computes Wave Trend oscillations, calculates
@@ -2305,6 +2386,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.item("Timeframe", timeframe)
     console.item("Regression Length", reg_len)
     console.item("Wave Trend", f"N1={wt_n1}  N2={wt_n2}")
+    console.item("Signal Line", f"{wt2_type}({wt2_len})")
     console.item("OB Levels", f"{obLevel1} / {obLevel2}")
     console.item("OS Levels", f"{osLevel1} / {osLevel2}")
     console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
@@ -2331,7 +2413,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 console.detail(f"{ticker}: Skipped (Insufficient data: {len(df)} rows)")
                 continue
 
-            df = run_full_analysis(df, reg_len, wt_n1, wt_n2, obLevel1, obLevel2, osLevel1, osLevel2)
+            df = run_full_analysis(df, reg_len, wt_n1, wt_n2, obLevel1, obLevel2, osLevel1, osLevel2,
+                                   wt2_len=wt2_len, wt2_type=wt2_type)
             df = run_regime_analysis(df)        # adds HMM_Bull/Bear, Vol_Regime, Change_Point, Regime_Confidence
             df = calculate_divergences(df, timeframe=timeframe)      # adds Bullish_Div, Bearish_Div
 
@@ -2547,7 +2630,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     return results_df
 
 
-def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe):
+def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe, wt2_len=20, wt2_type="ALMA"):
     """Compute the WRCI time-series factor frame for a date range.
 
     Pure compute path: fetches history, runs full / regime / divergence analyses on
@@ -2622,7 +2705,8 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
             progress_bar(progress_slot, pct, "Intelligence Harvesting", f"Processing {i + 1}/{len(data_dict)} Symbols | ETA: {eta_str}")
             if timeframe == "Weekly":
                 df = resample_to_weekly(df)
-            df = run_full_analysis(df, reg_len, wt_n1, wt_n2, *levels)
+            df = run_full_analysis(df, reg_len, wt_n1, wt_n2, *levels,
+                                   wt2_len=wt2_len, wt2_type=wt2_type)
             df = run_regime_analysis(df)
             df = calculate_divergences(df, timeframe=timeframe)
 
@@ -4937,6 +5021,8 @@ def main():
     reg_len            = sb.reg_len
     wt_n1              = sb.wt_n1
     wt_n2              = sb.wt_n2
+    wt2_len            = sb.wt2_len
+    wt2_type           = sb.wt2_type
     levels             = sb.levels
     timeframe          = sb.timeframe
     mode               = sb.mode
@@ -4976,6 +5062,7 @@ def main():
             results_df = run_screener_analysis(
                 universe, selected_index, analysis_date,
                 reg_len, wt_n1, wt_n2, levels, timeframe,
+                wt2_len=wt2_len, wt2_type=wt2_type,
             )
             if results_df is None:
                 st.session_state["run_error"] = f"Failed to fetch constituents for '{selected_index}'."
@@ -4993,6 +5080,7 @@ def main():
             run_timeseries_analysis(
                 universe, selected_index, start_date, end_date,
                 reg_len, wt_n1, wt_n2, levels, timeframe,
+                wt2_len=wt2_len, wt2_type=wt2_type,
             )
 
         elif mode == "Intelligence (Self-Tuning)":
@@ -5000,6 +5088,7 @@ def main():
             run_timeseries_analysis(
                 universe, selected_index, start_date, end_date,
                 reg_len, wt_n1, wt_n2, levels, timeframe,
+                wt2_len=wt2_len, wt2_type=wt2_type,
             )
 
         elif mode == "Correlation Analysis":
