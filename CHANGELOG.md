@@ -7,6 +7,38 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v3.3.0] · 2026-05-30
+### Liquidity Engine, Inline Self-Tuning & Data-Source Hardening
+
+**"Flow & Folded Intelligence"**
+
+A feature release that adds a microstructure Liquidity engine and its per-set kinematic gates, folds the Self-Tuning calibration into the screener run (no separate mode), and hardens the F&O / index data sources. `wrci.pine` and `sanket.py` kept in 1:1 parity throughout.
+
+#### Features
+- **Liquidity Engine (microstructure flow)**: new ±100 oscillator (volume-weighted intrabar spread vs. multi-bar price impact → clipped z-score → sigmoid), with `liq_vel` (velocity) and `liq_accel` (acceleration). Added to both `wrci.pine` (§3B) and `sanket.py` (`run_full_analysis` → `Liquidity_Osc` / `Liq_Vel` / `Liq_Accel`), with a zero-volume divide guard on the Python side.
+- **Inline, one-pass Self-Tuning**: the standalone "Intelligence (Self-Tuning)" analysis mode is **removed**; harvest + Optuna calibration now run inline on the **Single Date / Pulse** screener via `_ensure_intel_weights()`. Reuses a profile already calibrated **today** for the `(universe, index, timeframe)`; otherwise harvests a lookback (~2y daily / ~3y weekly) and calibrates, then ranks the screen with the tuned weights. Sidebar **Self-Tuning Intelligence** expander (below the Model Passport) carries trials / split / **Force recalibrate this run**.
+- **Intelligence result tab**: Single-Date results gain an **Intelligence** tab (Train/Val IR, stability, factor-importance fANOVA chart, active-weights table) and a **Priority Rank** sub-tab listing the full universe by tuned priority (bull/bear aware).
+- **NseKit F&O source**: F&O constituents now fetch via NseKit's official `underlying-information` endpoint as the primary source (survives datacenter-IP blocking), ahead of the legacy `equity-stockIndices` paths.
+
+#### Behavior Changes
+- **Per-set kinematic liquidity gates** (parity across `wrci.pine` + `sanket.py`): Set A & B require liquidity **level** (`Liquidity_Osc` same-signed); Set C requires liquidity **velocity** (`Liq_Vel`); Set D requires liquidity **level + acceleration** (`Liquidity_Osc` & `Liq_Accel`). Net effect: fewer, flow-confirmed signals.
+- **Set C Δ-polarity gate**: Threshold now also requires `Conviction Δ` / `Pulse Δ` polarity (it previously omitted it), matching Sets A/B/D.
+- **WT2 signal line = configurable MA, ALMA(20) default** (was SMA-4), plumbed through the sidebar/screener (`wt2_len`, `wt2_type`).
+- **Profile key now includes timeframe**: profiles are keyed per `(universe, index, timeframe)` so daily and weekly weights no longer collide.
+
+#### Fixes
+- **F&O list correctness**: legacy `SECURITIES IN F&O` paths now skip the leading index-aggregate row (off-by-one phantom ticker) and de-duplicate; the NIFTY-500 fallback is flagged as a superset rather than reported as a clean F&O fetch.
+- **Index-constituent resilience**: archive-CSV fallback tries both `archives.nseindia.com` and `nsearchives.nseindia.com`.
+- **Model Passport refresh**: after a fresh inline calibration the Passport updated only on the next interaction; a guarded post-results `st.rerun()` now refreshes it in the same run (results are already persisted, so no recompute and no re-tune).
+- **Streamlit deprecation**: all `use_container_width=True` replaced with `width='stretch'`.
+
+#### Documentation
+- **README**: added the Liquidity Engine core component + Micro Phase; corrected WT2 to configurable ALMA; reframed Intelligence as inline (no separate mode) with the new first-run workflow; renumbered Analysis Modes (Intelligence mode removed); fixed the profile key to `(universe, index, timeframe)`; Sets A–D table now lists each set's liquidity gate.
+- **Docstrings/comments**: `compute_signal_sets` docstring documents the per-set liquidity gates; stale "Intelligence mode" references in the bulk-range comment and the legacy-profile import warning updated.
+- Line counts: `sanket.py` (6,117), `wrci.pine` (523), `intelligence.py` (411), `priority_engine.py` (381).
+
+---
+
 ## [v3.2.1] · 2026-05-21
 ### Set A Δ-Polarity Gate & Signal Engine Refactor
 

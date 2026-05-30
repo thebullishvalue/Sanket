@@ -75,7 +75,7 @@ requirements.txt           ← Pinned runtime dependencies
 
 ## The WRCI Engine
 
-The **Wave-Regime Composite Index** is a multi-layer quantitative engine composed of three orthogonal components that feed into a unified signal hierarchy.
+The **Wave-Regime Composite Index** is a multi-layer quantitative engine composed of several orthogonal components (WaveTrend momentum, Conviction, Pulse acceleration, orthogonal factors, and a microstructure Liquidity engine) that feed into a unified signal hierarchy.
 
 ### 1. WaveTrend Core (WT1 / WT2)
 
@@ -85,11 +85,11 @@ The foundation is a normalized momentum oscillator computed from HLC3 (applied p
 ESA  = EMA(price, n1)                            # baseline
 dist = EMA(|price − ESA|, n1)                    # volatility envelope
 CI   = (price − ESA) / (0.015 × dist)            # composite index
-WT1  = EMA(CI, n2)                               # signal line
-WT2  = SMA(WT1, 4)                               # trigger line
+WT1  = EMA(CI, n2)                               # composite index
+WT2  = f_smooth(WT1, len, type)                  # signal line (configurable MA)
 ```
 
-Default periods: `n1 = 10`, `n2 = 21`. WT1 and WT2 crossovers define the primary momentum signal.
+Default periods: `n1 = 10`, `n2 = 21`. WT2 is a configurable moving average of WT1 — default **ALMA(20)** (selectable: SMA / EMA / HMA / WMA / VWMA / ALMA / RMA). WT1 and WT2 crossovers define the primary momentum signal.
 
 ### 2. Conviction Engine
 
@@ -131,7 +131,26 @@ Two additional factors computed outside the WaveTrend framework:
 - **F1 — Price Momentum**: Log return normalized by ATR percentile (trend-adjusted)
 - **F2 — Volume Quality**: Volume Z-Score × price direction, smoothed by SMA — distinguishes conviction-backed moves from noise
 
-### 5. Pulse Narrative Matrix
+### 5. Liquidity Engine (Microstructure Flow)
+
+A ±100 microstructure oscillator that reads the supply/demand balance behind price. It blends a volume-weighted intrabar spread against multi-bar price impact, clips the z-score, and sigmoid-normalizes:
+
+```
+spread     = volume-weighted (HL2 − open)
+impact     = volume-weighted N-bar price change
+raw        = spread − impact
+liquidity  = sigmoid(clip(zscore(raw))) × 100        ∈ [−100, +100]
+```
+
+Its **kinematic ladder** gates the four signal sets by derivative order:
+
+- **Level** (`liquidity_oscillator`) — net flow pressure now → gates **Momentum (A)** & **Crossover (B)**
+- **Velocity** (`liq_vel`) — flow building vs. draining → gates **Threshold (C)** reversions (early accumulation)
+- **Acceleration** (`liq_accel`) — convexity of flow → gates **Squeeze (D)** breakouts (explosive confirmation)
+
+The level × velocity quadrant yields a **Micro Phase** read: Organic Markup · Distribution · Capitulation · Accumulation.
+
+### 6. Pulse Narrative Matrix
 
 Each bar is classified into a 4×4 state matrix based on Pulse delta versus Conviction delta:
 
@@ -150,15 +169,16 @@ These labels appear in the Pulse Narrative analysis mode and in the sidebar sign
 
 Every market signal is classified into one of four non-redundant tiers. Tier multipliers (learned by the Intelligence engine) weight each signal class by historical effectiveness.
 
-| Set | Type | Trigger Condition | Use Case |
-|:---|:---|:---|:---|
-| **A** | Momentum  | WT1 crosses WT2, with `ΔConviction` and `ΔPulse` both same-signed as the trade direction; vetoed if the opposite-side Set B fires on the same bar | Tactical trend entry with Δ-confirmed momentum |
-| **B** | Crossover | Regime Filter `rf_voltrend` crosses above `rf_trend`, gated by `ΔConviction` and `ΔPulse` polarity (long: both > 0; short: both < 0) | Cross-indicator regime confirmation — highest tier weight |
-| **C** | Threshold | WT1 freshly dips below `osLevel2` (−40) with signal line WT2 still above, or freshly exceeds `obLevel2` (+40) with WT2 still below | Earliest actionable oscillator entry, signal-line lag confirms freshness |
-| **D** | Squeeze   | Regime Filter `rf_trend` crosses zero, gated by the same `ΔConviction` and `ΔPulse` polarity as Set B | Structural regime flip — lowest default tier weight |
+| Set | Type | Trigger Condition | Liquidity gate | Use Case |
+|:---|:---|:---|:---|:---|
+| **A** | Momentum  | WT1 crosses WT2, with `ΔConviction` and `ΔPulse` both same-signed as the trade direction; vetoed if the opposite-side Set B fires on the same bar | **Level** (`liquidity_oscillator` same-signed) | Tactical trend entry with Δ-confirmed momentum |
+| **B** | Crossover | Regime Filter `rf_voltrend` crosses above `rf_trend`, gated by `ΔConviction` and `ΔPulse` polarity (long: both > 0; short: both < 0) | **Level** (`liquidity_oscillator` same-signed) | Cross-indicator regime confirmation — highest tier weight |
+| **C** | Threshold | WT1 freshly dips below `osLevel2` (−40) with signal line WT2 still above, or freshly exceeds `obLevel2` (+40) with WT2 still below | **Velocity** (`liq_vel` same-signed — flow turning) | Earliest actionable oscillator entry, signal-line lag confirms freshness |
+| **D** | Squeeze   | Regime Filter `rf_trend` crosses zero, gated by the same `ΔConviction` and `ΔPulse` polarity as Set B | **Level + Acceleration** (`liquidity_oscillator` & `liq_accel` same-signed) | Structural regime flip — lowest default tier weight |
 
 **Signal firing rules**:
 - All four sets share the **Δ-polarity gate**: long signals require `ΔConviction > 0` *and* `ΔPulse > 0`; short signals require both `< 0`. On the first bar (deltas filled to 0) no set can fire.
+- Each set adds a **kinematic liquidity gate** matched to its archetype (the level → velocity → acceleration ladder from the Liquidity Engine): A/B require the liquidity oscillator *level* on the trade's side; C requires liquidity *velocity* (flow turning up/down — early accumulation/distribution); D additionally requires liquidity *acceleration* (convexity — breakout confirmation).
 - Set A is additionally vetoed by the **opposite-side Set B** (long A blocked if B-short fires, and vice versa) — a cross-indicator safety filter, since A reads the WRCI oscillator and B reads the regime filter.
 - The four sets can otherwise co-fire on the same bar; `_classify_signal_type` resolves the display label by priority **B > A > C > D > Zone**.
 
@@ -214,6 +234,8 @@ Applied equally to both sides:
 
 The Intelligence module (`intelligence.py`) uses Bayesian hyperparameter optimization to learn optimal factor weights from historical data.
 
+> **Inline, one-pass calibration.** Self-tuning is folded into the **Single Date / Pulse** screener — there is no separate mode. On a run, the screener reuses a profile already calibrated **today** for the `(universe, index, timeframe)`; if none exists (or you tick **Force recalibrate this run** in the sidebar *Self-Tuning Intelligence* expander), it harvests a lookback panel and calibrates inline, then ranks the screen with the tuned weights. Diagnostics (Train/Val IR, factor importance, active weights) render in the **Intelligence** result tab, and the sidebar **Model Passport** reflects the active profile.
+
 ### Algorithm
 
 - **Optimizer**: Optuna Tree-structured Parzen Estimator (TPE), seeded (`seed=42`) for reproducibility
@@ -241,7 +263,7 @@ Tier_C:        14.7%   ← threshold signal quality matters significantly
 
 ### Profile Persistence
 
-Calibrated weights are saved per (universe, selected_index) key in `~/.sanket/profiles.json`. When the user switches universe, the engine auto-loads the matching profile. The `_maybe_migrate_legacy_profile()` function handles v1 → v2 key migration for backwards compatibility.
+Calibrated weights are saved per `(universe, selected_index, timeframe)` key in `~/.sanket/profiles.json`. When the user switches universe/timeframe, the engine auto-loads the matching profile. The `_maybe_migrate_legacy_profile()` function handles v1 → v2 key migration for backwards compatibility.
 
 ---
 
@@ -249,11 +271,13 @@ Calibrated weights are saved per (universe, selected_index) key in `~/.sanket/pr
 
 ### 1. Single Date Screener
 
-Fetches OHLCV data for all constituents of the selected universe on a specific date, runs the full WRCI + Conviction + Pulse pipeline, computes Priority scores, detects squeezes and divergences, and returns a ranked table sorted by `Priority_Long`.
+Fetches OHLCV data for all constituents of the selected universe on a specific date, runs the full WRCI + Conviction + Pulse + Liquidity pipeline, **self-calibrates the priority weights inline** (see *Intelligence — Self-Tuning Calibration*), computes Priority scores, detects squeezes and divergences, and returns a ranked table sorted by `Priority_Long`.
 
-**Output includes**:
+**Result tabs**: Action Dashboard (signal sets A–D bucketed by side, plus a **Priority Rank** sub-tab listing the full universe by tuned priority) · Signal Strength · **Intelligence** (Train/Val IR, factor importance, active weights) · System Data.
+
+**Per-row output includes**:
 - Priority_Long / Priority_Short scores
-- Conviction, Pulse, WT1, WT2, RSI, Histogram
+- Conviction, Pulse, WT1, WT2, RSI, Histogram, Liquidity oscillator
 - Squeeze state (True/False)
 - Signal tier classification (A/B/C/D)
 - Divergence flag
@@ -265,7 +289,7 @@ Runs the same pipeline as the screener but renders the **Pulse Narrative Matrix*
 
 ### 3. Historical Range Analysis (Time-Series)
 
-Bulk analysis over a user-specified date range. Aggregates daily signals, computes rolling metrics, and prepares the dataset for Intelligence calibration or export.
+Bulk analysis over a user-specified date range. Aggregates daily signals, computes rolling metrics, and renders the bulk-range dashboard (also exportable to CSV/Excel). The same panel-harvest routine feeds the Single-Date screener's inline self-calibration.
 
 **Output includes**:
 - Day-by-day signal history per asset
@@ -273,15 +297,7 @@ Bulk analysis over a user-specified date range. Aggregates daily signals, comput
 - Signal count and hit-rate by tier
 - Export to CSV/Excel
 
-### 4. Intelligence (Self-Tuning)
-
-Launches the Optuna calibration run on the historical dataset. Configurable trial count (default ~100). Results are displayed in the Intelligence Center with:
-- Val IC achieved
-- Best weights table
-- Parameter importance chart (fANOVA)
-- One-click save to `~/.sanket/profiles.json`
-
-### 5. Correlation Analysis
+### 4. Correlation Analysis
 
 Cross-asset correlation and confluence detection. Identifies assets with aligned or diverging WRCI signals — useful for building cross-hedged positions or confirming sector-wide regime shifts.
 
@@ -440,13 +456,13 @@ The app will open at `http://localhost:8501` in your browser.
 
 ### First Run
 
-On first launch, no calibration profile exists. The Priority Engine will use default symmetric weights. To generate calibrated weights for your target universe:
+On first launch, no calibration profile exists, so the Priority Engine starts on default symmetric weights. Calibration is automatic and inline:
 
-1. Select a universe in the sidebar (e.g., NSE F&O)
-2. Set a historical date range (90+ days recommended)
-3. Run **Historical Range Analysis** to build the dataset
-4. Switch to **Intelligence** mode and run calibration (100+ trials recommended)
-5. Save the profile — it will auto-load on subsequent runs for that universe
+1. Select a universe + timeframe in the sidebar (e.g., NSE F&O, Daily)
+2. Pick a date and click **RUN SCREENER**
+3. With no profile for that `(universe, index, timeframe)`, the screener harvests a lookback panel and **calibrates inline** (first run of the day is slower), then ranks the screen with the tuned weights
+4. The profile is saved automatically and **auto-loads** on later runs that day; it re-tunes once per day, or immediately if you tick **Force recalibrate this run** in the sidebar
+5. Watch the **Model Passport** (sidebar) and **Intelligence** tab for the Train/Val IR and active weights
 
 ---
 
