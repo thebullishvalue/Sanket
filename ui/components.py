@@ -508,22 +508,22 @@ def render_signal_guide() -> None:
             <div class="signal-guide-grid">
                 <div class="signal-type momentum">
                     <div class="signal-type-label">Set A: Momentum</div>
-                    <div class="signal-type-desc">WT1/WT2 crossover, gated by Conviction Δ and Pulse Δ polarity • Vetoed by the opposite-side Set B • Tactical trend entry</div>
+                    <div class="signal-type-desc">WT1/WT2 crossover, gated by Conviction Δ and Pulse Δ polarity + liquidity level • Vetoed by the opposite-side Set B • Tactical trend entry</div>
                 </div>
 
                 <div class="signal-type crossover">
                     <div class="signal-type-label">Set B: Crossover</div>
-                    <div class="signal-type-desc">Regime Filter voltrend crossing trend, Δ-polarity gated • Cross-indicator confirmation • Highest tier weight (1.30×)</div>
+                    <div class="signal-type-desc">Regime Filter voltrend crossing trend, Δ-polarity + liquidity level gated • Cross-indicator confirmation • Highest tier weight (1.30×)</div>
                 </div>
 
                 <div class="signal-type threshold">
                     <div class="signal-type-label">Set C: Threshold</div>
-                    <div class="signal-type-desc">WT1 freshly enters OS/OB zone (±40) with signal line wt2 still outside • Earliest oscillator entry</div>
+                    <div class="signal-type-desc">WT1 freshly enters OS/OB zone (±40) with signal line wt2 still outside • Liquidity velocity (flow turning) • Earliest oscillator entry</div>
                 </div>
 
                 <div class="signal-type squeeze">
                     <div class="signal-type-label">Set D: Squeeze</div>
-                    <div class="signal-type-desc">Regime Filter trend crossing zero, Δ-polarity gated • Structural regime flip • Lowest tier weight (0.75×)</div>
+                    <div class="signal-type-desc">Regime Filter trend crossing zero, Δ-polarity gated + liquidity acceleration • Structural regime flip • Lowest tier weight (0.75×)</div>
                 </div>
             </div>
 
