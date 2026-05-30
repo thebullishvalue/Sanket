@@ -29,9 +29,8 @@ _TIER_IDX = {
     'A: Long': 0, 'A: Short': 0,
     'B: Long': 1, 'B: Short': 1,
     'C: Long': 2, 'C: Short': 2,
-    'D: Long': 3, 'D: Short': 3,
 }
-_TIER_DEFAULT_IDX = 4
+_TIER_DEFAULT_IDX = 3
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -246,7 +245,6 @@ def _evaluate_ic(precomp: _PrecomputedDataset, weights: dict, min_xsect: int = 5
         weights['tier_A_mult'],
         weights['tier_B_mult'],
         weights['tier_C_mult'],
-        weights['tier_D_mult'],
         weights['tier_default_mult'],
     ], dtype=np.float64)
 
@@ -361,7 +359,6 @@ class PriorityTuner:
                 'tier_A_mult':       trial.suggest_float('tier_A_mult',       0.5, 2.0),
                 'tier_B_mult':       trial.suggest_float('tier_B_mult',       0.5, 2.0),
                 'tier_C_mult':       trial.suggest_float('tier_C_mult',       0.5, 2.0),
-                'tier_D_mult':       trial.suggest_float('tier_D_mult',       0.5, 2.0),
                 'tier_default_mult': trial.suggest_float('tier_default_mult', 0.5, 2.0),
             }
 

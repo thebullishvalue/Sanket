@@ -45,7 +45,6 @@ DEFAULT_W = {
     'tier_A_mult':              1.00,
     'tier_B_mult':              1.30,
     'tier_C_mult':              0.85,
-    'tier_D_mult':              0.75,
     'tier_default_mult':        0.90,
 }
 
@@ -265,12 +264,10 @@ def _tier_map(weights: dict) -> dict:
     a = weights['tier_A_mult']
     b = weights['tier_B_mult']
     c = weights['tier_C_mult']
-    d = weights['tier_D_mult']
     return {
         'A: Long': a, 'A: Short': a,
         'B: Long': b, 'B: Short': b,
         'C: Long': c, 'C: Short': c,
-        'D: Long': d, 'D: Short': d,
     }
 
 
