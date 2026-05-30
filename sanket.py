@@ -5590,7 +5590,7 @@ def main():
                         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                         bull_tab, bear_tab = st.tabs(["Bullish Signals by Timing", "Bearish Signals by Timing"])
                         with bull_tab:
-                            cross_bull_tab, mom_bull_tab, thresh_bull_tab, sqz_bull_tab, prio_bull_tab = st.tabs(["Crossover", "Momentum", "Threshold", "Squeeze", "Priority Rank"])
+                            mom_bull_tab, cross_bull_tab, thresh_bull_tab, sqz_bull_tab, prio_bull_tab = st.tabs(["Momentum", "Crossover", "Threshold", "Squeeze", "Priority Rank"])
                             with mom_bull_tab:
                                 _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A', timeframe=timeframe)
                                 la_html = _build_signal_table_html(la_stats, side='long', timeframe=timeframe)
@@ -5628,7 +5628,7 @@ def main():
                                 st.components.v1.html(_build_signal_strength_table_html(_all_long, side='long'),
                                                       height=min(150 + len(_all_long) * 55, 900), scrolling=True)
                         with bear_tab:
-                            cross_bear_tab, mom_bear_tab, thresh_bear_tab, sqz_bear_tab, prio_bear_tab = st.tabs(["Crossover", "Momentum", "Threshold", "Squeeze", "Priority Rank"])
+                            mom_bear_tab, cross_bear_tab, thresh_bear_tab, sqz_bear_tab, prio_bear_tab = st.tabs(["Momentum", "Crossover", "Threshold", "Squeeze", "Priority Rank"])
                             with mom_bear_tab:
                                 _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A', timeframe=timeframe)
                                 sa_html = _build_signal_table_html(sa_stats, side='short', timeframe=timeframe)
