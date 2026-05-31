@@ -406,3 +406,201 @@ class PriorityTuner:
 
     def get_sensitivity(self):
         return self.get_param_importance()
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Signal-Confidence Calibration (Layer 2)
+#
+# The PriorityTuner above optimizes *ranking* (cross-sectional IC) over the
+# whole universe. It does NOT learn whether an individual fired A/B/C signal
+# is a true or false positive. This calibrator does exactly that: on the
+# harvested panel it labels each fired signal by whether its forward return
+# over `horizon` bars moved the signal's way, then fits a per-set logistic
+# P(true | regime/context features). Validated out-of-sample by date, same as
+# the IC objective. The result feeds priority_engine.compute_signal_confidence
+# so the screener's Intel_Confidence becomes a calibrated probability.
+# ────────────────────────────────────────────────────────────────────────
+def _fit_logistic(X, y, l2=1.0, iters=100, tol=1e-7):
+    """Ridge-regularized logistic regression via Newton-IRLS (numpy only).
+
+    X already standardized (no intercept column — intercept fit unpenalized).
+    Returns (coef[k], intercept). Robust to separation via the L2 term and a
+    capped step; falls back gracefully if the Hessian is singular.
+    """
+    n, k = X.shape
+    Xb = np.column_stack([np.ones(n), X])           # intercept in column 0
+    beta = np.zeros(k + 1)
+    reg = np.full(k + 1, l2)
+    reg[0] = 0.0                                     # do not penalize intercept
+    for _ in range(iters):
+        eta = np.clip(Xb @ beta, -35.0, 35.0)
+        p = 1.0 / (1.0 + np.exp(-eta))
+        W = np.clip(p * (1.0 - p), 1e-6, None)
+        grad = Xb.T @ (p - y) + reg * beta
+        H = (Xb * W[:, None]).T @ Xb + np.diag(reg)
+        try:
+            step = np.linalg.solve(H, grad)
+        except np.linalg.LinAlgError:
+            step = np.linalg.lstsq(H, grad, rcond=None)[0]
+        beta_new = beta - step
+        if np.max(np.abs(beta_new - beta)) < tol:
+            beta = beta_new
+            break
+        beta = beta_new
+    return beta[1:], float(beta[0])
+
+
+def _auc(y, scores):
+    """ROC AUC via the Mann–Whitney U statistic (ties handled by mid-ranks)."""
+    y = np.asarray(y)
+    n_pos = int(y.sum())
+    n_neg = len(y) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return float('nan')
+    order = np.argsort(scores, kind='mergesort')
+    ranks = np.empty(len(scores), dtype=float)
+    s = scores[order]
+    ranks[order] = np.arange(1, len(scores) + 1, dtype=float)
+    # average ranks for ties
+    i = 0
+    while i < len(s):
+        j = i
+        while j + 1 < len(s) and s[order[j + 1]] == s[order[i]]:
+            j += 1
+        if j > i:
+            ranks[order[i:j + 1]] = (i + 1 + j + 1) / 2.0
+        i = j + 1
+    sum_pos = ranks[y == 1].sum()
+    return float((sum_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
+
+
+def calibrate_signal_confidence(ts_df: pd.DataFrame,
+                                horizon: int = 5,
+                                train_frac: float = 0.70,
+                                l2: float = 1.0,
+                                deadband_frac: float = 0.10,
+                                min_set_samples: int = 120,
+                                min_total_samples: int = 150) -> dict:
+    """Fit per-set P(true) logistic on harvested fired signals. None if too sparse.
+
+    Label (multi-horizon, magnitude-aware): a fired signal is "true" if its mean
+    directional forward return across all tracked horizons (Ret_2b…Ret_13b)
+    clearly beats a deadband — not just a sign flip on a single horizon. The
+    deadband is ``deadband_frac`` × the typical |mean directional return| over
+    fired rows, so a barely-positive drift (or going nowhere) counts as a false
+    positive, not a win. Asset-agnostic (self-scaling). Features come from
+    pe.signal_conf_features so train and inference are identical. Split
+    chronologically by date. Returns a model dict {feat_mean, feat_std,
+    sets:{A,B,C,_pooled:{coef,intercept,...}}, horizon, horizons, deadband,
+    val_auc, val_precision_lift, base_rate, n_train}.
+    """
+    if ts_df is None or ts_df.empty or not {'Date', 'SignalType'}.issubset(ts_df.columns):
+        return None
+
+    df = ts_df.copy()
+    df['Date'] = pd.to_datetime(df['Date'])
+
+    # Tracked forward-return horizons present in the harvest (Ret_<h>b).
+    ret_cols = [f'Ret_{h}b' for h in pe.HOLD_HORIZONS if f'Ret_{h}b' in df.columns]
+    if not ret_cols:
+        return None
+    horizons_used = [int(c[4:-1]) for c in ret_cols]
+
+    X_all, dir_sign, set_letter, fired = pe.signal_conf_features(df)
+    d = np.nan_to_num(dir_sign, nan=0.0)
+
+    # Mean directional forward return across horizons (NaN where no horizon resolves).
+    R = df[ret_cols].to_numpy(dtype=float) * d[:, None]
+    with np.errstate(invalid='ignore'):
+        dr = np.nanmean(R, axis=1)
+    fired = np.asarray(fired) & np.isfinite(dr)
+    if fired.sum() < min_total_samples:
+        return None
+
+    # Magnitude deadband, self-scaled to the universe's typical move.
+    typ = float(np.median(np.abs(dr[fired]))) if fired.any() else 0.0
+    deadband = deadband_frac * typ
+    y_all = (dr > deadband).astype(float)
+
+    # Chronological split by date over fired rows only.
+    dates = df['Date'].to_numpy()
+    fired_dates = np.unique(dates[fired])
+    if len(fired_dates) < 8:
+        return None
+    n_train = max(1, int(len(fired_dates) * train_frac))
+    is_train = np.isin(dates, fired_dates[:n_train])   # type-safe over datetime64
+
+    tr = fired & is_train
+    va = fired & ~is_train
+    if tr.sum() < min_total_samples:
+        return None
+
+    # Standardize features on the training subset.
+    Xtr_raw = X_all[tr]
+    mean = Xtr_raw.mean(axis=0)
+    std = Xtr_raw.std(axis=0)
+    std = np.where(std < 1e-9, 1.0, std)
+
+    def _standardize(mask):
+        return (X_all[mask] - mean) / std
+
+    sets_out = {}
+    set_arr = set_letter
+
+    def _fit_subset(mask):
+        if mask.sum() < min_set_samples:
+            return None
+        Xz = _standardize(mask)
+        y = y_all[mask]
+        if y.sum() < 5 or (len(y) - y.sum()) < 5:   # need both classes
+            return None
+        coef, b0 = _fit_logistic(Xz, y, l2=l2)
+        return {
+            'coef': [float(c) for c in coef],
+            'intercept': float(b0),
+            'n_train': int(mask.sum()),
+            'base_rate': float(y.mean()),
+        }
+
+    # Pooled model (all sets) — always the fallback.
+    pooled = _fit_subset(tr)
+    if pooled is None:
+        return None
+    sets_out['_pooled'] = pooled
+
+    for s in ('A', 'B', 'C'):
+        m = _fit_subset(tr & (set_arr == s))
+        if m is not None:
+            sets_out[s] = m
+
+    model = {
+        'version': 2,
+        'horizon': int(horizon),
+        'horizons': horizons_used,
+        'deadband': float(deadband),
+        'label': 'mean directional return over horizons > deadband',
+        'feature_names': list(pe.CONF_FEATURES),
+        'feat_mean': [float(v) for v in mean],
+        'feat_std': [float(v) for v in std],
+        'sets': sets_out,
+        'base_rate': float(y_all[tr].mean()),
+        'n_train': int(tr.sum()),
+    }
+
+    # Out-of-sample diagnostics: AUC and precision lift (top-half conf vs base).
+    if va.sum() >= 30:
+        val_df = df[va].copy()
+        proba = pe.predict_signal_confidence(val_df, model)
+        yv = y_all[va]
+        ok = ~np.isnan(proba)
+        if ok.sum() >= 30 and 0 < yv[ok].sum() < ok.sum():
+            model['val_auc'] = _auc(yv[ok], proba[ok])
+            base = float(yv[ok].mean())
+            hi = proba[ok] >= np.median(proba[ok])
+            top_prec = float(yv[ok][hi].mean()) if hi.sum() else float('nan')
+            model['base_rate_val'] = base
+            model['val_top_half_precision'] = top_prec
+            model['val_precision_lift'] = (top_prec - base) if base > 0 else float('nan')
+            model['n_val'] = int(ok.sum())
+
+    return model

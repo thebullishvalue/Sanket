@@ -173,6 +173,7 @@ def save_profile(opt_results: dict) -> bool:
         "train_score":    opt_results.get("train_score"),
         "val_score":      opt_results.get("val_score"),
         "sensitivity":    opt_results.get("sensitivity", {}),
+        "signal_conf":    opt_results.get("signal_conf"),   # Layer 2 calibrated confidence model
         "timestamp":      opt_results.get("timestamp"),
         "universe":       universe,
         "selected_index": selected_index,
@@ -376,3 +377,305 @@ def compute_priority(df: pd.DataFrame, weights=None) -> pd.DataFrame:
 
     df = df.sort_values('_tb_long', ascending=True)
     return df
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Intelligence Confirmation — per-signal confidence (Layer 1)
+#
+# The signal sets (A/B/C) fire as pure boolean crossings, blind to regime.
+# This scores each *fired* signal in [0, 1] by re-using the regime
+# intelligence that compute_priority already consumes for the cross-sectional
+# damping cascade — but here it is applied per signal and direction-aware, so a
+# bull-cross fired into a BEAR / EXTREME-vol / change-point context scores low.
+#
+# Score = evidence × trust, both in [0, 1]:
+#   evidence (corroboration, can push high or low)
+#     • regime alignment : HMM_Bull−HMM_Bear (long) mapped to [0, 1]
+#     • rank agreement   : Priority_<side>_pct / 100 — does the calibrated
+#                          rank engine agree with the boolean?
+#   trust (multipliers, can only reduce)
+#     • vol regime quality (VOL_REGIME_W normalized)
+#     • regime confidence (0.6 + 0.4·conf)
+#     • change-point      (×0.65 on a detected break)
+#     • reversion risk    (directional, mirrors compute_priority)
+#     • divergence contradiction (bear-div under a long, etc.)
+#
+# Non-fired rows (Zone labels / '-') get NaN — they are not signals.
+# ──────────────────────────────────────────────────────────────────────
+_SIG_DIR = {
+    'A: Long': 1,  'B: Long': 1,  'C: Long': 1,
+    'A: Short': -1, 'B: Short': -1, 'C: Short': -1,
+}
+
+# Map SignalType → set letter, for per-set calibrated models (Layer 2).
+_SIG_SET = {
+    'A: Long': 'A', 'A: Short': 'A',
+    'B: Long': 'B', 'B: Short': 'B',
+    'C: Long': 'C', 'C: Short': 'C',
+}
+
+# Directional feature names for the signal-confidence logistic (Layer 2).
+# All features are signed by signal direction so a single coefficient vector
+# serves both long and short (a supportive context is always positive).
+CONF_FEATURES = [
+    'hmm_align',    # dir·(HMM_Bull − HMM_Bear) — regime corroboration
+    'vol_quality',  # vol-regime weight (LOW high → calm = trustworthy)
+    'regime_conf',  # HMM confidence
+    'change_point', # 1.0 on a detected regime break (noise)
+    'reversion',    # directional reversion-exhaustion risk [0,1]
+    'div_contra',   # 1.0 when an opposite-side divergence contradicts the signal
+    'mom_align',    # dir·F1_PriceMom
+    'conv_align',   # dir·Conviction/50
+    'pulse_align',  # dir·Pulse
+]
+
+
+def signal_conf_features(df: pd.DataFrame):
+    """Build the directional feature matrix for the signal-confidence model.
+
+    Shared by the calibrator (intelligence.py, on harvested bars) and the
+    apply path (compute_signal_confidence, on the live cross-section) so train
+    and inference see identical features. Returns (X, dir_sign, set_letter,
+    fired_mask) where X is (n, len(CONF_FEATURES)).
+    """
+    sig = _col(df, 'SignalType', '-')
+    dir_sign  = sig.map(_SIG_DIR).to_numpy(dtype=float)      # +1/-1/NaN
+    set_letter = sig.map(_SIG_SET).to_numpy(dtype=object)    # 'A'/'B'/'C'/NaN
+    fired = ~pd.isna(dir_sign)
+    d = np.nan_to_num(dir_sign, nan=0.0)
+
+    hmm_bull = _col(df, 'HMM_Bull', 0.33).astype(float).to_numpy()
+    hmm_bear = _col(df, 'HMM_Bear', 0.33).astype(float).to_numpy()
+    hmm_align = d * (hmm_bull - hmm_bear)
+
+    vr_w = _col(df, 'Vol_Regime', 'NORMAL').map(VOL_REGIME_W).fillna(1.0).astype(float).to_numpy()
+
+    regime_conf = _col(df, 'Regime_Confidence', 0.5).astype(float).fillna(0.5).to_numpy()
+    change_point = _col(df, 'Change_Point', False).astype(bool).to_numpy().astype(float)
+
+    wt1 = _col(df, 'Wave', np.nan).astype(float)
+    if wt1.isna().all():
+        wt1 = _col(df, 'WT1', 0.0).astype(float)
+    wt1 = wt1.to_numpy()
+    conv = _col(df, 'Conviction', 0.0).astype(float).to_numpy()
+    wt1_5ago = _col(df, 'WT1_5ago', np.nan).astype(float)
+    wt1_5ago = np.where(np.isnan(wt1_5ago.to_numpy()), wt1, wt1_5ago.to_numpy())
+    travel = wt1 - wt1_5ago
+    long_rev = np.where((wt1 > 60) & (travel < 0),
+                        np.minimum(1.0, ((wt1 - 60) / 40.0) * (np.abs(conv) / 50.0)), 0.0)
+    short_rev = np.where((wt1 < -60) & (travel > 0),
+                         np.minimum(1.0, ((-wt1 - 60) / 40.0) * (np.abs(conv) / 50.0)), 0.0)
+    reversion = np.where(d > 0, long_rev, np.where(d < 0, short_rev, 0.0))
+
+    bull_div = _col(df, 'Bullish_Div', False).astype(bool).to_numpy()
+    bear_div = _col(df, 'Bearish_Div', False).astype(bool).to_numpy()
+    div_contra = np.where(d > 0, bear_div & (conv > 30),
+                 np.where(d < 0, bull_div & (conv < -30), False)).astype(float)
+
+    f1 = _col(df, 'F1_PriceMom', 0.0).astype(float).to_numpy()
+    pulse = _col(df, 'Pulse', 0.0).astype(float).to_numpy()
+    mom_align  = d * f1
+    conv_align = d * conv / 50.0
+    pulse_align = d * pulse
+
+    X = np.column_stack([
+        hmm_align, vr_w, regime_conf, change_point,
+        reversion, div_contra, mom_align, conv_align, pulse_align,
+    ])
+    return X, dir_sign, set_letter, fired
+
+
+def _sigmoid(z):
+    return 1.0 / (1.0 + np.exp(-np.clip(z, -35.0, 35.0)))
+
+
+def predict_signal_confidence(df: pd.DataFrame, model: dict) -> np.ndarray:
+    """Calibrated P(true) per row from a fitted signal-confidence model.
+
+    Returns an array aligned to df.index; NaN where no fired signal or no
+    usable per-set/pooled model. Standardization + per-set coefficients (with
+    pooled fallback) are read from ``model``.
+    """
+    X, dir_sign, set_letter, fired = signal_conf_features(df)
+    n = len(df)
+    out = np.full(n, np.nan)
+    if not model or 'sets' not in model:
+        return out
+    mean = np.asarray(model.get('feat_mean', np.zeros(X.shape[1])), dtype=float)
+    std  = np.asarray(model.get('feat_std',  np.ones(X.shape[1])),  dtype=float)
+    std  = np.where(std < 1e-9, 1.0, std)
+    Xz = (X - mean) / std
+    sets = model['sets']
+    pooled = sets.get('_pooled')
+    for i in range(n):
+        if not fired[i]:
+            continue
+        m = sets.get(set_letter[i]) or pooled
+        if not m:
+            continue
+        beta = np.asarray(m['coef'], dtype=float)
+        b0 = float(m['intercept'])
+        out[i] = _sigmoid(b0 + Xz[i] @ beta)
+    return out
+
+
+# Active calibrated signal-confidence model (Layer 2), parallel to active_W.
+active_conf_model = None
+
+
+def set_active_conf_model(model):
+    """Install the calibrated signal-confidence model (or None to clear)."""
+    global active_conf_model
+    active_conf_model = model if (model and isinstance(model, dict)) else None
+
+
+def get_active_conf_model():
+    return active_conf_model
+
+
+def compute_signal_confidence(df: pd.DataFrame, weights=None, conf_model='__active__',
+                              compute_flags: bool = True) -> pd.DataFrame:
+    """Add Intel_Confidence (0–1), Intel_Stars (1–5), Intel_Flags (str) per row.
+
+    Fully per-symbol: every term is read off the symbol's own regime/momentum
+    state — no cross-sectional ranking against peers. Vectorized; returns a copy.
+    Rows whose SignalType is not a fired A/B/C signal get NaN confidence.
+
+    Two-tier score:
+      • Heuristic (Layer 1): regime alignment × own-factor agreement × trust,
+        always available, no training required.
+      • Calibrated (Layer 2): when a fitted ``conf_model`` is present, the
+        per-signal probability P(true) learned on harvested outcomes replaces
+        the heuristic for sets the model covers. ``conf_model='__active__'``
+        uses the module-global model; pass None to force pure heuristic.
+    The Intel_Flags diagnostics are computed the same way in both modes.
+    """
+    if df.empty:
+        return df
+    df = df.copy()
+
+    sig = _col(df, 'SignalType', '-')
+    direction = sig.map(_SIG_DIR)            # +1 long, -1 short, NaN otherwise
+    is_long  = (direction == 1)
+    is_short = (direction == -1)
+    fired    = direction.notna()
+
+    # ── Evidence 1: regime alignment, direction-aware → [0, 1] ──
+    hmm_bull = _col(df, 'HMM_Bull', 0.33).astype(float)
+    hmm_bear = _col(df, 'HMM_Bear', 0.33).astype(float)
+    hmm_dir  = np.where(is_long, hmm_bull - hmm_bear,
+               np.where(is_short, hmm_bear - hmm_bull, 0.0))     # [-1, 1]
+    align01  = np.clip((hmm_dir + 1.0) / 2.0, 0.0, 1.0)
+
+    # ── Evidence 2: per-symbol directional factor agreement → [0, 1] ──
+    # Purely local — no cross-sectional rank. Asks whether the symbol's OWN
+    # momentum and conviction lean the way the signal points. Squashed with tanh
+    # so it is bounded and neutral (0.5) when the symbol has no directional lean.
+    f1     = _col(df, 'F1_PriceMom', 0.0).astype(float).fillna(0.0)
+    conv   = _col(df, 'Conviction', 0.0).astype(float).fillna(0.0)
+    d_sign = np.where(is_long, 1.0, np.where(is_short, -1.0, 0.0))
+    factor_lean = d_sign * (0.5 * f1 + 0.5 * conv / 50.0)
+    local01 = 0.5 * (np.tanh(factor_lean) + 1.0)
+
+    evidence = 0.5 * align01 + 0.5 * local01
+
+    # ── Trust 1: vol regime quality (normalized so LOW=1.0) ──
+    vr_w = _col(df, 'Vol_Regime', 'NORMAL').map(VOL_REGIME_W).fillna(1.0).astype(float)
+    vq   = vr_w / max(VOL_REGIME_W.values())
+
+    # ── Trust 2: regime confidence ──
+    conf = _col(df, 'Regime_Confidence', 0.5).astype(float).fillna(0.5)
+    cf   = 0.6 + 0.4 * conf
+
+    # ── Trust 3: change-point ──
+    cp       = _col(df, 'Change_Point', False).astype(bool)
+    cp_mult  = np.where(cp, 0.65, 1.0)
+
+    # ── Trust 4: reversion risk (directional, mirrors compute_priority) ──
+    wt1    = _col(df, 'Wave', 0.0).astype(float)
+    if 'Wave' not in df.columns:                 # screener rows store WT1 under 'Wave'
+        wt1 = _col(df, 'WT1', 0.0).astype(float)
+    travel = wt1 - _col(df, 'WT1_5ago', wt1).astype(float)
+    long_rev = np.where((wt1 > 60) & (travel < 0),
+                        np.minimum(1.0, ((wt1 - 60) / 40.0) * (conv.abs() / 50.0)), 0.0)
+    short_rev = np.where((wt1 < -60) & (travel > 0),
+                         np.minimum(1.0, ((-wt1 - 60) / 40.0) * (conv.abs() / 50.0)), 0.0)
+    rev      = np.where(is_long, long_rev, np.where(is_short, short_rev, 0.0))
+    rev_mult = 1.0 - rev
+
+    # ── Trust 5: divergence contradiction (signal vs opposite-side divergence) ──
+    bull_div = _col(df, 'Bullish_Div', False).astype(bool)
+    bear_div = _col(df, 'Bearish_Div', False).astype(bool)
+    div_contra = np.where(is_long,  bear_div & (conv > 30),
+                 np.where(is_short, bull_div & (conv < -30), False)).astype(float)
+    div_mult   = 1.0 - 0.5 * div_contra
+
+    trust = vq * cf * cp_mult * rev_mult * div_mult
+    score = np.clip(evidence * trust, 0.0, 1.0)
+
+    # Layer 2: where a calibrated model covers the signal's set, use its
+    # learned probability instead of the heuristic. Falls back to heuristic
+    # per-row when the model lacks that set.
+    model = get_active_conf_model() if conf_model == '__active__' else conf_model
+    have = np.zeros(len(df), dtype=bool)
+    if model:
+        cal = predict_signal_confidence(df, model)
+        have = ~np.isnan(cal)
+        score = np.where(have, cal, score)
+
+    fired_arr = np.asarray(fired)
+    df['Intel_Confidence'] = np.where(fired_arr, score, np.nan)
+    df['Intel_Source'] = np.where(have, 'calibrated',
+                                  np.where(fired_arr, 'heuristic', ''))
+
+    # 1–5 stars on fixed bands so the rating is comparable across runs.
+    bands = np.array([0.20, 0.35, 0.50, 0.65])
+    stars = 1 + np.digitize(np.where(fired, score, -1.0), bands)
+    df['Intel_Stars'] = np.where(fired, stars, 0).astype(int)
+
+    # ── Flags: the dominant contradictions, for spotting likely false positives ──
+    if compute_flags:
+        flag_specs = [
+            (np.asarray(is_long) & (np.asarray(hmm_dir) < -0.1), 'bear-regime'),
+            (np.asarray(is_short) & (np.asarray(hmm_dir) < -0.1), 'bull-regime'),
+            (vr_w.to_numpy() <= VOL_REGIME_W['EXTREME'] + 1e-9, 'extreme-vol'),
+            (cp.to_numpy(), 'change-pt'),
+            (rev > 0.25, 'rev-risk'),
+            (div_contra > 0, 'div-contra'),
+            (np.asarray(local01) < 0.35, 'mom-against'),
+        ]
+        flags = []
+        for r in range(len(df)):
+            if not bool(fired.iloc[r]):
+                flags.append('')
+                continue
+            row_flags = [label for mask, label in flag_specs if bool(mask[r])]
+            flags.append(' · '.join(row_flags))
+        df['Intel_Flags'] = flags
+
+    return df
+
+
+def signal_confidence_at(window_df: pd.DataFrame, side: str, set_letter: str,
+                         weights=None, conf_model='__active__'):
+    """Per-bar Intel confidence over a recent window, for a fixed side + set.
+
+    Forces every bar in ``window_df`` to be treated as a fired ``set_letter`` /
+    ``side`` signal, so confidence can be read at the bar a signal actually fired
+    (its *fire bar*) rather than only at the snapshot date. This keeps the score
+    consistent with how the Layer-2 model was trained (features AT the fire bar).
+
+    Returns (conf_array, source_array) aligned to ``window_df`` rows in their
+    given (chronological) order. The window must carry the per-bar feature
+    columns (HMM_*, Vol_Regime, Regime_Confidence, Change_Point, *_Div, WT1,
+    WT1_5ago, Conviction, F1_PriceMom, Pulse).
+    """
+    if window_df is None or len(window_df) == 0:
+        return np.array([]), np.array([], dtype=object)
+    d = window_df.copy()
+    side_word = 'Long' if side == 'long' else 'Short'
+    d['SignalType'] = f"{(set_letter or 'A')}: {side_word}"
+    scored = compute_signal_confidence(d, weights=weights, conf_model=conf_model,
+                                       compute_flags=False)
+    return (scored['Intel_Confidence'].to_numpy(),
+            scored['Intel_Source'].to_numpy())

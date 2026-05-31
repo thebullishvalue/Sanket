@@ -223,6 +223,7 @@ def _ensure_intel_weights(universe, selected_index, timeframe, analysis_date,
     # Fast path — today's profile is already good; rank instantly, no harvest/tune.
     if profile and made_today and not force and isinstance(profile.get("weights"), dict):
         _set_active_weights(profile["weights"])
+        pe.set_active_conf_model(profile.get("signal_conf"))   # Layer 2 model rides with the profile
         st.session_state["opt_results"] = profile
         console.detail(f"Intelligence: reusing today's profile · val IR {profile.get('val_score', float('nan')):+.3f}")
         return "cached"
@@ -239,11 +240,13 @@ def _ensure_intel_weights(universe, selected_index, timeframe, analysis_date,
         # Harvest produced nothing — keep best available weights rather than failing the screen.
         if profile and isinstance(profile.get("weights"), dict):
             _set_active_weights(profile["weights"])
+            pe.set_active_conf_model(profile.get("signal_conf"))
             st.session_state["opt_results"] = profile
             console.warning("Intelligence: harvest empty — falling back to existing profile")
             st.session_state["timeseries_done"] = False
             return "harvest_failed_cached"
         _set_active_weights(pe.DEFAULT_W)
+        pe.set_active_conf_model(None)
         console.warning("Intelligence: harvest empty and no profile — using factory defaults")
         st.session_state["timeseries_done"] = False
         return "harvest_failed_default"
@@ -310,6 +313,65 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
                 'padding:0.6rem 0 0.1rem 0; line-height:1.5;">⚠ Validation IR ≤ 0 — this profile has '
                 '<b>no demonstrated out-of-sample edge</b> on this universe. The ranking may be no '
                 'better than default weights; force a recalibrate or widen the universe.</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Signal-Confidence (Layer 2) — false-positive filter diagnostics ──
+        _sc = res.get("signal_conf")
+        st.markdown(
+            '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
+            'letter-spacing:0.08em; text-transform:uppercase; padding:0.9rem 0 0.3rem 0;">'
+            'Signal Confirmation · per-signal false-positive filter</div>',
+            unsafe_allow_html=True,
+        )
+        if _sc and isinstance(_sc, dict):
+            _auc   = _sc.get("val_auc")
+            _lift  = _sc.get("val_precision_lift")
+            _tprec = _sc.get("val_top_half_precision")
+            _base  = _sc.get("base_rate_val", _sc.get("base_rate"))
+            _sets  = [s for s in ("A", "B", "C") if s in _sc.get("sets", {})]
+            _auc_s   = f"{_auc:.3f}"   if isinstance(_auc, (int, float)) else "—"
+            _lift_s  = f"{_lift:+.1%}" if isinstance(_lift, (int, float)) else "—"
+            _tprec_s = f"{_tprec:.1%}" if isinstance(_tprec, (int, float)) else "—"
+            _base_s  = f"{_base:.1%}"  if isinstance(_base, (int, float)) else "—"
+            _auc_ok  = isinstance(_auc, (int, float)) and _auc >= 0.55
+            st.markdown(f"""
+            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:1rem; margin-top:0.2rem;">
+                <div class="metric-card {"success" if _auc_ok else "warning"}" style="margin:0;">
+                    <h4>Confirm AUC</h4><h2>{_auc_s}</h2>
+                    <div class="sub-metric">out-of-sample · true vs false</div>
+                </div>
+                <div class="metric-card {"success" if (isinstance(_lift,(int,float)) and _lift>0) else "warning"}" style="margin:0;">
+                    <h4>Precision Lift</h4><h2>{_lift_s}</h2>
+                    <div class="sub-metric">top-half {_tprec_s} vs base {_base_s}</div>
+                </div>
+                <div class="metric-card info" style="margin:0;">
+                    <h4>Horizons</h4><h2>{(lambda h: f"{min(h)}–{max(h)}b" if h else "—")(_sc.get('horizons') or ([_sc.get('horizon')] if _sc.get('horizon') else []))}</h2>
+                    <div class="sub-metric">multi-horizon label</div>
+                </div>
+                <div class="metric-card {"success" if _sets else "neutral"}" style="margin:0;">
+                    <h4>Sets Modeled</h4><h2>{', '.join(_sets) if _sets else "pooled"}</h2>
+                    <div class="sub-metric">{_sc.get('n_train', 0)} fired signals</div>
+                </div>
+            </div>
+            <div style="font-family:var(--data); font-size:0.70rem; color:var(--ink-tertiary);
+                 padding:0.5rem 0 0.1rem 0; line-height:1.5;">
+                Each fired A/B/C signal is scored by a model trained on whether past signals of its
+                type produced a <b>clear</b> favorable move (mean directional return across horizons,
+                past a deadband — so going nowhere counts as a false positive), given the regime context.
+                Calibrated scores show as a <b>%</b> probability; uncalibrated sets fall back to a muted
+                <b>~heuristic</b> index. Low Intel = a likely false positive.
+                Aged signals (1d/2d/… ago) are scored <b>at the bar they fired</b>, not today — matching
+                how the model was trained and validated.
+                {"AUC below 0.55 — the filter adds little separation here; treat scores as advisory." if not _auc_ok else ""}
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
+                'padding:0.3rem 0 0.1rem 0; line-height:1.5;">No calibrated confirmation model — the '
+                'panel is too sparse, so <b>Intel Confidence</b> falls back to the Layer-1 heuristic '
+                '(regime alignment × own-factor agreement × trust). Widen the historical range for a trained filter.</div>',
                 unsafe_allow_html=True,
             )
     else:
@@ -1663,53 +1725,6 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
         ma_counts += (df['Close'] > ema).astype(int)
     df['MA_Alignment'] = ma_counts
 
-    # ── Step 2: Self-normalized thresholds for narrative matrix ───────────────
-    # Rolling percentile boundaries replace hardcoded ±5
-    pd_roll_std = df['Pulse_Delta'].rolling(30, min_periods=10).std(ddof=0).clip(lower=1e-6)
-    cd_roll_std = df['Conviction_Delta'].rolling(30, min_periods=10).std(ddof=0).clip(lower=1e-6)
-
-    # Normalize deltas to their local volatility (z-score of the delta)
-    pd_norm = df['Pulse_Delta'] / pd_roll_std
-    cd_norm = df['Conviction_Delta'] / cd_roll_std
-
-    def categorize_narrative(p_norm, c_norm):
-        """
-        Direction-aware narrative matrix.
-        Version: v2 (Normalized deltas)
-        Uses normalized deltas (σ-units) instead of hardcoded ±5.
-        Thresholds: ±1σ for ">>"/"<<", 0 for ">/"<"
-        """
-        p_state = ">>" if p_norm > 1.0 else ">" if p_norm > 0 else "<" if p_norm > -1.0 else "<<"
-        c_state = ">>" if c_norm > 1.0 else ">" if c_norm > 0 else "<" if c_norm > -1.0 else "<<"
-
-        matrix = {
-            (">>", ">>"): ("SQUEEZE",  2.0, "#22c55e"),
-            (">>", ">"):  ("HYPER",    1.6, "#34d399"),
-            (">>", "<"):  ("EXHAUST",  0.6, "#fbbf24"),
-            (">>", "<<"): ("CHAOS",    0.4, "#f87171"),
-            (">",  ">>"): ("IGNITE",   1.4, "#4a9eff"),
-            (">",  ">"):  ("ORGANIC",  1.2, "#38bdf8"),
-            (">",  "<"):  ("EXPAND",   0.9, "#94a3b8"),
-            (">",  "<<"): ("POP",      0.7, "#f87171"),
-            ("<",  ">>"): ("HARDEN",   1.5, "#22c55e"),
-            ("<",  ">"):  ("STEALTH",  1.3, "#818cf8"),
-            ("<",  "<"):  ("RETRACE",  0.8, "#cbd5e1"),
-            ("<",  "<<"): ("LIQUID",   0.3, "#ef4444"),
-            ("<<", ">>"): ("LOAD",     1.7, "#4a9eff"),
-            ("<<", ">"):  ("TRAP",     0.5, "#fbbf24"),
-            ("<<", "<"):  ("CAPITUL",  0.2, "#ef4444"),
-            ("<<", "<<"): ("CRASH",    0.1, "#b91c1c"),
-        }
-        return matrix.get((p_state, c_state), ("NEUTRAL", 1.0, "#94a3b8"))
-
-    narrative_results = [
-        categorize_narrative(p, c)
-        for p, c in zip(pd_norm.fillna(0), cd_norm.fillna(0))
-    ]
-    df['Narrative']      = [n[0] for n in narrative_results]
-    df['Priority_Mult']  = [n[1] for n in narrative_results]
-    df['Narrative_Color']= [n[2] for n in narrative_results]
-
     # ── Step 3: Zone Depth Factor ─────────────────────────────────────────────
     # Rewards depth of oscillator position (composite_line is WRCI WT1)
     osc_val = wt1
@@ -2393,6 +2408,7 @@ def render_sidebar() -> SidebarState:
             _uni_label = (selected_index or universe or "—")
             if _profile and isinstance(_profile.get("weights"), dict):
                 _set_active_weights(_profile["weights"])
+                pe.set_active_conf_model(_profile.get("signal_conf"))
                 st.session_state["opt_results"] = _profile
                 # Don't log the very first sync of a session (already covered by the
                 # session-start banner); only log genuine universe transitions.
@@ -2404,6 +2420,7 @@ def render_sidebar() -> SidebarState:
                     )
             else:
                 _set_active_weights(pe.DEFAULT_W)
+                pe.set_active_conf_model(None)
                 if "opt_results" in st.session_state:
                     del st.session_state["opt_results"]
                 if _previous_uni_key is not None:
@@ -2533,8 +2550,13 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (15 * progress_scale / 100)
         progress_bar(progress_slot, pct_val, "Fetching Market Data", f"{len(stock_list)} stocks")
-    # Fetch up to today (IST) — always hits registry first; only goes to yfinance on miss
-    data_dict, fetch_msg = get_universe_data(stock_list, end_date=_today_ist())
+    # Anchor the fetch at analysis_date (not today): the screener locates analysis_date
+    # inside the panel and never reads bars after it, so this yields the same snapshot
+    # while sharing the registry key the intelligence harvest already populated for this
+    # (universe, analysis_date) — no second yfinance round-trip on historical-date runs.
+    # For the common analysis_date == today run this is identical to before.
+    end_date = analysis_date if isinstance(analysis_date, datetime.date) else _today_ist()
+    data_dict, fetch_msg = get_universe_data(stock_list, end_date=end_date)
 
     if not data_dict:
         console.error(fetch_msg)
@@ -2560,6 +2582,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     results = []
     _failed_symbols = []
+    # Per-symbol recent-bar feature windows, keyed by ticker. Powers fire-bar
+    # Intel confidence: aged signals (1d/2d/… ago) are scored at the bar they
+    # fired, not at the snapshot date — consistent with how Layer 2 was trained.
+    intel_windows: dict = {}
 
     _tf_label = "weekly" if timeframe == "Weekly" else "daily"
     console.section(f"Signal Analysis — {len(data_dict)} {_tf_label} instruments")
@@ -2600,6 +2626,22 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
             last_row = df.iloc[idx_pos]
 
+            # Capture the recent-bar feature window (offsets 0..4 = Today..Within-5d)
+            # for fire-bar Intel scoring. WT1_5ago is per-bar so reversion is correct
+            # at each fire bar, not just the snapshot bar.
+            df['WT1_5ago'] = df['WT1'].shift(5)
+            _win_cols = ['HMM_Bull', 'HMM_Bear', 'Vol_Regime', 'Regime_Confidence',
+                         'Change_Point', 'Bullish_Div', 'Bearish_Div', 'WT1',
+                         'WT1_5ago', 'Conviction', 'F1_PriceMom', 'Pulse', 'Close']
+            _win = df.iloc[max(0, idx_pos - 4): idx_pos + 1]
+            intel_windows[ticker] = _win[[c for c in _win_cols if c in _win.columns]].copy()
+            # Recent daily-return volatility — the asset-agnostic scale for the
+            # Entry (move-exhaustion) check: how far has price run, in σ units.
+            try:
+                _retvol20 = float(df['Close'].pct_change().rolling(20).std().iloc[idx_pos])
+            except Exception:
+                _retvol20 = float('nan')
+
             signal_type = _classify_signal_type(last_row)
 
             # Clean display names
@@ -2635,8 +2677,6 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "Pulse": round(last_row['Pulse'], 2) if not pd.isna(last_row['Pulse']) else 0.0,
                 "Pulse_Delta": round(last_row['Pulse_Delta'], 2) if not pd.isna(last_row['Pulse_Delta']) else 0.0,
                 "AT_Filter": round(last_row.get('AT_Filter', 0), 2) if not pd.isna(last_row.get('AT_Filter', 0)) else 0.0,
-                "Narrative": last_row['Narrative'],
-                "Narrative_Color": last_row['Narrative_Color'],
                 "Wave": round(last_row['WT1'], 2) if not pd.isna(last_row['WT1']) else 0.0,
                 "Zone": last_row['Condition'],
                 "SignalType": signal_type,
@@ -2644,6 +2684,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "PctChange": round(pct_change, 2),
                 # v3 Metrics for Engine 2.0
                 "WT1_5ago":      round(df.iloc[idx_pos-5]['WT1'], 2) if idx_pos >= 5 else 0.0,
+                "RetVol20":      _retvol20,
                 "VolTrend":      round(last_row.get('VolTrend', 0), 3),
                 "HMM_Bull":      float(last_row.get('HMM_Bull', 0.33)),
                 "HMM_Bear":      float(last_row.get('HMM_Bear', 0.33)),
@@ -2736,6 +2777,9 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         "analyzed":          len(results),
         "failed":            _fail_count,
     }
+    # Fire-bar feature windows for the age-bucketed signal tables (per-symbol).
+    st.session_state["intel_windows"] = intel_windows
+    st.session_state["intel_fire_cache"] = {}   # invalidate memoized fire-bar scores
     console.line('═', 70)
     
     if show_progress or external_progress_slot is not None:
@@ -2776,6 +2820,9 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     # to prevent cross-session weight bleed on shared Streamlit Cloud deployments.
     if not results_df.empty:
         results_df = compute_priority(results_df, weights=_get_active_weights())
+        # Intelligence Confirmation (Layer 1): per-signal confidence from regime
+        # state + own-factor agreement. Non-destructive — annotates fired signals only.
+        results_df = pe.compute_signal_confidence(results_df, weights=_get_active_weights())
         # Default sort by Long Percentile for the global table
         results_df = results_df.sort_values('Priority_Long', ascending=False)
         
@@ -4152,6 +4199,181 @@ def render_correlation_results(corr_data: dict) -> None:
 # HELPER FUNCTIONS FOR TAB RENDERING
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _intel_filter_active():
+    """Read the Layer-3 Intelligence Filter settings from session state.
+
+    Returns (mode, threshold) where mode ∈ {'Off','Dim','Hide'}. The filter is
+    opt-in and applies only to fired-signal tables — never to the full-universe
+    priority ranking (whose non-fired rows have no confidence score).
+    """
+    mode = st.session_state.get("intel_filter_mode", "Off")
+    if mode not in ("Off", "Dim", "Hide"):
+        mode = "Off"
+    try:
+        thr = float(st.session_state.get("intel_filter_threshold", 0.40))
+    except (TypeError, ValueError):
+        thr = 0.40
+    return mode, thr
+
+
+def _intel_cell_and_style(conf, source, mode, thr):
+    """Render an Intel-Confidence table cell + optional row dim style.
+
+    Returns (td_html, tr_style). conf is the row's Intel_Confidence (0–1 or
+    NaN/None for non-fired). A filled ◆ marks a calibrated (Layer-2) score, a
+    hollow ◇ the Layer-1 heuristic. In 'Dim' mode, rows below threshold are
+    greyed; 'Hide' is handled upstream by dropping the rows.
+    """
+    if conf is None or pd.isna(conf):
+        return '<td class="numeric" style="color:#4B5563;">—</td>', ''
+    c = float(conf)
+    if source == 'calibrated':
+        # Calibrated → a real out-of-sample probability. Vivid semantic bands and
+        # a % format so the value reads as P(true).
+        if   c >= 0.65: col = '#2DD4A8'
+        elif c >= 0.50: col = '#A3E635'
+        elif c >= 0.35: col = '#D4A853'
+        elif c >= 0.20: col = '#FB923C'
+        else:           col = '#E8555A'
+        txt   = f'◆ {c*100:.0f}%'
+        title = f'Calibrated P(true) ≈ {c*100:.0f}%'
+    else:
+        # Heuristic → an indicative 0–1 index, NOT a probability. Muted (desaturated)
+        # bands + "~" prefix so it is never read on the calibrated scale.
+        if   c >= 0.65: col = '#7FA8A0'
+        elif c >= 0.50: col = '#9DB07A'
+        elif c >= 0.35: col = '#B0A079'
+        elif c >= 0.20: col = '#B58E6E'
+        else:           col = '#B57A7E'
+        txt   = f'~{c:.2f}'
+        title = f'Heuristic estimate {c:.2f} — not a calibrated probability'
+    cell = (f'<td class="numeric" style="color:{col}; font-weight:700;" title="{title}">{txt}</td>')
+    style = 'opacity:0.4;' if (mode == 'Dim' and c < thr) else ''
+    return cell, style
+
+
+def _status_cell(status) -> str:
+    """Render a (label, color, title) status tuple as a small table cell."""
+    label, color, title = (status if isinstance(status, (tuple, list)) and len(status) == 3
+                           else ('—', '#4B5563', ''))
+    _t = html.escape(str(title)) if title else ''
+    return (f'<td class="numeric" style="color:{color}; font-weight:700; font-size:0.62rem;" '
+            f'title="{_t}">{html.escape(str(label))}</td>')
+
+
+def _context_status(fire_c, today_c, offset):
+    """Has the regime/momentum context that made the signal good held up to today?
+
+    Compares confidence at the fire bar vs today (both per-symbol). Returns
+    (label, color, title). Orthogonal to price — this is about the thesis, not
+    whether the move already ran.
+    """
+    if fire_c is None or pd.isna(fire_c):
+        return ('—', '#4B5563', '')
+    if offset == 0:
+        return ('New', '#94a3b8', 'fired today')
+    if today_c is None or pd.isna(today_c):
+        return ('—', '#4B5563', '')
+    d = float(today_c) - float(fire_c)
+    title = f'context: fire {float(fire_c):.2f} → now {float(today_c):.2f} (Δ{d:+.2f})'
+    if float(today_c) < 0.20 or d <= -0.30:
+        return ('Stale', '#E8555A', title)
+    if d >= 0.05:
+        return ('Confirmed', '#2DD4A8', title)
+    if d <= -0.12:
+        return ('Fading', '#FB923C', title)
+    return ('Holding', '#A3E635', title)
+
+
+def _entry_status(window, side: str, offset: int, row):
+    """Has price already run since the signal fired — i.e. is the entry now late?
+
+    Directional move from the fire bar to today, normalized by the symbol's own
+    recent return volatility × √(bars elapsed) so the bands are asset-agnostic
+    (σ units). Returns (label, color, title). Orthogonal to context.
+    """
+    if offset == 0:
+        return ('Now', '#94a3b8', 'fresh — fired today')
+    if window is None or len(window) == 0 or 'Close' not in getattr(window, 'columns', []):
+        return ('—', '#4B5563', '')
+    fidx = len(window) - 1 - offset
+    if fidx < 0:
+        return ('—', '#4B5563', '')
+    fire_close = window['Close'].iloc[fidx]
+    today_close = window['Close'].iloc[-1]
+    if not (pd.notna(fire_close) and pd.notna(today_close) and fire_close > 0):
+        return ('—', '#4B5563', '')
+    side_sign = 1.0 if side == 'long' else -1.0
+    dm = (float(today_close) - float(fire_close)) / float(fire_close) * side_sign
+    rv = row.get('RetVol20')
+    scale = (float(rv) * (offset ** 0.5)) if (rv is not None and pd.notna(rv) and float(rv) > 0) else None
+    if scale and scale > 0:
+        sig = dm / scale
+        title = f'entry: {dm*100:+.1f}% since fire ({sig:+.1f}σ)'
+        if sig <= -1.0: return ('Adverse', '#E8555A', title)
+        if sig >= 1.5:  return ('Extended', '#FB923C', title)
+        if sig >= 0.5:  return ('Running', '#5EBFA8', title)
+        return ('Open', '#2DD4A8', title)
+    # Fallback when volatility is unavailable — crude fixed % bands.
+    title = f'entry: {dm*100:+.1f}% since fire'
+    if dm <= -0.03: return ('Adverse', '#E8555A', title)
+    if dm >= 0.06:  return ('Extended', '#FB923C', title)
+    if dm >= 0.02:  return ('Running', '#5EBFA8', title)
+    return ('Open', '#2DD4A8', title)
+
+
+def _active_model_sig() -> str:
+    """Cheap signature of the active confidence model — changes when it recalibrates."""
+    m = pe.get_active_conf_model()
+    if not m:
+        return 'heuristic'
+    return f"c{m.get('n_train', 0)}-{m.get('horizon', 0)}-{len(m.get('sets', {}))}"
+
+
+def _cached_conf_series(symbol, window, side: str, condition_set: str):
+    """Per-bar confidence for (symbol, side, set), memoized for the current screener run.
+
+    signal_confidence_at is a pure function of (window, side, set, active model);
+    the window is stable between screener runs, so caching by those keys avoids
+    recomputing on every Streamlit rerun. The cache is cleared when a new screener
+    run replaces intel_windows.
+    """
+    cache = st.session_state.setdefault("intel_fire_cache", {})
+    key = (symbol, side, condition_set, _active_model_sig())
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
+    res = pe.signal_confidence_at(window, side, condition_set)
+    cache[key] = res
+    return res
+
+
+def _fire_bar_metrics(window, side: str, condition_set: str, offset: int, row) -> dict:
+    """Per-signal fire-bar metrics: confidence (at fire), context decay, entry state.
+
+    `window` is the symbol's recent-bar feature frame (chronological, last row =
+    snapshot). `offset` 0 = Today … 4 = Within-5d. The Intel confidence is read at
+    the fire bar; Context compares it to today; Entry measures the price move
+    since firing. Falls back to snapshot confidence when the window is missing.
+    """
+    conf, src = np.nan, ''
+    ctx = ('—', '#4B5563', '')
+    confs = np.array([])
+    if window is not None and len(window) and condition_set in ('A', 'B', 'C'):
+        confs, srcs = _cached_conf_series(row.get('Symbol'), window, side, condition_set)
+        fidx = len(confs) - 1 - offset
+        if 0 <= fidx < len(confs):
+            conf = confs[fidx]
+            src = srcs[fidx] if fidx < len(srcs) else ''
+            ctx = _context_status(conf, confs[-1], offset)
+    if pd.isna(conf):   # window missing / out of range → snapshot fallback
+        c = row.get('Intel_Confidence')
+        conf = c if c is not None else np.nan
+        src = row.get('Intel_Source', '') or ''
+    entry = _entry_status(window, side, offset, row)
+    return {'conf': conf, 'src': src, 'ctx': ctx, 'entry': entry}
+
+
 def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'C', timeframe: str = 'Daily') -> dict:
     """Bucket signals by age (Today, 1d, 2d, 3d, 5d) with stats for timeline display.
 
@@ -4185,12 +4407,31 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
     }
     seen = set()
 
-    for age in buckets.keys():
+    # Fire-bar Intel scoring: each signal is scored at the bar it fired (its age
+    # offset), not at the snapshot date. The result is attached to the row as
+    # _fire_conf / _fire_src and reused for both Layer-3 Hide and table display.
+    _filter_mode, _filter_thr = _intel_filter_active()
+    _windows = st.session_state.get("intel_windows", {})
+
+    for _offset, age in enumerate(buckets.keys()):
         col = col_map[age]
         subset = results_df[(results_df[col] == target_indicator) & (~results_df['Symbol'].isin(seen))]
         for _, r in subset.iterrows():
+            sym = r['Symbol']
+            m = _fire_bar_metrics(_windows.get(sym), side, condition_set, _offset, r)
+            fc = m['conf']
+            # Hide mode — drop low-confidence signals (and don't let an older
+            # fire of the same symbol resurface in a later bucket).
+            if _filter_mode == "Hide" and fc is not None and not pd.isna(fc) and fc < _filter_thr:
+                seen.add(sym)
+                continue
+            r = r.copy()
+            r['_fire_conf'] = fc
+            r['_fire_src'] = m['src']
+            r['_ctx'] = m['ctx']      # (label, color, title) — context decay
+            r['_entry'] = m['entry']  # (label, color, title) — move exhaustion
             buckets[age].append(r)
-            seen.add(r['Symbol'])
+            seen.add(sym)
 
     # Compute stats for each bucket
     stats = {}
@@ -4239,6 +4480,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
     accent_light = _pal["accent_light"]
     border_color = _pal["border_color"]
     header_bg    = _pal["header_bg"]
+    _filter_mode, _filter_thr = _intel_filter_active()
 
     table_rows = []
     if timeframe == 'Weekly':
@@ -4257,7 +4499,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
         count = stats[age]['count']
         table_rows.append(f"""
         <tr style="background: {header_bg}; border-bottom: 2px solid {border_color};">
-            <td colspan="10" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
+            <td colspan="13" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
                 {age} · {count} signal{'s' if count != 1 else ''} · Avg Conv: {avg_conv:+.1f} · Avg %: {avg_pct:+.1f}
             </td>
         </tr>
@@ -4276,8 +4518,6 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
             pulse = float(row.get('Pulse', 0))
             conv_delta = float(row.get('Conviction_Delta', 0))
             pulse_delta = float(row.get('Pulse_Delta', 0))
-            narrative = str(row.get('Narrative', 'NEUTRAL'))
-            narr_color = str(row.get('Narrative_Color', '#94a3b8'))
             at_filter = float(row.get('AT_Filter', 0))
             at_color  = _signed_color(at_filter, pos="#fbbf24", neg="#38bdf8")  # amber + / cyan −
             signal_type = str(row.get('SignalType', '-'))
@@ -4288,8 +4528,19 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
             conv_delta_arrow  = _delta_arrow(conv_delta)
             pulse_delta_arrow = _delta_arrow(pulse_delta)
 
+            # Intel Confirmation cell — fire-bar confidence (set on the row by
+            # _bucket_signals_by_age), falling back to the snapshot value.
+            _conf_val = row.get('_fire_conf', row.get('Intel_Confidence'))
+            _conf_src = row.get('_fire_src', row.get('Intel_Source', ''))
+            intel_cell, _row_style = _intel_cell_and_style(
+                _conf_val, _conf_src, _filter_mode, _filter_thr,
+            )
+            # Context (thesis decay) + Entry (move exhaustion) status cells.
+            ctx_cell   = _status_cell(row.get('_ctx',   ('—', '#4B5563', '')))
+            entry_cell = _status_cell(row.get('_entry', ('—', '#4B5563', '')))
+
             table_rows.append(f"""
-            <tr>
+            <tr style="{_row_style}">
                 <td class="symbol">{symbol}</td>
                 <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
@@ -4299,14 +4550,16 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                 <td class="numeric" style="color: #4a9eff; font-weight: 600;">{pulse:+.2f}</td>
                 <td class="numeric" style="color: {pulse_delta_color}; font-size: 0.65rem; font-weight: 600;">{pulse_delta_arrow}{abs(pulse_delta):.1f}</td>
                 <td class="numeric" style="color: {at_color}; font-weight: 600;">{at_filter:+.2f}</td>
-                <td class="numeric" style="color: {narr_color}; font-weight: 700; letter-spacing: 0.05em; font-size: 0.68rem !important;">{narrative}</td>
+                {intel_cell}
+                {ctx_cell}
+                {entry_cell}
             </tr>
             """)
 
     if not table_rows:
         table_rows.append(f"""
         <tr>
-            <td colspan="10" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="12" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
                 — no signals detected —
             </td>
@@ -4400,7 +4653,9 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                     <th class="numeric">Pulse</th>
                     <th class="numeric">Δ Pulse</th>
                     <th class="numeric">AT Filter</th>
-                    <th class="numeric">Narrative</th>
+                    <th class="numeric">Intel</th>
+                    <th class="numeric">Context</th>
+                    <th class="numeric">Entry</th>
                 </tr>
             </thead>
             <tbody>
@@ -4437,8 +4692,6 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
             pulse = float(row.get('Pulse', 0))
             conv_delta = float(row.get('Conviction_Delta', 0))
             pulse_delta = float(row.get('Pulse_Delta', 0))
-            narrative = str(row.get('Narrative', 'NEUTRAL'))
-            narr_color = str(row.get('Narrative_Color', '#94a3b8'))
             at_filter = float(row.get('AT_Filter', 0))
             at_color  = _signed_color(at_filter, pos="#fbbf24", neg="#38bdf8")  # amber + / cyan −
 
@@ -4459,7 +4712,6 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
                 <td class="numeric" style="color: #4a9eff; font-weight: 600;">{pulse:+.2f}</td>
                 <td class="numeric" style="color: {pulse_delta_color}; font-size: 0.65rem; font-weight: 600;">{pulse_delta_arrow}{abs(pulse_delta):.1f}</td>
                 <td class="numeric" style="color: {at_color}; font-weight: 600;">{at_filter:+.2f}</td>
-                <td class="numeric" style="color: {narr_color}; font-weight: 700; letter-spacing: 0.05em; font-size: 0.68rem !important;">{narrative}</td>
             </tr>
             """)
 
@@ -4566,7 +4818,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="8" style="
+            <td colspan="13" style="
                 text-align: center;
                 color: #374151;
                 font-family: 'IBM Plex Mono', monospace;
@@ -4587,8 +4839,6 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
             conviction = float(row.get('Conviction', 0))
             pulse = float(row.get('Pulse', 0))
             conv_delta = float(row.get('Conviction_Delta', 0))
-            narrative = str(row.get('Narrative', 'NEUTRAL'))
-            narr_color = str(row.get('Narrative_Color', '#94a3b8'))
             at_filter = float(row.get('AT_Filter', 0))
             at_color  = _signed_color(at_filter, pos="#fbbf24", neg="#38bdf8")  # amber + / cyan −
 
@@ -4615,6 +4865,12 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                 
             vol_color = {"LOW": "#60a5fa", "NORMAL": "#94a3b8", "HIGH": "#fbbf24", "EXTREME": "#f87171"}.get(vol_reg, "#94a3b8")
 
+            # Snapshot Intel confidence (today's, per-symbol). This is a ranking
+            # table with no canonical fire bar, so only the snapshot value applies
+            # (no Context/Entry, no Dim). '—' where the symbol has no fired signal.
+            _intel_cell, _ = _intel_cell_and_style(
+                row.get('Intel_Confidence'), row.get('Intel_Source', ''), 'Off', 0.0)
+
             table_rows.append(f"""
             <tr>
                 <td class="numeric" style="color: #D4A853; font-weight: 700;">{rank_str}</td>
@@ -4629,7 +4885,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                 <td class="numeric" style="color: {regime_color}; font-weight: 700; font-size: 0.65rem;">{regime_tag}</td>
                 <td class="numeric" style="color: {vol_color}; font-weight: 700; font-size: 0.65rem;">{vol_reg}</td>
                 <td class="numeric" style="color: {at_color}; font-weight: 600;">{at_filter:+.2f}</td>
-                <td class="numeric" style="color: {narr_color}; font-weight: 700; letter-spacing: 0.05em; font-size: 0.68rem !important;">{narrative}</td>
+                {_intel_cell}
             </tr>
             """)
 
@@ -4714,7 +4970,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                     <th class="numeric">Regime</th>
                     <th class="numeric">Vol</th>
                     <th class="numeric">AT Filter</th>
-                    <th class="numeric">Narrative</th>
+                    <th class="numeric">Intel</th>
                 </tr>
             </thead>
             <tbody>
@@ -4742,25 +4998,9 @@ _SIGNAL_TYPE_REFERENCE = [
      "Confirmed by Conviction Δ + Pulse Δ + liquidity velocity — earliest stealth entry."),
 ]
 
-# Narrative grid: rows are Pulse states (top → bottom: SURGE, FIRM, SOFT, CRUSH).
-# Cols are Conviction states (left → right: LEAD, DEEP, LIGHT, HOLLOW).
-# Each cell: (label, multiplier, color). Colors mirror priority_engine narratives.
-_NARRATIVE_GRID = [
-    # SURGE row (>> Pulse)
-    [("SQUEEZE", 2.0, "#22c55e"), ("HYPER",   1.6, "#34d399"), ("EXHAUST", 0.6, "#fbbf24"), ("CHAOS",   0.4, "#f87171")],
-    # FIRM row (> Pulse)
-    [("IGNITE",  1.4, "#4a9eff"), ("ORGANIC", 1.2, "#38bdf8"), ("EXPAND",  0.9, "#94a3b8"), ("POP",     0.7, "#f87171")],
-    # SOFT row (< Pulse)
-    [("HARDEN",  1.5, "#22c55e"), ("STEALTH", 1.3, "#818cf8"), ("RETRACE", 0.8, "#cbd5e1"), ("LIQUID",  0.3, "#ef4444")],
-    # CRUSH row (<< Pulse)
-    [("LOAD",    1.7, "#4a9eff"), ("TRAP",    0.5, "#fbbf24"), ("CAPITUL", 0.2, "#ef4444"), ("CRASH",   0.1, "#b91c1c")],
-]
-_PULSE_AXIS_LABELS      = [("SURGE", ">>"), ("FIRM", ">"), ("SOFT", "<"), ("CRUSH", "<<")]
-_CONVICTION_AXIS_LABELS = [("LEAD", ">>"),  ("DEEP", ">"), ("LIGHT", "<"), ("HOLLOW", "<<")]
-
 
 def _render_system_data_tab(results_df, analysis_date, universe=None, selected_index=None):
-    """System Data tab — exports, raw factor frame, signal-type legend, narrative matrix.
+    """System Data tab — exports, raw factor frame, and the signal-type legend.
 
     Used by both Single Date and Pulse Narrative modes (their tab_raw share content).
     Universe context is threaded through so download filenames stay self-describing.
@@ -4831,7 +5071,9 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
         f"{len(results_df)} symbols · sorted by Priority Long",
         icon="list", accent="emerald",
     )
-    cols = ["DisplayName", "Price", "Signal", "AT_Filter", "Narrative", "Priority_Long",
+    cols = ["DisplayName", "Price", "Signal", "SignalType",
+            "Intel_Confidence", "Intel_Stars", "Intel_Source", "Intel_Flags",
+            "AT_Filter", "Priority_Long",
             "Priority_Long_pct", "F1_PriceMom", "F2_VolQual"]
     if "% Chng Since" in results_df.columns and results_df["% Chng Since"].notna().any():
         cols.insert(2, "% Chng Since")
@@ -4843,6 +5085,11 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     # Rename internal factor column names to domain-readable labels for display
     _col_display_names = {
         "DisplayName":       "Symbol",
+        "SignalType":        "Set",
+        "Intel_Confidence":  "Intel Conf",
+        "Intel_Stars":       "Intel ★",
+        "Intel_Source":      "Intel Src",
+        "Intel_Flags":       "Intel Flags",
         "F1_PriceMom":       "Price Momentum",
         "F2_VolQual":        "Vol Quality",
         "Priority_Long_pct": "Long Priority %ile",
@@ -4850,17 +5097,36 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
         "Pulse_Delta":       "Pulse Δ",
     }
     display_frame = results_df[cols].sort_values("Priority_Long", ascending=False).rename(columns=_col_display_names)
-    st.dataframe(display_frame, width='stretch', height=500)
+    _sysdata_colcfg = {
+        "Intel Conf": st.column_config.ProgressColumn(
+            help=("Intelligence Confirmation: per-signal confidence in [0,1], computed purely "
+                  "per-symbol — from the symbol's own regime alignment (HMM), its own momentum/"
+                  "conviction lean, and trust multipliers (vol regime, change-point, reversion, "
+                  "divergence). Calibrated P(true) when a Layer-2 model is active, else heuristic. "
+                  "Low = the intelligence layer does not corroborate this fired signal (likely false positive)."),
+            format="%.2f", min_value=0.0, max_value=1.0,
+        ),
+        "Intel ★": st.column_config.NumberColumn(
+            help="Confidence rating 1–5 on fixed bands (5 = strongest corroboration). 0 = no fired signal.",
+        ),
+        "Intel Flags": st.column_config.TextColumn(
+            help=("Dominant contradictions behind a low score: bear/bull-regime, extreme-vol, "
+                  "change-pt, rev-risk, div-contra, rank-disagree."),
+        ),
+    }
+    st.dataframe(display_frame, width='stretch', height=500, column_config=_sysdata_colcfg)
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
     # ── Signal Type Reference ─────────────────────────────────────────────
     ui.render_section_header(
         "Signal Type Reference",
-        "Four signal classes used across screens — A · B · C · D",
+        "Three signal classes used across screens — A · B · C",
         icon="info", accent="amber",
     )
-    ref_cols = st.columns(4)
+    # One column per reference card so the three cards widen equally and fill the
+    # row — a fixed 4-column grid would leave an empty slot / dead space on the right.
+    ref_cols = st.columns(len(_SIGNAL_TYPE_REFERENCE))
     accent_var_map = {
         "amber":  "var(--amber)",
         "violet": "var(--violet)",
@@ -4893,86 +5159,6 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
                 </div>
             </div>
             """, unsafe_allow_html=True)
-
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
-    # ── Narrative Matrix (4×4) ───────────────────────────────────────────
-    ui.render_section_header(
-        "Narrative Matrix",
-        "16 narratives indexed by Pulse state (rows) × Conviction state (columns) · multiplier shown per cell",
-        icon="grid", accent="violet",
-    )
-
-    # Build header row (Conviction axis labels)
-    header_cells = [
-        '<th style="padding:0.5rem 0.4rem; background:transparent; border-bottom:1px solid var(--border); '
-        'font-family:var(--data); font-size:0.55rem; color:var(--ink-tertiary); '
-        'text-transform:uppercase; letter-spacing:0.12em; text-align:center; width:8%;">'
-        '</th>'  # corner empty
-    ]
-    for label, sign in _CONVICTION_AXIS_LABELS:
-        header_cells.append(
-            f'<th style="padding:0.5rem 0.4rem; background:transparent; '
-            f'border-bottom:1px solid var(--border); '
-            f'font-family:var(--data); font-size:0.6rem; color:var(--ink-secondary); '
-            f'text-transform:uppercase; letter-spacing:0.1em; text-align:center; width:23%;">'
-            f'<div style="font-weight:700; color:var(--ink-primary);">{label}</div>'
-            f'<div style="font-size:0.55rem; color:var(--ink-tertiary); margin-top:0.1rem;">{sign}</div>'
-            f'</th>'
-        )
-
-    # Build body rows
-    body_rows = []
-    for row_idx, (pulse_label, pulse_sign) in enumerate(_PULSE_AXIS_LABELS):
-        row_cells = [
-            f'<td style="padding:0.6rem 0.4rem; border-right:1px solid var(--border); '
-            f'background:transparent; vertical-align:middle; text-align:center;">'
-            f'<div style="font-family:var(--display); font-size:0.62rem; font-weight:700; '
-            f'color:var(--ink-primary); letter-spacing:0.08em;">{pulse_label}</div>'
-            f'<div style="font-family:var(--data); font-size:0.55rem; color:var(--ink-tertiary);">{pulse_sign}</div>'
-            f'</td>'
-        ]
-        for label, mult, color in _NARRATIVE_GRID[row_idx]:
-            opacity = max(0.06, min(0.18, mult / 12.0))  # vivid for high mult, faint for low
-            row_cells.append(
-                f'<td style="padding:0.55rem 0.4rem; border:1px solid rgba(255,255,255,0.04); '
-                f'border-left:3px solid {color}; '
-                f'background:linear-gradient(180deg, rgba({_hex_to_rgb(color)},{opacity:.3f}) 0%, rgba(0,0,0,0) 100%); '
-                f'vertical-align:middle; text-align:center;">'
-                f'<div style="font-family:var(--display); font-size:0.72rem; font-weight:700; '
-                f'color:{color}; letter-spacing:0.04em;">{label}</div>'
-                f'<div style="font-family:var(--data); font-size:0.62rem; color:var(--ink-secondary); '
-                f'margin-top:0.15rem; font-weight:600;">{mult:.1f}×</div>'
-                f'</td>'
-            )
-        body_rows.append('<tr>' + ''.join(row_cells) + '</tr>')
-
-    matrix_html = (
-        '<table style="width:100%; border-collapse:collapse; '
-        'font-family:var(--data); margin:0.4rem 0;">'
-        '<thead><tr>' + ''.join(header_cells) + '</tr></thead>'
-        '<tbody>' + ''.join(body_rows) + '</tbody>'
-        '</table>'
-    )
-    st.markdown(matrix_html, unsafe_allow_html=True)
-
-    st.markdown(
-        '<div style="font-family:var(--data); font-size:0.62rem; color:var(--ink-tertiary); '
-        'padding-top:0.6rem; line-height:1.5;">'
-        'Multiplier scales the priority score. Cells with multiplier &gt; 1 amplify ranking '
-        '(directional clarity), &lt; 1 dampen it (regime noise / exhaustion). The active '
-        'narrative for each symbol appears in the <b>Narrative</b> column of the table above.'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-
-def _hex_to_rgb(hex_color: str) -> str:
-    """'#22c55e' → '34, 197, 94' for use inside rgba()."""
-    h = hex_color.lstrip('#')
-    if len(h) != 6:
-        return "148, 163, 184"  # slate fallback
-    return f"{int(h[0:2], 16)}, {int(h[2:4], 16)}, {int(h[4:6], 16)}"
 
 
 def _build_active_weights_table_html(active_weights: dict) -> str:
@@ -5398,6 +5584,21 @@ def main():
                         accent="amber"
                     )
 
+                    # Layer 3 · Intelligence Filter status banner (opt-in false-positive suppression).
+                    _if_mode, _if_thr = _intel_filter_active()
+                    if _if_mode != "Off":
+                        _if_verb = "hiding" if _if_mode == "Hide" else "dimming"
+                        _if_src = "calibrated model" if pe.get_active_conf_model() else "Layer-1 heuristic"
+                        st.markdown(
+                            f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--amber); '
+                            f'background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22); '
+                            f'border-radius:6px; padding:0.45rem 0.7rem; margin:0 0 0.7rem 0;">'
+                            f'⚙ Intelligence Filter <b>{_if_mode}</b> — {_if_verb} signals with '
+                            f'Intel Confidence &lt; <b>{_if_thr:.2f}</b> · scored by {_if_src}. '
+                            f'Adjust in the sidebar ▸ Self-Tuning Intelligence.</div>',
+                            unsafe_allow_html=True,
+                        )
+
                     # Set A: Momentum — legacy L_/S_ alias columns, sorted by Directional Priority v3
                     longs_df = results_df[results_df['L_5d'] != "—"].copy().sort_values('Priority_Long', ascending=False)
                     shorts_df = results_df[results_df['S_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False)
@@ -5747,6 +5948,29 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                 "Force recalibrate this run", value=False, key="sb_calib_force",
                 help="Re-harvest and re-tune even if today's profile already exists.",
             )
+
+            # ── Layer 3 · Intelligence Filter (opt-in false-positive suppression) ──
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div style="font-family:var(--data); font-size:0.62rem; color:var(--ink-tertiary); '
+                'line-height:1.55; padding:0 0 0.4rem 0;">Filter fired signals by <b>Intel Confidence</b>. '
+                'Soft (dim) keeps everything visible but greys low-confidence signals; Hard removes them '
+                'from the Action Dashboard. Off shows all signals.</div>',
+                unsafe_allow_html=True,
+            )
+            intel_filter_mode = st.radio(
+                "Intelligence Filter", ["Off", "Dim", "Hide"],
+                index=["Off", "Dim", "Hide"].index(st.session_state.get("intel_filter_mode", "Off")),
+                horizontal=True, key="intel_filter_mode",
+                help="Off: show all. Dim: grey signals below the threshold. Hide: drop them entirely.",
+            )
+            intel_filter_threshold = st.slider(
+                "Min Confidence", min_value=0.0, max_value=1.0,
+                value=float(st.session_state.get("intel_filter_threshold", 0.40)),
+                step=0.05, key="intel_filter_threshold",
+                disabled=(intel_filter_mode == "Off"),
+                help="Signals with Intel Confidence below this are dimmed or hidden.",
+            )
     else:
         calib_trials, calib_train_frac = 75, 0.70
     # Inline-harvest lookback ending at the analysis date: ~3y weekly, ~2y daily.
@@ -5767,12 +5991,14 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                 # Accept the v2 full opt_results shape AND legacy weights-only dicts.
                 if isinstance(payload, dict) and isinstance(payload.get("weights"), dict):
                     _set_active_weights(payload["weights"])
+                    pe.set_active_conf_model(payload.get("signal_conf"))
                     st.session_state["opt_results"] = payload
                     pe.save_profile(payload)
                     _imp_label = payload.get("selected_index") or payload.get("universe") or "—"
                     console.success(f"Profile imported · {_imp_label} · persisted to disk")
                 else:
                     _set_active_weights(payload)  # legacy: file IS a weights dict
+                    pe.set_active_conf_model(None)
                     _had_calibration = "opt_results" in st.session_state
                     if _had_calibration:
                         del st.session_state["opt_results"]
@@ -5980,12 +6206,39 @@ def run_priority_optimization(ts_data, calib_settings):
     console.detail("[4/4] Activating weights · storing profile")
 
     _set_active_weights(best_w)
+
+    # ─── Layer 2 · Signal-confidence calibration ──────────────────────────
+    # Learn P(true | regime/context) per signal set on the harvested outcomes,
+    # so Intel_Confidence becomes a calibrated false-positive filter. Best-effort:
+    # a sparse panel simply leaves the heuristic (Layer 1) in place.
+    signal_conf = None
+    try:
+        conf_horizon = int(calib_settings.get("conf_horizon", 5))
+        signal_conf = intel.calibrate_signal_confidence(
+            ts_data, horizon=conf_horizon, train_frac=train_frac,
+        )
+    except Exception as _e:
+        console.warning(f"Signal-confidence calibration skipped: {_e}")
+    pe.set_active_conf_model(signal_conf)
+    if signal_conf:
+        _auc = signal_conf.get("val_auc")
+        _lift = signal_conf.get("val_precision_lift")
+        _covered = [s for s in ("A", "B", "C") if s in signal_conf.get("sets", {})]
+        console.detail(
+            f"Signal confidence calibrated · sets {','.join(_covered) or 'pooled-only'} · "
+            f"val AUC {(_auc if _auc is not None else float('nan')):.3f} · "
+            f"precision lift {(_lift if _lift is not None else float('nan')):+.3f}"
+        )
+    else:
+        console.detail("Signal confidence: panel too sparse — using Layer-1 heuristic")
+
     ts_meta = st.session_state.get("ts_meta") or {}
     opt_results = {
         "weights":        best_w,
         "train_score":    train_score,
         "val_score":      val_score,
         "sensitivity":    importance,
+        "signal_conf":    signal_conf,
         "timestamp":      datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "universe":       ts_meta.get("universe"),
         "selected_index": ts_meta.get("selected_index"),
