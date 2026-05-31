@@ -2632,7 +2632,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             df['WT1_5ago'] = df['WT1'].shift(5)
             _win_cols = ['HMM_Bull', 'HMM_Bear', 'Vol_Regime', 'Regime_Confidence',
                          'Change_Point', 'Bullish_Div', 'Bearish_Div', 'WT1',
-                         'WT1_5ago', 'Conviction', 'F1_PriceMom', 'Pulse', 'Close']
+                         'WT1_5ago', 'Conviction', 'F1_PriceMom', 'Pulse', 'Close',
+                         'Liquidity_Osc', 'LO']
             _win = df.iloc[max(0, idx_pos - 4): idx_pos + 1]
             intel_windows[ticker] = _win[[c for c in _win_cols if c in _win.columns]].copy()
             # Recent daily-return volatility — the asset-agnostic scale for the
@@ -2695,6 +2696,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "Bearish_Div":   bool(last_row.get('Bearish_Div', False)),
                 "F1_PriceMom":   float(last_row.get('F1_PriceMom', 0)),
                 "F2_VolQual":    float(last_row.get('F2_VolQual', 0)),
+                "Liquidity_Osc": float(last_row.get('Liquidity_Osc', 0)),
+                "LO":            float(last_row.get('LO', 0)),
                 # Set A: Momentum — legacy L_/S_ alias of LA_/SA_ below
                 # (kept for Range Study compat; reads the same long_cond column).
                 "L_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
@@ -2965,6 +2968,8 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'F1_PriceMom': row.get('F1_PriceMom', 0),
                     'F2_VolQual': row.get('F2_VolQual', 0),
                     'Pulse': row.get('Pulse', 0),
+                    'Liquidity_Osc': row.get('Liquidity_Osc', 0),
+                    'LO': row.get('LO', 0),
                 })
             
         except Exception as e:
@@ -4677,7 +4682,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="10" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="9" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
                 — no data available —
             </td>
@@ -4786,7 +4791,6 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
                     <th class="numeric">Pulse</th>
                     <th class="numeric">Δ Pulse</th>
                     <th class="numeric">AT Filter</th>
-                    <th class="numeric">Narrative</th>
                 </tr>
             </thead>
             <tbody>
@@ -5174,6 +5178,7 @@ def _build_active_weights_table_html(active_weights: dict) -> str:
         ("F4 · Pulse",      "beta_F4_pulse_long",      "beta_F4_pulse_short"),
         ("F5 · Regime",     "beta_F5_regime_long",     "beta_F5_regime_short"),
         ("F6 · X-Sect",     "beta_F6_xsect_long",      "beta_F6_xsect_short"),
+        ("F7 · Liq (LO)",   "beta_F7_liq_long",        "beta_F7_liq_short"),
         ("γ · Reversion",   "gamma_reversion_long",    "gamma_reversion_short"),
         ("γ · Divergence",  "gamma_divergence_long",   "gamma_divergence_short"),
     ]

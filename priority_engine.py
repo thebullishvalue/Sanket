@@ -38,6 +38,9 @@ DEFAULT_W = {
     'beta_F4_pulse_long':      12.0,   'beta_F4_pulse_short':      12.0,
     'beta_F5_regime_long':     18.0,   'beta_F5_regime_short':     18.0,
     'beta_F6_xsect_long':      12.0,   'beta_F6_xsect_short':      12.0,
+    # F7 = LO range-extension (reversion/liquidity). Default 0 → uncalibrated
+    # profiles ignore it; the optimizer (range allows negative) learns its sign.
+    'beta_F7_liq_long':         0.0,   'beta_F7_liq_short':         0.0,
     # Penalty weights, per side
     'gamma_reversion_long':    20.0,   'gamma_reversion_short':    20.0,
     'gamma_divergence_long':   18.0,   'gamma_divergence_short':   18.0,
@@ -301,6 +304,7 @@ def compute_priority(df: pd.DataFrame, weights=None) -> pd.DataFrame:
     F3   = conv / 20.0
     F4   = _col(df, 'Pulse', 0.0).astype(float)
     F5   = _col(df, 'HMM_Bull', 0.33).astype(float) - _col(df, 'HMM_Bear', 0.33).astype(float)
+    F7   = _col(df, 'LO', 0.0).astype(float) / 100.0   # liquidity range-extension (reversion)
 
     wt1    = _col(df, 'Wave', 0.0).astype(float)
     travel = wt1 - _col(df, 'WT1_5ago', wt1).astype(float)
@@ -336,6 +340,7 @@ def compute_priority(df: pd.DataFrame, weights=None) -> pd.DataFrame:
                 + weights['beta_F3_wave_long']     * F3
                 + weights['beta_F4_pulse_long']    * F4
                 + weights['beta_F5_regime_long']   * F5
+                + weights['beta_F7_liq_long']      * F7
                 - weights['gamma_reversion_long']  * long_rev
                 - weights['gamma_divergence_long'] * long_div)
     inner_short = (weights['beta_F1_pricemom_short'] * (-F1)
@@ -343,6 +348,7 @@ def compute_priority(df: pd.DataFrame, weights=None) -> pd.DataFrame:
                  + weights['beta_F3_wave_short']     * (-F3)
                  + weights['beta_F4_pulse_short']    * (-F4)
                  + weights['beta_F5_regime_short']   * (-F5)
+                 + weights['beta_F7_liq_short']      * (-F7)
                  - weights['gamma_reversion_short']  * short_rev
                  - weights['gamma_divergence_short'] * short_div)
 
@@ -427,6 +433,8 @@ CONF_FEATURES = [
     'mom_align',    # dir·F1_PriceMom
     'conv_align',   # dir·Conviction/50
     'pulse_align',  # dir·Pulse
+    'liq_support',  # dir·Liquidity_Osc/100 — microstructure liquidity backing the move
+    'liq_exhaust',  # LO range-extension against the signal [0,1] — liquidity exhaustion risk
 ]
 
 
@@ -478,9 +486,19 @@ def signal_conf_features(df: pd.DataFrame):
     conv_align = d * conv / 50.0
     pulse_align = d * pulse
 
+    # ── Liquidity (LO) — two faces ──
+    # Support: signed microstructure liquidity in the signal's direction (+ = backed).
+    liq_osc = _col(df, 'Liquidity_Osc', 0.0).astype(float).fillna(0.0).to_numpy()
+    liq_support = d * liq_osc / 100.0
+    # Exhaustion: how far the LO range-stochastic is stretched into the signal's
+    # direction (a fresh long into an already-topped LO = chasing). [0,1].
+    lo = _col(df, 'LO', 0.0).astype(float).fillna(0.0).to_numpy()
+    liq_exhaust = np.clip(d * lo / 100.0, 0.0, 1.0)
+
     X = np.column_stack([
         hmm_align, vr_w, regime_conf, change_point,
         reversion, div_contra, mom_align, conv_align, pulse_align,
+        liq_support, liq_exhaust,
     ])
     return X, dir_sign, set_letter, fired
 
@@ -501,10 +519,20 @@ def predict_signal_confidence(df: pd.DataFrame, model: dict) -> np.ndarray:
     out = np.full(n, np.nan)
     if not model or 'sets' not in model:
         return out
-    mean = np.asarray(model.get('feat_mean', np.zeros(X.shape[1])), dtype=float)
-    std  = np.asarray(model.get('feat_std',  np.ones(X.shape[1])),  dtype=float)
+    # Align the live feature matrix to the model's stored feature order by NAME,
+    # so a model trained on an older/smaller feature set (e.g. before liq_* were
+    # added) still scores correctly. If the model expects a feature we no longer
+    # build, fall back to heuristic (return all-NaN).
+    model_names = model.get('feature_names', CONF_FEATURES)
+    try:
+        idx = [CONF_FEATURES.index(fn) for fn in model_names]
+    except ValueError:
+        return out
+    Xsel = X[:, idx]
+    mean = np.asarray(model.get('feat_mean', np.zeros(Xsel.shape[1])), dtype=float)
+    std  = np.asarray(model.get('feat_std',  np.ones(Xsel.shape[1])),  dtype=float)
     std  = np.where(std < 1e-9, 1.0, std)
-    Xz = (X - mean) / std
+    Xz = (Xsel - mean) / std
     sets = model['sets']
     pooled = sets.get('_pooled')
     for i in range(n):
@@ -577,7 +605,11 @@ def compute_signal_confidence(df: pd.DataFrame, weights=None, conf_model='__acti
     factor_lean = d_sign * (0.5 * f1 + 0.5 * conv / 50.0)
     local01 = 0.5 * (np.tanh(factor_lean) + 1.0)
 
-    evidence = 0.5 * align01 + 0.5 * local01
+    # ── Evidence 3: liquidity support — is the microstructure backing the move? ──
+    liq_osc = _col(df, 'Liquidity_Osc', 0.0).astype(float).fillna(0.0).to_numpy()
+    liq01 = 0.5 * (np.tanh(d_sign * liq_osc / 50.0) + 1.0)   # [0,1], 0.5 = neutral
+
+    evidence = 0.40 * align01 + 0.35 * local01 + 0.25 * liq01
 
     # ── Trust 1: vol regime quality (normalized so LOW=1.0) ──
     vr_w = _col(df, 'Vol_Regime', 'NORMAL').map(VOL_REGIME_W).fillna(1.0).astype(float)
@@ -610,7 +642,13 @@ def compute_signal_confidence(df: pd.DataFrame, weights=None, conf_model='__acti
                  np.where(is_short, bull_div & (conv < -30), False)).astype(float)
     div_mult   = 1.0 - 0.5 * div_contra
 
-    trust = vq * cf * cp_mult * rev_mult * div_mult
+    # ── Trust 6: liquidity exhaustion — LO stretched into the signal's direction ──
+    lo = _col(df, 'LO', 0.0).astype(float).fillna(0.0)
+    d_arr = np.where(is_long, 1.0, np.where(is_short, -1.0, 0.0))
+    liq_exhaust = np.clip(d_arr * lo.to_numpy() / 100.0, 0.0, 1.0)
+    liq_mult = 1.0 - 0.4 * liq_exhaust
+
+    trust = vq * cf * cp_mult * rev_mult * div_mult * liq_mult
     score = np.clip(evidence * trust, 0.0, 1.0)
 
     # Layer 2: where a calibrated model covers the signal's set, use its
@@ -643,6 +681,8 @@ def compute_signal_confidence(df: pd.DataFrame, weights=None, conf_model='__acti
             (rev > 0.25, 'rev-risk'),
             (div_contra > 0, 'div-contra'),
             (np.asarray(local01) < 0.35, 'mom-against'),
+            (liq_exhaust > 0.5, 'liq-exhaust'),
+            (np.asarray(liq01) < 0.35, 'liq-against'),
         ]
         flags = []
         for r in range(len(df)):

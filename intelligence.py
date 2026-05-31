@@ -135,7 +135,8 @@ class _PrecomputedDataset:
         f3   = conv / 20.0
         f4   = self._col_f(df, 'Pulse', 0.0)
         f5   = self._col_f(df, 'HMM_Bull', 0.33) - self._col_f(df, 'HMM_Bear', 0.33)
-        self.M = np.column_stack([f1, f2, f3, f4, f5])
+        f7   = self._col_f(df, 'LO', 0.0) / 100.0   # liquidity range-extension (reversion)
+        self.M = np.column_stack([f1, f2, f3, f4, f5, f7])
 
         # ── Penalty matrices (long_rev, long_div) and (short_rev, short_div) ──
         wt1 = self._col_f(df, 'Wave', 0.0)
@@ -223,6 +224,7 @@ def _evaluate_ic(precomp: _PrecomputedDataset, weights: dict, min_xsect: int = 5
         weights['beta_F3_wave_long'],
         weights['beta_F4_pulse_long'],
         weights['beta_F5_regime_long'],
+        weights.get('beta_F7_liq_long', 0.0),
     ], dtype=np.float64)
     w_beta_short = np.array([
         weights['beta_F1_pricemom_short'],
@@ -230,6 +232,7 @@ def _evaluate_ic(precomp: _PrecomputedDataset, weights: dict, min_xsect: int = 5
         weights['beta_F3_wave_short'],
         weights['beta_F4_pulse_short'],
         weights['beta_F5_regime_short'],
+        weights.get('beta_F7_liq_short', 0.0),
     ], dtype=np.float64)
     w_gamma_long = np.array([
         weights['gamma_reversion_long'],
@@ -344,6 +347,7 @@ class PriorityTuner:
                 'beta_F4_pulse_long':     trial.suggest_float('beta_F4_pulse_long',    0.0, 40.0),
                 'beta_F5_regime_long':    trial.suggest_float('beta_F5_regime_long',   0.0, 50.0),
                 'beta_F6_xsect_long':     trial.suggest_float('beta_F6_xsect_long',    0.0, 40.0),
+                'beta_F7_liq_long':       trial.suggest_float('beta_F7_liq_long',   -40.0, 40.0),
                 'gamma_reversion_long':   trial.suggest_float('gamma_reversion_long',  0.0, 40.0),
                 'gamma_divergence_long':  trial.suggest_float('gamma_divergence_long', 0.0, 40.0),
                 # Short-side factor weights
@@ -353,6 +357,7 @@ class PriorityTuner:
                 'beta_F4_pulse_short':    trial.suggest_float('beta_F4_pulse_short',    0.0, 40.0),
                 'beta_F5_regime_short':   trial.suggest_float('beta_F5_regime_short',   0.0, 50.0),
                 'beta_F6_xsect_short':    trial.suggest_float('beta_F6_xsect_short',    0.0, 40.0),
+                'beta_F7_liq_short':      trial.suggest_float('beta_F7_liq_short',  -40.0, 40.0),
                 'gamma_reversion_short':  trial.suggest_float('gamma_reversion_short',  0.0, 40.0),
                 'gamma_divergence_short': trial.suggest_float('gamma_divergence_short', 0.0, 40.0),
                 # Shared tier multipliers
