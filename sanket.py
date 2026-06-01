@@ -17,7 +17,6 @@ import io
 import urllib3
 import priority_engine as pe
 import intelligence as intel
-import gate_engine as gate
 from priority_engine import compute_priority
 import warnings
 import logging
@@ -293,38 +292,6 @@ def _get_active_weights() -> dict:
     return st.session_state.get("active_weights", pe.DEFAULT_W)
 
 
-def _set_active_gates(model):
-    """Activate the self-learned gate model (or None) for this session.
-
-    The gate model carries, per signal, the walk-forward-learned cross-sectional
-    gate and whether it VALIDATED (active=True → it may filter; active=False →
-    annotate/grade only). Rides with the profile, same as weights + conf model."""
-    st.session_state["active_gate_model"] = model
-
-
-def _get_active_gates():
-    return st.session_state.get("active_gate_model")
-
-
-def _activate_profile(profile):
-    """Activate the FULL intelligence triple from a profile dict (or clear it).
-
-    The active intelligence is three coupled pieces — priority weights, the Layer-2
-    conf model, and the self-learned gates — that must always move together; setting
-    one without the others leaves an inconsistent state (e.g. default weights but a
-    stale universe's gates still filtering). This is the single place that sets all
-    three, so callers can't forget one. Pass None (or a dict lacking 'weights') to
-    reset to factory defaults + no conf + no gates."""
-    if profile and isinstance(profile.get("weights"), dict):
-        _set_active_weights(profile["weights"])
-        pe.set_active_conf_model(profile.get("signal_conf"))
-        _set_active_gates(profile.get("gates"))
-    else:
-        _set_active_weights(pe.DEFAULT_W)
-        pe.set_active_conf_model(None)
-        _set_active_gates(None)
-
-
 def _ensure_intel_weights(universe, selected_index, timeframe, analysis_date,
                           reg_len, wt_n1, wt_n2, levels, wt2_len, wt2_type, calib_settings):
     """Resolve the priority weights that rank the screen, in one pass.
@@ -343,7 +310,8 @@ def _ensure_intel_weights(universe, selected_index, timeframe, analysis_date,
 
     # Fast path — today's profile is already good; rank instantly, no harvest/tune.
     if profile and made_today and not force and isinstance(profile.get("weights"), dict):
-        _activate_profile(profile)   # weights + conf model + gates, atomically
+        _set_active_weights(profile["weights"])
+        pe.set_active_conf_model(profile.get("signal_conf"))   # Layer 2 model rides with the profile
         st.session_state["opt_results"] = profile
         console.detail(f"Intelligence: reusing today's profile · val IR {profile.get('val_score', float('nan')):+.3f}")
         return "cached"
@@ -359,12 +327,14 @@ def _ensure_intel_weights(universe, selected_index, timeframe, analysis_date,
     if ts_data is None or getattr(ts_data, "empty", True):
         # Harvest produced nothing — keep best available weights rather than failing the screen.
         if profile and isinstance(profile.get("weights"), dict):
-            _activate_profile(profile)
+            _set_active_weights(profile["weights"])
+            pe.set_active_conf_model(profile.get("signal_conf"))
             st.session_state["opt_results"] = profile
             console.warning("Intelligence: harvest empty — falling back to existing profile")
             st.session_state["timeseries_done"] = False
             return "harvest_failed_cached"
-        _activate_profile(None)   # factory defaults: default weights, no conf, no gates
+        _set_active_weights(pe.DEFAULT_W)
+        pe.set_active_conf_model(None)
         console.warning("Intelligence: harvest empty and no profile — using factory defaults")
         st.session_state["timeseries_done"] = False
         return "harvest_failed_default"
@@ -490,82 +460,6 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
                 'padding:0.3rem 0 0.1rem 0; line-height:1.5;">No calibrated confirmation model — the '
                 'panel is too sparse, so <b>Intel Confidence</b> falls back to the Layer-1 heuristic '
                 '(regime alignment × own-factor agreement × trust). Widen the historical range for a trained filter.</div>',
-                unsafe_allow_html=True,
-            )
-
-        # ── Self-Learning Gates — the validated signal logic the system learned ──
-        _gm = res.get("gates")
-        st.markdown(
-            '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
-            'letter-spacing:0.08em; text-transform:uppercase; padding:0.9rem 0 0.3rem 0;">'
-            'Self-Learning Gates · which raw signals the data validates (walk-forward)</div>',
-            unsafe_allow_html=True,
-        )
-        if _gm and _gm.get("signals"):
-            _sig_order = ["A: Long", "B: Long", "C: Long", "A: Short", "B: Short", "C: Short"]
-            _rows_html = []
-            for _sig in _sig_order:
-                _v = _gm["signals"].get(_sig)
-                if not _v:
-                    continue
-                _active = bool(_v.get("active"))
-                _hit = _v.get("hit", 0.0) or 0.0
-                _wf = _v.get("wf_mean"); _nk = _v.get("naked_mean")
-                _recipe = " · ".join(f"{c}{cmp}" for c, cmp in _v.get("conds", [])) or "—"
-                _badge_col = "var(--emerald)" if _active else "var(--ink-tertiary)"
-                _badge = "✓ ACTIVE (filters)" if _active else "grade-only"
-                _wf_s = f"{_wf*100:+.2f}%" if isinstance(_wf, (int, float)) and not (isinstance(_wf, float) and _wf != _wf) else "—"
-                _nk_s = f"{_nk*100:+.2f}%" if isinstance(_nk, (int, float)) and not (isinstance(_nk, float) and _nk != _nk) else "—"
-                _rows_html.append(
-                    f'<tr style="border-bottom:1px solid var(--border-subtle);">'
-                    f'<td style="padding:0.3rem 0.6rem; font-weight:700; color:var(--ink-secondary);">{_sig}</td>'
-                    f'<td style="padding:0.3rem 0.6rem; color:{_badge_col}; font-weight:700; font-size:0.66rem;">{_badge}</td>'
-                    f'<td style="padding:0.3rem 0.6rem; text-align:right; color:var(--ink-tertiary);">{_hit*100:.0f}%</td>'
-                    f'<td style="padding:0.3rem 0.6rem; text-align:right; color:var(--ink-secondary);">{_wf_s}</td>'
-                    f'<td style="padding:0.3rem 0.6rem; text-align:right; color:var(--ink-tertiary);">{_nk_s}</td>'
-                    f'<td style="padding:0.3rem 0.6rem; font-size:0.64rem; color:var(--ink-tertiary);">{_recipe}</td>'
-                    f'</tr>'
-                )
-            _n_active = sum(1 for v in _gm["signals"].values() if v.get("active"))
-            st.markdown(
-                '<table style="width:100%; border-collapse:collapse; font-family:var(--data); font-size:0.7rem;">'
-                '<thead><tr style="color:var(--ink-tertiary); text-transform:uppercase; font-size:0.6rem; letter-spacing:0.08em;">'
-                '<th style="text-align:left; padding:0.3rem 0.6rem;">Signal</th>'
-                '<th style="text-align:left; padding:0.3rem 0.6rem;">Status</th>'
-                '<th style="text-align:right; padding:0.3rem 0.6rem;">OOS hit</th>'
-                '<th style="text-align:right; padding:0.3rem 0.6rem;">gated μ</th>'
-                '<th style="text-align:right; padding:0.3rem 0.6rem;">naked μ</th>'
-                '<th style="text-align:left; padding:0.3rem 0.6rem;">learned gate (self-calibrating)</th>'
-                '</tr></thead><tbody>' + "".join(_rows_html) + '</tbody></table>',
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f'<div style="font-family:var(--data); font-size:0.68rem; color:var(--ink-tertiary); '
-                f'padding:0.5rem 0 0.1rem 0; line-height:1.5;">'
-                f'<b>{_n_active}</b> of {len(_gm["signals"])} raw signals are <b>walk-forward validated</b> '
-                f'(gated edge beats the naked signal, positive in ≥{int((_gm.get("activate_hit",0.5))*100)}% of '
-                f'out-of-sample windows) → these are <b>applied per-instrument</b>: each fired signal is judged '
-                f'by the gate against that stock\'s own factors vs the universe, and the <b>Gate</b> column on '
-                f'the signal tables shows ✓pass / ✗fail (with the Intelligence Filter on, ✗fail is dimmed/hidden). '
-                f'The rest stay <b>grade-only</b> (annotated, never filtered) — the system won\'t filter on logic '
-                f'it hasn\'t proven out-of-sample. Gates re-learn per universe each run; thresholds are '
-                f'self-calibrating cross-sectional ranks (never hardcoded). Horizon {_gm.get("horizon","—")}b · gross of costs.</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            # Accurate, status-specific reason — not a blanket "too sparse". A
-            # data-shape status (no_signal_col / no_return_col) is a red-flag bug,
-            # not a history problem, so colour it as a warning.
-            _gstatus = (_gm or {}).get("status", "empty")
-            _gmsg = gate.status_message(_gm or {})
-            _is_bug = _gstatus in ("no_signal_col", "no_return_col", "no_date_col")
-            _col = "var(--rose)" if _is_bug else "var(--ink-tertiary)"
-            _lead = ("⚠ Gates unavailable — data-shape problem (not history): "
-                     if _is_bug else "No active gates yet — ")
-            st.markdown(
-                f'<div style="font-family:var(--data); font-size:0.72rem; color:{_col}; '
-                f'padding:0.3rem 0 0.1rem 0; line-height:1.5;">{_lead}{_gmsg} '
-                f'Signals fire ungated meanwhile.</div>',
                 unsafe_allow_html=True,
             )
     else:
@@ -2725,7 +2619,8 @@ def render_sidebar() -> SidebarState:
             _profile = pe.load_profile_for(universe, selected_index, timeframe)
             _uni_label = (selected_index or universe or "—")
             if _profile and isinstance(_profile.get("weights"), dict):
-                _activate_profile(_profile)   # weights + conf + gates together
+                _set_active_weights(_profile["weights"])
+                pe.set_active_conf_model(_profile.get("signal_conf"))
                 st.session_state["opt_results"] = _profile
                 # Don't log the very first sync of a session (already covered by the
                 # session-start banner); only log genuine universe transitions.
@@ -2736,7 +2631,8 @@ def render_sidebar() -> SidebarState:
                         f"Profile loaded · {_uni_label} · val IR {_ir_s}"
                     )
             else:
-                _activate_profile(None)   # factory defaults
+                _set_active_weights(pe.DEFAULT_W)
+                pe.set_active_conf_model(None)
                 if "opt_results" in st.session_state:
                     del st.session_state["opt_results"]
                 if _previous_uni_key is not None:
@@ -3173,16 +3069,6 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         # Intelligence Confirmation (Layer 1): per-signal confidence from regime
         # state + own-factor agreement. Non-destructive — annotates fired signals only.
         results_df = pe.compute_signal_confidence(results_df, weights=_get_active_weights())
-        # Self-learning gates: grade each fired signal by the per-universe gate the
-        # system learned + walk-forward-validated on this run's harvest. Adds
-        # Signal_Grade (0–1, fraction of the learned cross-sectional conditions met
-        # in TODAY's cross-section — self-calibrating, no hardcoded thresholds),
-        # Gate_Pass (meets all conditions), and Gate_Active (the gate validated OOS,
-        # so it's allowed to filter — vs grade-only). Non-destructive annotation.
-        try:
-            results_df = gate.apply_gates(results_df, _get_active_gates())
-        except Exception as _ge:
-            console.detail(f"Gate apply skipped: {type(_ge).__name__}: {_ge}")
         # Default sort by Priority_Long for the global table. kind='stable' is
         # load-bearing: compute_priority already sorted by the full tiebreaker
         # cascade (_tb_long = Priority, Confidence, Vol-regime, |PriceMom|). A stable
@@ -4715,26 +4601,6 @@ def _status_cell(status) -> str:
             f'title="{_t}">{html.escape(str(label))}</td>')
 
 
-def _gate_cell(row) -> str:
-    """Per-instrument gate verdict for THIS row's signal. Shows whether the self-
-    learned, walk-forward-validated gate (evaluated on this stock's own factors vs
-    the universe) passes/fails — or is advisory (gate not validated for this set)."""
-    active = bool(row.get('Gate_Active'))
-    grade = row.get('Signal_Grade')
-    has_grade = grade is not None and not (isinstance(grade, float) and grade != grade)
-    if not active:
-        # Gate didn't validate for this signal set → advisory grade only.
-        g = f"{grade*100:.0f}%" if has_grade else "—"
-        return (f'<td class="numeric" style="color:#94A3B8; font-weight:600; font-size:0.62rem;" '
-                f'title="Gate not validated for this set (advisory) — grade {g}">· {g}</td>')
-    # Active gate: this instrument either passes or fails the validated filter.
-    if bool(row.get('Gate_Pass')):
-        return ('<td class="numeric" style="color:#2DD4A8; font-weight:700; font-size:0.62rem;" '
-                'title="Passes the active (validated) gate for this stock">✓ pass</td>')
-    return ('<td class="numeric" style="color:#E8555A; font-weight:700; font-size:0.62rem;" '
-            'title="Fails the active gate — filtered/dimmed when the Intelligence Filter is on">✗ fail</td>')
-
-
 def _context_status(fire_c, today_c, offset):
     """Has the regime/momentum context that made the signal good held up to today?
 
@@ -4883,15 +4749,9 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
 
     # Fire-bar Intel scoring: each signal is scored at the bar it fired (its age
     # offset), not at the snapshot date. The result is attached to the row as
-    # _fire_conf / _fire_src and reused for table display.
+    # _fire_conf / _fire_src and reused for both Layer-3 Hide and table display.
     _filter_mode, _filter_thr = _intel_filter_active()
     _windows = st.session_state.get("intel_windows", {})
-    # Gate-based filtering: Hide drops a fired signal only when the system has a
-    # WALK-FORWARD-VALIDATED gate for it (Gate_Active) AND this signal fails that
-    # gate (~Gate_Pass). Non-validated (grade-only) gates never hide — the system
-    # only filters on logic it proved out-of-sample. This is the validated
-    # replacement for the dead AUC-confidence filter.
-    _has_gatecols = ('Gate_Active' in results_df.columns) and ('Gate_Pass' in results_df.columns)
 
     for _offset, age in enumerate(buckets.keys()):
         col = col_map[age]
@@ -4900,9 +4760,9 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
             sym = r['Symbol']
             m = _fire_bar_metrics(_windows.get(sym), side, condition_set, _offset, r)
             fc = m['conf']
-            # Hide mode — drop signals an ACTIVE gate rejects (validated filter).
-            if (_filter_mode == "Hide" and _has_gatecols
-                    and bool(r.get('Gate_Active')) and not bool(r.get('Gate_Pass'))):
+            # Hide mode — drop low-confidence signals (and don't let an older
+            # fire of the same symbol resurface in a later bucket).
+            if _filter_mode == "Hide" and fc is not None and not pd.isna(fc) and fc < _filter_thr:
                 seen.add(sym)
                 continue
             r = r.copy()
@@ -5013,17 +4873,11 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
             _conf_val = row.get('_fire_conf', row.get('Intel_Confidence'))
             _conf_src = row.get('_fire_src', row.get('Intel_Source', ''))
             intel_cell, _row_style = _intel_cell_and_style(
-                _conf_val, _conf_src, 'Off', 0.0,   # cell visuals only; dim decided by the gate below
+                _conf_val, _conf_src, _filter_mode, _filter_thr,
             )
-            # Dim on the VALIDATED gate verdict, not the dead confidence: grey a
-            # signal only when an ACTIVE (walk-forward-validated) gate rejects it.
-            if (_filter_mode == 'Dim' and bool(row.get('Gate_Active'))
-                    and not bool(row.get('Gate_Pass'))):
-                _row_style = 'opacity:0.4;'
             # Context (thesis decay) + Entry (move exhaustion) status cells.
             ctx_cell   = _status_cell(row.get('_ctx',   ('—', '#4B5563', '')))
             entry_cell = _status_cell(row.get('_entry', ('—', '#4B5563', '')))
-            gate_cell  = _gate_cell(row)   # per-instrument validated-gate verdict
 
             table_rows.append(f"""
             <tr style="{_row_style}">
@@ -5039,14 +4893,13 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                 {intel_cell}
                 {ctx_cell}
                 {entry_cell}
-                {gate_cell}
             </tr>
             """)
 
     if not table_rows:
         table_rows.append(f"""
         <tr>
-            <td colspan="13" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="12" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
                 — no signals detected —
             </td>
@@ -5143,7 +4996,6 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                     <th class="numeric">Intel</th>
                     <th class="numeric">Context</th>
                     <th class="numeric">Entry</th>
-                    <th class="numeric" title="Per-instrument verdict from the self-learned, walk-forward-validated gate (✓pass / ✗fail when active; ·grade% when advisory)">Gate</th>
                 </tr>
             </thead>
             <tbody>
@@ -6084,21 +5936,17 @@ def main():
                         accent="amber"
                     )
 
-                    # Intelligence Filter status banner — now driven by the self-learned,
-                    # walk-forward-validated gates (not the dead AUC-confidence).
+                    # Layer 3 · Intelligence Filter status banner (opt-in false-positive suppression).
                     _if_mode, _if_thr = _intel_filter_active()
                     if _if_mode != "Off":
                         _if_verb = "hiding" if _if_mode == "Hide" else "dimming"
-                        _gm = (st.session_state.get("opt_results") or {}).get("gates") or {}
-                        _act = [s for s, v in _gm.get("signals", {}).items() if v.get("active")]
-                        _src = (f"validated gates: {', '.join(_act)}" if _act
-                                else "no validated gates yet — nothing filtered")
+                        _if_src = "calibrated model" if pe.get_active_conf_model() else "Layer-1 heuristic"
                         st.markdown(
                             f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--amber); '
                             f'background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22); '
                             f'border-radius:6px; padding:0.45rem 0.7rem; margin:0 0 0.7rem 0;">'
-                            f'⚙ Intelligence Filter <b>{_if_mode}</b> — {_if_verb} fired signals an '
-                            f'<b>active gate</b> rejects ({_src}). Grade-only signals are never hidden. '
+                            f'⚙ Intelligence Filter <b>{_if_mode}</b> — {_if_verb} signals with '
+                            f'Intel Confidence &lt; <b>{_if_thr:.2f}</b> · scored by {_if_src}. '
                             f'Adjust in the sidebar ▸ Self-Tuning Intelligence.</div>',
                             unsafe_allow_html=True,
                         )
@@ -6452,19 +6300,6 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                 "Force recalibrate this run", value=False, key="sb_calib_force",
                 help="Re-harvest and re-tune even if today's profile already exists.",
             )
-            # History depth for the harvest that feeds BOTH weight calibration AND the
-            # self-learning gate engine. The gate walk-forward needs ≥~504 trading days
-            # (252-day train + ≥4×63-day forward windows) to validate a gate — the old
-            # 2y (~500 trading-day) default sat right on that floor, so gates often read
-            # "too sparse". 3y clears it with margin; 5y gives the robust ~15 windows.
-            calib_years = st.slider(
-                "History Depth (years)", min_value=2, max_value=6, value=3, step=1,
-                key="sb_calib_years",
-                help="Years of history harvested for calibration + gate learning. "
-                     "Gates need ≥~2.5y to validate (walk-forward windows); 4–5y is robust. "
-                     "More years = slower first-of-day harvest (cached after).",
-            )
-            st.session_state["_calib_years"] = int(calib_years)
 
             # ── Layer 3 · Intelligence Filter (opt-in false-positive suppression) ──
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -6509,12 +6344,8 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
             )
     else:
         calib_trials, calib_train_frac = 75, 0.70
-    # Inline-harvest lookback ending at the analysis date. Driven by the sidebar
-    # "History Depth" control (default 3y) so the user owns the depth↔speed tradeoff;
-    # the gate engine needs ≥~2.5y to validate. Weekly adds a year of margin since it
-    # has ~5× fewer bars per calendar year.
-    _calib_years = int(st.session_state.get("_calib_years", 3))
-    calib_lookback_days = int(round((_calib_years + (1 if current_timeframe == "Weekly" else 0)) * 365.25))
+    # Inline-harvest lookback ending at the analysis date: ~3y weekly, ~2y daily.
+    calib_lookback_days = 1095 if current_timeframe == "Weekly" else 730
     _calib_settings = {
         "trials":        calib_trials,
         "train_frac":    calib_train_frac,
@@ -6532,7 +6363,6 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                 if isinstance(payload, dict) and isinstance(payload.get("weights"), dict):
                     _set_active_weights(payload["weights"])
                     pe.set_active_conf_model(payload.get("signal_conf"))
-                    _set_active_gates(payload.get("gates"))
                     st.session_state["opt_results"] = payload
                     pe.save_profile(payload)
                     _imp_label = payload.get("selected_index") or payload.get("universe") or "—"
@@ -6540,7 +6370,6 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                 else:
                     _set_active_weights(payload)  # legacy: file IS a weights dict
                     pe.set_active_conf_model(None)
-                    _set_active_gates(None)
                     _had_calibration = "opt_results" in st.session_state
                     if _had_calibration:
                         del st.session_state["opt_results"]
@@ -6590,10 +6419,7 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
         key="passport_export",
     )
     if st.button("↺ Reset to Defaults", width='stretch', key="passport_reset"):
-        # Reset the WHOLE active-intelligence profile together (weights + conf + gates)
-        # so no stale gates/conf survive a weights reset (which would rank on defaults
-        # but still filter on the old universe's gates: an inconsistent state).
-        _activate_profile(None)
+        _set_active_weights(pe.DEFAULT_W)
         if "opt_results" in st.session_state:
             del st.session_state["opt_results"]
         # Only delete THIS universe+timeframe profile — others are preserved.
@@ -6781,34 +6607,6 @@ def run_priority_optimization(ts_data, calib_settings):
     else:
         console.detail("Signal confidence: panel too sparse — using Layer-1 heuristic")
 
-    # ─── Self-learning Gate Engine ────────────────────────────────────────
-    # The system runs the SAME research process we did manually — on this run's
-    # harvested panel it learns, per raw signal, the cross-sectional gate that best
-    # sorts winners, then WALK-FORWARD validates it. A gate is marked active=True
-    # only if it beat the naked signal out-of-sample (positive in ≥65% of forward
-    # windows). Active gates may FILTER the screen; non-active ones only GRADE
-    # (annotate) it. This is the validated replacement for the dead Layer-2 filter.
-    gates = None
-    try:
-        gate_horizon = int(calib_settings.get("gate_horizon", calib_settings.get("conf_horizon", 5)))
-        gates = gate.learn_gates(ts_data, horizon=gate_horizon)
-    except Exception as _e:
-        console.warning(f"Gate learning skipped: {_e}")
-    _set_active_gates(gates)
-    if gates and gates.get("signals"):
-        _active = [s for s, v in gates["signals"].items() if v.get("active")]
-        for s, v in gates["signals"].items():
-            _rec = " & ".join(f"{c}{cmp}" for c, cmp in v.get("conds", [])) or "—"
-            _tag = "ACTIVE" if v.get("active") else "grade-only"
-            console.detail(f"Gate {s:9s} [{_tag}] hit {v.get('hit',0)*100:.0f}% "
-                           f"wf {v.get('wf_mean',float('nan'))*100:+.2f}% vs naked "
-                           f"{v.get('naked_mean',float('nan'))*100:+.2f}%  [{_rec}]")
-        console.detail(f"Gate engine: {len(_active)}/{len(gates['signals'])} signals validated active "
-                       f"({', '.join(_active) or 'none — all grade-only'})")
-    else:
-        # Accurate reason (data-shape / dates / event-sparsity) — not a generic "too sparse".
-        console.detail(f"Gate engine: no gates — {gate.status_message(gates)}")
-
     ts_meta = st.session_state.get("ts_meta") or {}
     opt_results = {
         "weights":        best_w,
@@ -6816,7 +6614,6 @@ def run_priority_optimization(ts_data, calib_settings):
         "val_score":      val_score,
         "sensitivity":    importance,
         "signal_conf":    signal_conf,
-        "gates":          gates,
         "timestamp":      datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "universe":       ts_meta.get("universe"),
         "selected_index": ts_meta.get("selected_index"),

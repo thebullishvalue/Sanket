@@ -224,7 +224,6 @@ def save_profile(opt_results: dict) -> bool:
             "val_score":      opt_results.get("val_score"),
             "sensitivity":    opt_results.get("sensitivity", {}),
             "signal_conf":    opt_results.get("signal_conf"),   # Layer 2 calibrated confidence model
-            "gates":          opt_results.get("gates"),          # self-learned per-signal gate model
             "timestamp":      opt_results.get("timestamp"),
             "universe":       universe,
             "selected_index": selected_index,
