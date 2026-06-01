@@ -298,11 +298,21 @@ class PriorityTuner:
                  hold_periods=None,
                  train_frac: float = 0.70,
                  l2_alpha: float = 0.001,
-                 min_xsect: int = 5):
+                 min_xsect: int = 5,
+                 enable_f7: bool = False):
+        # enable_f7: whether the LO range-extension factor (F7) participates in the
+        # ranking search. OFF by default — F7 is collinear with the existing
+        # WaveTrend reversion penalty + F3, so on thin data the optimizer can hand it
+        # large, unstable, partly-cancelling weights that move live rankings without
+        # adding real out-of-sample edge. Kept dormant (pinned to 0) until validated:
+        # the factor, its math, and the Set-B liquidity confidence features all remain;
+        # only its *ranking weight* is gated. Flip on to A/B-test F7's fANOVA
+        # importance + val IR against a no-F7 baseline before trusting it.
         self.hold_periods = list(hold_periods) if hold_periods is not None else list(pe.HOLD_HORIZONS)
         self.train_frac   = train_frac
         self.l2_alpha     = l2_alpha
         self.min_xsect    = min_xsect
+        self.enable_f7    = enable_f7
         self.best_weights = pe.DEFAULT_W.copy()
         self.study        = None
         self.train_score  = None
@@ -347,7 +357,10 @@ class PriorityTuner:
                 'beta_F4_pulse_long':     trial.suggest_float('beta_F4_pulse_long',    0.0, 40.0),
                 'beta_F5_regime_long':    trial.suggest_float('beta_F5_regime_long',   0.0, 50.0),
                 'beta_F6_xsect_long':     trial.suggest_float('beta_F6_xsect_long',    0.0, 40.0),
-                'beta_F7_liq_long':       trial.suggest_float('beta_F7_liq_long',   -40.0, 40.0),
+                # F7 searched only when explicitly enabled; pinned to 0 otherwise so it
+                # can't acquire spurious (collinear) weight on thin data — see __init__.
+                'beta_F7_liq_long':       (trial.suggest_float('beta_F7_liq_long',  -40.0, 40.0)
+                                           if self.enable_f7 else 0.0),
                 'gamma_reversion_long':   trial.suggest_float('gamma_reversion_long',  0.0, 40.0),
                 'gamma_divergence_long':  trial.suggest_float('gamma_divergence_long', 0.0, 40.0),
                 # Short-side factor weights
@@ -357,7 +370,8 @@ class PriorityTuner:
                 'beta_F4_pulse_short':    trial.suggest_float('beta_F4_pulse_short',    0.0, 40.0),
                 'beta_F5_regime_short':   trial.suggest_float('beta_F5_regime_short',   0.0, 50.0),
                 'beta_F6_xsect_short':    trial.suggest_float('beta_F6_xsect_short',    0.0, 40.0),
-                'beta_F7_liq_short':      trial.suggest_float('beta_F7_liq_short',  -40.0, 40.0),
+                'beta_F7_liq_short':      (trial.suggest_float('beta_F7_liq_short', -40.0, 40.0)
+                                           if self.enable_f7 else 0.0),
                 'gamma_reversion_short':  trial.suggest_float('gamma_reversion_short',  0.0, 40.0),
                 'gamma_divergence_short': trial.suggest_float('gamma_divergence_short', 0.0, 40.0),
                 # Shared tier multipliers

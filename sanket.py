@@ -4550,9 +4550,9 @@ def _intel_filter_active():
     if mode not in ("Off", "Dim", "Hide"):
         mode = "Off"
     try:
-        thr = float(st.session_state.get("intel_filter_threshold", 0.40))
+        thr = float(st.session_state.get("intel_filter_threshold", 0.45))
     except (TypeError, ValueError):
-        thr = 0.40
+        thr = 0.45
     return mode, thr
 
 
@@ -5519,7 +5519,9 @@ def _build_active_weights_table_html(active_weights: dict) -> str:
         ("F4 · Pulse",      "beta_F4_pulse_long",      "beta_F4_pulse_short"),
         ("F5 · Regime",     "beta_F5_regime_long",     "beta_F5_regime_short"),
         ("F6 · X-Sect",     "beta_F6_xsect_long",      "beta_F6_xsect_short"),
-        ("F7 · Liq (LO)",   "beta_F7_liq_long",        "beta_F7_liq_short"),
+        # F7 dormant by default (0/0) — gated out of the ranking search pending
+        # real-data validation; the "exp" tag signals experimental/probation, not a bug.
+        ("F7 · Liq (LO) ᵉˣᵖ", "beta_F7_liq_long",      "beta_F7_liq_short"),
         ("γ · Reversion",   "gamma_reversion_long",    "gamma_reversion_short"),
         ("γ · Divergence",  "gamma_divergence_long",   "gamma_divergence_short"),
     ]
@@ -6308,18 +6310,37 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                 'from the Action Dashboard. Off shows all signals.</div>',
                 unsafe_allow_html=True,
             )
+            # Dynamic default for Min Confidence: track the calibrated Confirm AUC so
+            # the filter's strictness scales with model quality; fall back to 0.45 when
+            # no AUC exists. Calibration runs AFTER this sidebar renders, so the AUC
+            # only appears on a later rerun — we therefore re-seed the threshold to the
+            # AUC-derived default whenever it changes, UNLESS the user has manually
+            # dragged the slider (detected by the value diverging from the last auto-seed).
+            _res = st.session_state.get("opt_results") or {}
+            _sc  = (_res.get("signal_conf") or {}) if isinstance(_res, dict) else {}
+            _auc = _sc.get("val_auc")
+            _thr_default = float(_auc) if isinstance(_auc, (int, float)) and 0.0 <= _auc <= 1.0 else 0.45
+            _thr_default = round(_thr_default / 0.05) * 0.05   # align to slider's step grid
+            _prev_seed = st.session_state.get("_intel_thr_autoseed")
+            _cur_val   = st.session_state.get("intel_filter_threshold")
+            # Apply the auto-default if never seeded, or if the user hasn't overridden it
+            # (current value still equals the previous auto-seed) and the default moved.
+            if _cur_val is None or (_prev_seed is not None and abs(_cur_val - _prev_seed) < 1e-9 and abs(_cur_val - _thr_default) > 1e-9):
+                st.session_state["intel_filter_threshold"] = _thr_default
+            st.session_state["_intel_thr_autoseed"] = _thr_default
+            st.session_state.setdefault("intel_filter_mode", "Dim")
+
             intel_filter_mode = st.radio(
                 "Intelligence Filter", ["Off", "Dim", "Hide"],
-                index=["Off", "Dim", "Hide"].index(st.session_state.get("intel_filter_mode", "Off")),
                 horizontal=True, key="intel_filter_mode",
                 help="Off: show all. Dim: grey signals below the threshold. Hide: drop them entirely.",
             )
             intel_filter_threshold = st.slider(
                 "Min Confidence", min_value=0.0, max_value=1.0,
-                value=float(st.session_state.get("intel_filter_threshold", 0.40)),
                 step=0.05, key="intel_filter_threshold",
                 disabled=(intel_filter_mode == "Off"),
-                help="Signals with Intel Confidence below this are dimmed or hidden.",
+                help=("Signals with Intel Confidence below this are dimmed or hidden. "
+                      "Defaults to the calibrated Confirm AUC (or 0.45 if uncalibrated)."),
             )
     else:
         calib_trials, calib_train_frac = 75, 0.70
@@ -6451,6 +6472,10 @@ def run_priority_optimization(ts_data, calib_settings):
         ts_data,
         hold_periods=horizons,
         train_frac=train_frac,
+        # F7 (LO reversion) stays out of the ranking search unless explicitly enabled —
+        # it's collinear with the existing reversion machinery and unproven on real
+        # data, so default-off prevents spurious weight. Opt in via calib_settings.
+        enable_f7=bool(calib_settings.get("enable_f7", False)),
     )
     n_train_dates = tuner._train_pre.n_groups if not tuner._train_pre.empty else 0
     n_val_dates   = tuner._val_pre.n_groups   if not tuner._val_pre.empty   else 0

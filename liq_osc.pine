@@ -1,0 +1,186 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © BullishValue   ·   Liquidity Oscillator (LO) — original author.
+//
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  LIQUIDITY OSCILLATOR (LO) · Sanket Edition                             ║
+// ║  Liquidity-adjusted stochastic oscillator [−100, +100]:                 ║
+// ║  (VWAP-spread − price-impact) folded into price, range-normalized.      ║
+// ║  SIGNAL TYPE:                                                           ║
+// ║    CROSSOVER — LO crosses the LT / UT band (reversal buy / sell).       ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+
+//@version=6
+indicator('Liquidity Oscillator (LO)', 'LO', overlay = false, precision = 2, max_bars_back = 500)
+
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 1 · INPUTS & PALETTE                                           ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+
+// ── 1A · CORE ──
+grp_core     = 'LO: Core'
+length       = input.int(20, 'Smoothing / Range Length', group = grp_core, minval = 2, display = display.none, tooltip = 'Window for the VWAP-spread & price-impact smoothing AND the stochastic range normalization.')
+impact_window= input.int(3,  'Price Impact Window',      group = grp_core, minval = 1, display = display.none)
+sigFast      = input.int(9,  'Signal EMA · Fast',        group = grp_core, minval = 1, display = display.none)
+sigSlow      = input.int(21, 'Signal EMA · Slow',        group = grp_core, minval = 2, display = display.none)
+
+// ── 1B · CROSSOVER ──
+grp_xover    = 'LO: Crossover'
+lt_level     = input.int(-75, 'Lower Band (LT)', group = grp_xover, display = display.none, tooltip = 'BUY when LO crosses UP through this band — a recovery out of a liquidity low.')
+ut_level     = input.int(75,  'Upper Band (UT)', group = grp_xover, display = display.none, tooltip = 'SELL when LO crosses DOWN through this band — a rollover from a liquidity high.')
+
+// ── 1C · VALUE ZONE (context) ──
+grp_zone     = 'LO: Value Zone'
+longLen      = input.int(200, 'Fair-Value MA',     group = grp_zone, minval = 10, display = display.none)
+disc_thr     = input.float(1.3,  'Discount Threshold (% below MA)', group = grp_zone, display = display.none)
+prem_thr     = input.float(-1.5, 'Premium Threshold (% below MA)',  group = grp_zone, display = display.none)
+rsiLow       = input.int(40, 'RSI Oversold',   group = grp_zone, display = display.none)
+rsiHigh      = input.int(70, 'RSI Overbought', group = grp_zone, display = display.none)
+
+// ── Color Palette: Obsidian Quant (shared with WRCI) ──
+var color C_BG_DARK   = #1a1a1a
+var color C_BG_HEADER = #0d0d0d
+var color C_BG_EVEN   = #222222
+var color C_TXT_DIM   = #4B5563
+var color C_TXT_NORM  = #94A3B8
+var color C_TXT_BRIGHT= #F8FAFC
+var color C_POS       = #22c55e // green
+var color C_NEG       = #ef4444 // red
+var color C_ACCENT    = #4a9eff // blue  (fast signal line)
+var color C_WARN      = #fbbf24 // amber (spare)
+var color C_VIOLET    = #c084fc // slow signal
+
+
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 2 · CORE CALCULATIONS                                          ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+
+// ── 2A · Liquidity Score (microstructure) ──
+// Volume-weighted intrabar spread MINUS multi-bar price impact — the same liquidity
+// construct as WRCI's engine, here folded into price and range-normalized.
+spread        = (high + low) / 2.0 - open
+vol_ma        = math.max(ta.sma(volume, length), 1e-9)
+vwap_spread   = ta.sma(spread * volume / vol_ma, length)
+price_impact  = ta.sma((close - close[impact_window]) * volume / vol_ma, length)
+liquidity_score = vwap_spread - price_impact
+
+// ── 2B · Stochastic Normalization → LO oscillator [−100, +100] ──
+source_value = close + liquidity_score
+lo_low       = ta.lowest(source_value, length)
+lo_high      = ta.highest(source_value, length)
+lo           = 200.0 * (source_value - lo_low) / math.max(lo_high - lo_low, 1e-9) - 100.0
+
+// ── 2C · Signal EMAs & separation ──
+lo_fast = ta.ema(lo, sigFast)
+lo_slow = ta.ema(lo, sigSlow)
+sep     = lo_fast - lo_slow                     // + = fast above slow (bullish lean)
+
+// ── 2D · Value-Zone context (soft) ──
+// Discount = price meaningfully below the fair-value MA AND RSI oversold; premium = mirror.
+// (The original's short-MA `bool(spread90)` guard was a no-op and has been removed.)
+fair_ma  = ta.sma(close, longLen)
+disc_pct = (fair_ma - close) * 100.0 / math.max(fair_ma, 1e-9)   // + = below MA (discount)
+rsi14    = ta.rsi(close, 14)
+discount_zone = disc_pct > disc_thr  and rsi14 < rsiLow
+premium_zone  = disc_pct < prem_thr  and rsi14 > rsiHigh
+
+
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 3 · SIGNAL ENGINE                                              ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+
+// ── 3A · CROSSOVER — band-cross reversal ──
+// LO recovering UP through the lower band (LT) = buy; rolling DOWN through the upper band
+// (UT) = sell. A reversal-from-extreme entry on the liquidity oscillator itself.
+crossover_long  = ta.crossover(lo,  lt_level)
+crossover_short = ta.crossunder(lo, ut_level)
+
+
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 4 · VISUALIZATION                                              ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+
+// ── 4A · Static Levels ──
+hline(0,    'Zero',   color = color.new(C_TXT_DIM, 50))
+hline(100,  'Top',    color = color.new(C_NEG, 40))
+hline(ut_level, 'UT',     color = color.new(C_NEG, 65), linestyle = hline.style_dashed)
+hline(50,       'mid-UT', color = color.new(C_NEG, 80), linestyle = hline.style_dotted)
+hline(-50,      'mid-LT', color = color.new(C_POS, 80), linestyle = hline.style_dotted)
+hline(lt_level, 'LT',     color = color.new(C_POS, 65), linestyle = hline.style_dashed)
+hline(-100, 'Bottom', color = color.new(C_POS, 40))
+
+// ── 4B · Value-Zone background (soft context, not a gate) ──
+bgcolor(discount_zone ? color.new(C_POS, 90) : premium_zone ? color.new(C_NEG, 90) : na, title = 'Value Zone')
+
+// ── 4C · Oscillator & signal lines ──
+// Separation histogram: the gap between the two signal EMAs (fast − slow).
+plot(sep, 'Fast−Slow Δ', style = plot.style_columns, color = color.new(sep >= 0 ? C_POS : C_NEG, 80), display = display.all - display.status_line)
+plot(lo,      'LO',          color = color.new(color.aqua, 15), linewidth = 2)
+plot(lo_fast, 'Signal Fast', color = color.new(C_ACCENT, 10), linewidth = 1)
+plot(lo_slow, 'Signal Slow', color = color.new(C_VIOLET, 10), linewidth = 1)
+
+// ── 4D · Signal Markers (WRCI shape language: crossover = triangle) ──
+plotshape(crossover_long,  'Crossover Long',  style = shape.triangleup,   location = location.bottom, color = C_POS, size = size.small, display = display.all - display.status_line)
+plotshape(crossover_short, 'Crossover Short', style = shape.triangledown, location = location.top,    color = C_NEG, size = size.small, display = display.all - display.status_line)
+
+// ── 4E · Intelligence Table ──
+var table tbl = table.new(position.middle_right, 2, 5, bgcolor = C_BG_DARK, border_width = 0, frame_width = 1, frame_color = #333333)
+if barstate.islast
+    table.cell(tbl, 0, 0, 'METRIC', text_halign = text.align_left,  text_color = C_TXT_DIM, bgcolor = C_BG_HEADER, text_size = size.tiny)
+    table.cell(tbl, 1, 0, 'READ',   text_halign = text.align_right, text_color = C_TXT_DIM, bgcolor = C_BG_HEADER, text_size = size.tiny)
+
+    // LO value
+    lo_col = lo > 75 ? C_NEG : lo < -75 ? C_POS : lo > 0 ? color.new(C_NEG, 35) : color.new(C_POS, 35)
+    table.cell(tbl, 0, 1, 'LO', text_halign = text.align_left, text_color = C_TXT_NORM, bgcolor = C_BG_DARK, text_size = size.small)
+    table.cell(tbl, 1, 1, str.tostring(lo, '#.#'), text_halign = text.align_right, text_color = lo_col, bgcolor = C_BG_DARK, text_size = size.small)
+
+    // Signal separation
+    table.cell(tbl, 0, 2, 'Signal Δ', text_halign = text.align_left, text_color = C_TXT_NORM, bgcolor = C_BG_EVEN, text_size = size.small)
+    table.cell(tbl, 1, 2, str.tostring(sep, '#.##'), text_halign = text.align_right, text_color = sep >= 0 ? C_POS : C_NEG, bgcolor = C_BG_EVEN, text_size = size.small)
+
+    // Crossover state
+    xo_txt = crossover_long ? 'BUY ▲' : crossover_short ? 'SELL ▼' : lo > ut_level ? 'OB' : lo < lt_level ? 'OS' : '—'
+    xo_col = crossover_long ? C_POS : crossover_short ? C_NEG : lo > ut_level ? C_NEG : lo < lt_level ? C_POS : C_TXT_DIM
+    table.cell(tbl, 0, 3, 'Crossover', text_halign = text.align_left, text_color = C_TXT_NORM, bgcolor = C_BG_DARK, text_size = size.small)
+    table.cell(tbl, 1, 3, xo_txt, text_halign = text.align_right, text_color = xo_col, bgcolor = C_BG_DARK, text_size = size.small)
+
+    // Value zone
+    vz_txt = discount_zone ? 'DISCOUNT' : premium_zone ? 'PREMIUM' : 'NEUTRAL'
+    vz_col = discount_zone ? C_POS : premium_zone ? C_NEG : C_TXT_DIM
+    table.cell(tbl, 0, 4, 'Value Zone', text_halign = text.align_left, text_color = C_TXT_NORM, bgcolor = C_BG_EVEN, text_size = size.small)
+    table.cell(tbl, 1, 4, vz_txt, text_halign = text.align_right, text_color = vz_col, bgcolor = C_BG_EVEN, text_size = size.small)
+
+
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 5 · ALERTS                                                     ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+alertcondition(crossover_long,  'LO Crossover Long',  'LO · Crossover long (LO crossed up through the lower band)')
+alertcondition(crossover_short, 'LO Crossover Short', 'LO · Crossover short (LO crossed down through the upper band)')
+
+
+// ╔═════════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 6 · INTERPRETATION GUIDE                                       ║
+// ╚═════════════════════════════════════════════════════════════════════════╝
+//    ── LO (Liquidity Oscillator) ──
+//    CONCEPT: A liquidity-adjusted stochastic. It blends the volume-weighted intrabar spread
+//    against multi-bar price impact (a microstructure liquidity score), folds that into price,
+//    and range-normalizes to [−100, +100]. High = price + liquidity stretched to the top of its
+//    recent range; low = stretched to the bottom.
+//    • ±75 / ±100: over-extension bands.  • ±50: the mid bands.  • 0: equilibrium.
+//
+//    ── SIGNAL FAST / SLOW (the two EMAs) ──
+//    EMA(9) and EMA(21) of LO — momentum-smoothed reference lines. The Fast−Slow Δ
+//    histogram shows their gap (alignment / momentum-lean context).
+//
+//    ── CROSSOVER (▲ / ▽) — band-cross reversal ──
+//    The liquidity oscillator itself crossing its extension bands:
+//    • Long (BUY): LO crosses UP through the lower band LT (default −75) — recovering out
+//      of a liquidity low.
+//    • Short (SELL): LO crosses DOWN through the upper band UT (default +75) — rolling over
+//      from a liquidity high.
+//    Widen the bands (±80) for fewer/deeper signals, or narrow (±60) for earlier ones.
+//
+//    ── VALUE ZONE (background tint — soft context, NOT a gate) ──
+//    • Green (DISCOUNT): price > Discount-Threshold % below the fair-value MA AND RSI oversold.
+//    • Red (PREMIUM):    price below the Premium-Threshold (i.e. stretched above the MA) AND RSI overbought.
+//    Signals that fire inside the matching zone (long in green / short in red) are higher
+//    quality — the zone is a confidence booster, not a filter, so nothing is suppressed.
