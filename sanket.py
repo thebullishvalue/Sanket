@@ -543,11 +543,13 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
                 f'<div style="font-family:var(--data); font-size:0.68rem; color:var(--ink-tertiary); '
                 f'padding:0.5rem 0 0.1rem 0; line-height:1.5;">'
                 f'<b>{_n_active}</b> of {len(_gm["signals"])} raw signals are <b>walk-forward validated</b> '
-                f'(gated edge beats the naked signal, positive in ≥{int((_gm.get("activate_hit",0.65))*100)}% of '
-                f'out-of-sample windows) → those may <b>filter</b> the screen. The rest are <b>grade-only</b> '
-                f'(annotated, never hidden) — the system refuses to filter on logic it hasn\'t proven on held-out '
-                f'data. Gates are re-learned per universe each run; thresholds are self-calibrating cross-sectional '
-                f'ranks (never hardcoded). Horizon {_gm.get("horizon","—")}b · gross of costs.</div>',
+                f'(gated edge beats the naked signal, positive in ≥{int((_gm.get("activate_hit",0.5))*100)}% of '
+                f'out-of-sample windows) → these are <b>applied per-instrument</b>: each fired signal is judged '
+                f'by the gate against that stock\'s own factors vs the universe, and the <b>Gate</b> column on '
+                f'the signal tables shows ✓pass / ✗fail (with the Intelligence Filter on, ✗fail is dimmed/hidden). '
+                f'The rest stay <b>grade-only</b> (annotated, never filtered) — the system won\'t filter on logic '
+                f'it hasn\'t proven out-of-sample. Gates re-learn per universe each run; thresholds are '
+                f'self-calibrating cross-sectional ranks (never hardcoded). Horizon {_gm.get("horizon","—")}b · gross of costs.</div>',
                 unsafe_allow_html=True,
             )
         else:
@@ -4713,6 +4715,26 @@ def _status_cell(status) -> str:
             f'title="{_t}">{html.escape(str(label))}</td>')
 
 
+def _gate_cell(row) -> str:
+    """Per-instrument gate verdict for THIS row's signal. Shows whether the self-
+    learned, walk-forward-validated gate (evaluated on this stock's own factors vs
+    the universe) passes/fails — or is advisory (gate not validated for this set)."""
+    active = bool(row.get('Gate_Active'))
+    grade = row.get('Signal_Grade')
+    has_grade = grade is not None and not (isinstance(grade, float) and grade != grade)
+    if not active:
+        # Gate didn't validate for this signal set → advisory grade only.
+        g = f"{grade*100:.0f}%" if has_grade else "—"
+        return (f'<td class="numeric" style="color:#94A3B8; font-weight:600; font-size:0.62rem;" '
+                f'title="Gate not validated for this set (advisory) — grade {g}">· {g}</td>')
+    # Active gate: this instrument either passes or fails the validated filter.
+    if bool(row.get('Gate_Pass')):
+        return ('<td class="numeric" style="color:#2DD4A8; font-weight:700; font-size:0.62rem;" '
+                'title="Passes the active (validated) gate for this stock">✓ pass</td>')
+    return ('<td class="numeric" style="color:#E8555A; font-weight:700; font-size:0.62rem;" '
+            'title="Fails the active gate — filtered/dimmed when the Intelligence Filter is on">✗ fail</td>')
+
+
 def _context_status(fire_c, today_c, offset):
     """Has the regime/momentum context that made the signal good held up to today?
 
@@ -5001,6 +5023,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
             # Context (thesis decay) + Entry (move exhaustion) status cells.
             ctx_cell   = _status_cell(row.get('_ctx',   ('—', '#4B5563', '')))
             entry_cell = _status_cell(row.get('_entry', ('—', '#4B5563', '')))
+            gate_cell  = _gate_cell(row)   # per-instrument validated-gate verdict
 
             table_rows.append(f"""
             <tr style="{_row_style}">
@@ -5016,13 +5039,14 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                 {intel_cell}
                 {ctx_cell}
                 {entry_cell}
+                {gate_cell}
             </tr>
             """)
 
     if not table_rows:
         table_rows.append(f"""
         <tr>
-            <td colspan="12" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="13" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
                 — no signals detected —
             </td>
@@ -5119,6 +5143,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                     <th class="numeric">Intel</th>
                     <th class="numeric">Context</th>
                     <th class="numeric">Entry</th>
+                    <th class="numeric" title="Per-instrument verdict from the self-learned, walk-forward-validated gate (✓pass / ✗fail when active; ·grade% when advisory)">Gate</th>
                 </tr>
             </thead>
             <tbody>

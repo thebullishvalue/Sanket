@@ -129,15 +129,20 @@ def _apply_rank_gate(panel, ev, sign, conds):
 
 def learn_gates(panel: pd.DataFrame, horizon: int = 5, topk: int = 3,
                 train_win: int = 252, test_win: int = 63,
-                activate_hit: float = 0.65, min_windows: int = 4) -> dict:
+                activate_hit: float = 0.50, min_windows: int = 4) -> dict:
     """Learn + walk-forward-validate a gate per signal. Returns a GateModel dict:
 
         {horizon, topk, signals: {sigtype: {conds:[(factor,cmp)...], active:bool,
          hit:float, wf_mean:float, naked_mean:float, n_windows:int}}}
 
-    A gate is ACTIVE only if positive in ≥ activate_hit of forward windows AND its
-    walk-forward mean beats the naked baseline. The conds stored are the MODAL
-    (most-frequently-selected) half-conditions across windows — the stable recipe.
+    A gate is ACTIVE iff (a) it is positive in ≥ activate_hit of out-of-sample
+    forward windows AND (b) its walk-forward mean BEATS the naked baseline. The
+    second test is the load-bearing one: the gate only filters if it demonstrably
+    improves on taking the raw signal. activate_hit=0.50 means "right more often
+    than not" — a deliberately lower bar than the original 0.65 so gates that
+    genuinely beat naked (even modestly) get applied, while still requiring the
+    beats-naked condition so noise gates stay grade-only. Conds = the MODAL
+    (most-frequently-selected) half-conditions across windows = the stable recipe.
     """
     # `status` names the precise outcome so callers don't mislabel distinct failures
     # (the old code reported every empty model as "too sparse", which masked a
@@ -223,11 +228,20 @@ def learn_gates(panel: pd.DataFrame, horizon: int = 5, topk: int = 3,
         hit = npos / ntot
         wf_mean = float(np.nanmean(wf_rets)); naked_mean = float(np.nanmean(naked_rets))
         modal = [c for c, _ in cond_counter.most_common(topk)]
-        active = (hit >= activate_hit) and (wf_mean > naked_mean) and (wf_mean > 0)
+        beats_naked = wf_mean > naked_mean
+        active = (hit >= activate_hit) and beats_naked and (wf_mean > 0)
+        if active:
+            _reason = ""
+        elif not beats_naked:
+            _reason = "gate ≤ naked (raw signal already better)"
+        elif wf_mean <= 0:
+            _reason = "gated edge ≤ 0"
+        else:
+            _reason = f"hit {hit*100:.0f}% < {activate_hit*100:.0f}%"
         out["signals"][sig] = dict(
             conds=[list(c) for c in modal], active=bool(active), hit=round(hit, 3),
             wf_mean=round(wf_mean, 6), naked_mean=round(naked_mean, 6),
-            n_windows=ntot, reason="" if active else "failed walk-forward",
+            n_windows=ntot, reason=_reason,
         )
     # Refine status: did ANY signal get a real verdict (≥min_windows), or were they
     # all too sparse? This separates "the data spoke (some validated/failed)" from
