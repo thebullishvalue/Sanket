@@ -551,11 +551,19 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
                 unsafe_allow_html=True,
             )
         else:
+            # Accurate, status-specific reason — not a blanket "too sparse". A
+            # data-shape status (no_signal_col / no_return_col) is a red-flag bug,
+            # not a history problem, so colour it as a warning.
+            _gstatus = (_gm or {}).get("status", "empty")
+            _gmsg = gate.status_message(_gm or {})
+            _is_bug = _gstatus in ("no_signal_col", "no_return_col", "no_date_col")
+            _col = "var(--rose)" if _is_bug else "var(--ink-tertiary)"
+            _lead = ("⚠ Gates unavailable — data-shape problem (not history): "
+                     if _is_bug else "No active gates yet — ")
             st.markdown(
-                '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
-                'padding:0.3rem 0 0.1rem 0; line-height:1.5;">No gates learned yet — the harvest panel was '
-                'too sparse for walk-forward validation. Signals fire ungated until a wider history lets the '
-                'system learn and validate a gate.</div>',
+                f'<div style="font-family:var(--data); font-size:0.72rem; color:{_col}; '
+                f'padding:0.3rem 0 0.1rem 0; line-height:1.5;">{_lead}{_gmsg} '
+                f'Signals fire ungated meanwhile.</div>',
                 unsafe_allow_html=True,
             )
     else:
@@ -6773,7 +6781,8 @@ def run_priority_optimization(ts_data, calib_settings):
         console.detail(f"Gate engine: {len(_active)}/{len(gates['signals'])} signals validated active "
                        f"({', '.join(_active) or 'none — all grade-only'})")
     else:
-        console.detail("Gate engine: panel too sparse to learn gates — signals ungated")
+        # Accurate reason (data-shape / dates / event-sparsity) — not a generic "too sparse".
+        console.detail(f"Gate engine: no gates — {gate.status_message(gates)}")
 
     ts_meta = st.session_state.get("ts_meta") or {}
     opt_results = {

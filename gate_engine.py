@@ -139,13 +139,27 @@ def learn_gates(panel: pd.DataFrame, horizon: int = 5, topk: int = 3,
     walk-forward mean beats the naked baseline. The conds stored are the MODAL
     (most-frequently-selected) half-conditions across windows — the stable recipe.
     """
+    # `status` names the precise outcome so callers don't mislabel distinct failures
+    # (the old code reported every empty model as "too sparse", which masked a
+    # column-mismatch bug). Values: ok | no_date_col | no_return_col | no_signal_col
+    # | too_few_dates | too_few_events | empty.
+    def _empty(status, **extra):
+        d = {"horizon": horizon, "topk": topk, "train_win": train_win,
+             "test_win": test_win, "activate_hit": activate_hit, "signals": {}, "status": status}
+        d.update(extra)
+        return d
+
     p = panel.copy()
     if "Date" not in p.columns:
-        return {"horizon": horizon, "topk": topk, "signals": {}}
+        return _empty("no_date_col")
     p = ensure_cross_sectional(p, date_col="Date")
     rcol = f"Ret_{horizon}b"
     if rcol not in p.columns:
-        return {"horizon": horizon, "topk": topk, "signals": {}}
+        return _empty("no_return_col")
+    # Can we even identify signal events? Need either the *_cond booleans OR SignalType.
+    _cond_cols = [c for _, (c, _s) in SIGNAL_DEFS.items()]
+    if not any(c in p.columns for c in _cond_cols) and "SignalType" not in p.columns:
+        return _empty("no_signal_col")
     retH = p[rcol].to_numpy(dtype=float)
     dates = pd.to_datetime(p["Date"].to_numpy())
     udates = np.sort(np.unique(dates))
@@ -157,14 +171,29 @@ def learn_gates(panel: pd.DataFrame, horizon: int = 5, topk: int = 3,
                         udates[min(i + test_win - 1, len(udates) - 1)]))
         i += test_win
 
+    # Not enough history to build even min_windows forward windows.
+    _need_dates = train_win + min_windows * test_win
+    if len(windows) < min_windows:
+        return _empty("too_few_dates", n_dates=int(len(udates)), need_dates=int(_need_dates),
+                      n_windows=len(windows))
+
     out = {"horizon": horizon, "topk": topk, "train_win": train_win,
-           "test_win": test_win, "activate_hit": activate_hit, "signals": {}}
+           "test_win": test_win, "activate_hit": activate_hit, "signals": {}, "status": "ok"}
 
     from collections import Counter
+    _sigtype = p["SignalType"].astype(str).to_numpy() if "SignalType" in p.columns else None
     for sig, (col, sign) in SIGNAL_DEFS.items():
-        if col not in p.columns:
+        # Identify this signal's fired events. Prefer the raw boolean *_cond column
+        # (present in research panels); fall back to the SignalType STRING, which the
+        # live harvest stores instead of the booleans. Without this fallback, live
+        # harvests (which drop the *_cond columns) match nothing → empty model →
+        # the spurious "too sparse" message regardless of history length.
+        if col in p.columns:
+            ev = p[col].fillna(False).to_numpy().astype(bool)
+        elif _sigtype is not None:
+            ev = (_sigtype == sig)
+        else:
             continue
-        ev = p[col].fillna(False).to_numpy().astype(bool)
         r = retH * sign
         cond_counter = Counter()
         wf_rets, naked_rets, npos, ntot = [], [], 0, 0
@@ -200,7 +229,42 @@ def learn_gates(panel: pd.DataFrame, horizon: int = 5, topk: int = 3,
             wf_mean=round(wf_mean, 6), naked_mean=round(naked_mean, 6),
             n_windows=ntot, reason="" if active else "failed walk-forward",
         )
+    # Refine status: did ANY signal get a real verdict (≥min_windows), or were they
+    # all too sparse? This separates "the data spoke (some validated/failed)" from
+    # "every signal was too rare to evaluate" — two very different situations.
+    _evaluated = [s for s, v in out["signals"].items() if v.get("n_windows", 0) >= min_windows]
+    if not _evaluated:
+        out["status"] = "too_few_events"
     return out
+
+
+def status_message(model: dict) -> str:
+    """Human-readable reason a gate model has (or lacks) usable gates. Shared by the
+    console log and the Intelligence-tab UI so the SAME, accurate explanation is shown
+    — no more conflating distinct failure modes under a generic 'too sparse'."""
+    if not model:
+        return "Gate engine did not run."
+    status = model.get("status", "ok")
+    if status == "ok":
+        n_active = sum(1 for v in model.get("signals", {}).values() if v.get("active"))
+        n_eval = sum(1 for v in model.get("signals", {}).values()
+                     if v.get("n_windows", 0) >= 4)
+        return (f"{n_active} validated active · {n_eval} signals evaluated out-of-sample.")
+    return {
+        "no_date_col":  "Internal error: harvest panel has no Date column.",
+        "no_return_col": f"Harvest panel has no Ret_{model.get('horizon','?')}b forward-return column.",
+        "no_signal_col": "Harvest panel exposes neither the *_cond booleans nor a SignalType "
+                         "column — the engine can't identify fired signals (data-shape bug, "
+                         "NOT a history-length issue).",
+        "too_few_dates": (f"Not enough history: {model.get('n_dates','?')} trading dates, need "
+                          f"≥{model.get('need_dates','?')} for {4}+ walk-forward windows "
+                          f"({model.get('train_win','?')}d train + windows of {model.get('test_win','?')}d). "
+                          f"Increase History Depth in the sidebar."),
+        "too_few_events": ("Signals fire too rarely to fill the walk-forward windows "
+                           "(need ≥60 events per train window, per signal). Widen the universe "
+                           "or use a set that fires more often — more YEARS won't fix this."),
+        "empty": "No gates produced.",
+    }.get(status, f"No gates ({status}).")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
