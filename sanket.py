@@ -6419,6 +6419,19 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                 "Force recalibrate this run", value=False, key="sb_calib_force",
                 help="Re-harvest and re-tune even if today's profile already exists.",
             )
+            # History depth for the harvest that feeds BOTH weight calibration AND the
+            # self-learning gate engine. The gate walk-forward needs ≥~504 trading days
+            # (252-day train + ≥4×63-day forward windows) to validate a gate — the old
+            # 2y (~500 trading-day) default sat right on that floor, so gates often read
+            # "too sparse". 3y clears it with margin; 5y gives the robust ~15 windows.
+            calib_years = st.slider(
+                "History Depth (years)", min_value=2, max_value=6, value=3, step=1,
+                key="sb_calib_years",
+                help="Years of history harvested for calibration + gate learning. "
+                     "Gates need ≥~2.5y to validate (walk-forward windows); 4–5y is robust. "
+                     "More years = slower first-of-day harvest (cached after).",
+            )
+            st.session_state["_calib_years"] = int(calib_years)
 
             # ── Layer 3 · Intelligence Filter (opt-in false-positive suppression) ──
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -6463,8 +6476,12 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
             )
     else:
         calib_trials, calib_train_frac = 75, 0.70
-    # Inline-harvest lookback ending at the analysis date: ~3y weekly, ~2y daily.
-    calib_lookback_days = 1095 if current_timeframe == "Weekly" else 730
+    # Inline-harvest lookback ending at the analysis date. Driven by the sidebar
+    # "History Depth" control (default 3y) so the user owns the depth↔speed tradeoff;
+    # the gate engine needs ≥~2.5y to validate. Weekly adds a year of margin since it
+    # has ~5× fewer bars per calendar year.
+    _calib_years = int(st.session_state.get("_calib_years", 3))
+    calib_lookback_days = int(round((_calib_years + (1 if current_timeframe == "Weekly" else 0)) * 365.25))
     _calib_settings = {
         "trials":        calib_trials,
         "train_frac":    calib_train_frac,
