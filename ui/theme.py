@@ -14,6 +14,7 @@ Precision-instrument design language for quantitative finance.
 from __future__ import annotations
 
 import html
+import time
 from pathlib import Path
 
 import streamlit as st
@@ -144,12 +145,44 @@ def inject_css() -> None:
 
     CSS is read once per process (cached) and deduped by Streamlit, so
     repeated reruns pay zero I/O and zero DOM patching cost.
+
+    NOTE: do NOT guard this behind a "once per session" flag. Streamlit rebuilds
+    the element tree every rerun; an st.markdown <style> block only persists if it
+    is re-emitted each run. Skipping re-injection removes the style and unstyles
+    the app on the next interaction. The cost here is already minimal — _load_theme_css
+    is @st.cache_resource (zero re-read) and Streamlit dedups the identical element.
     """
     st.markdown(f"<style>{_load_theme_css()}</style>", unsafe_allow_html=True)
 
 
+_PROGRESS_THROTTLE: dict = {}   # id(slot) -> (last_pct, last_time)
+_PROGRESS_MIN_INTERVAL = 0.25   # seconds between re-renders of the same slot
+
+
 def progress_bar(slot, pct: int, label: str, sub: str = "") -> None:
-    """Render a themed progress card into an ``st.empty()`` slot."""
+    """Render a themed progress card into an ``st.empty()`` slot.
+
+    Throttled: inside a tight per-stock loop the bar can be asked to redraw
+    hundreds of times a second, and each redraw is a websocket round-trip. Skip a
+    redraw when the integer pct hasn't advanced AND <0.25s has elapsed for this
+    slot. Completion (pct>=100) and the first draw always render, so the user
+    never sees a stalled or unfinished bar — only the redundant intermediate
+    frames that would look identical are dropped.
+    """
+    pct = int(pct)
+    _now = time.monotonic()
+    _key = id(slot)
+    _last = _PROGRESS_THROTTLE.get(_key)
+    if _last is not None and pct < 100:
+        _last_pct, _last_t = _last
+        # Suppress only a same-pct redraw within the interval. A pct that moved
+        # (up = progress, or down = a new/reused slot starting over) always renders.
+        if pct == _last_pct and (_now - _last_t) < _PROGRESS_MIN_INTERVAL:
+            return
+    _PROGRESS_THROTTLE[_key] = (pct, _now)
+    if pct >= 100:
+        _PROGRESS_THROTTLE.pop(_key, None)   # reset so a reused slot starts clean
+
     is_complete = pct >= 100
     bar_color = "#34D399" if is_complete else "#D4A853" if pct > 50 else "#22D3EE"
     dot_class = "pulse-dot complete" if is_complete else "pulse-dot"
