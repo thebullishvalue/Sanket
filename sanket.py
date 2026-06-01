@@ -26,6 +26,24 @@ from typing import Any, Optional
 from nsepython import nse_get_advances_declines
 from logger import console
 
+# Optional Numba JIT for the recursive math loops (EMA, Ehlers high/band-pass).
+# Verified bit-identical to the pure-Python loops (default IEEE-754, no fast-math),
+# so output is unchanged whether or not numba is installed. If unavailable, _njit
+# is an identity decorator and the same loops run in pure Python. Compilation is
+# lazy (first call) — a one-time cost amortized across the ~500-stock universe.
+try:
+    from numba import njit as _njit
+    _HAVE_NUMBA = True
+except Exception:
+    _HAVE_NUMBA = False
+    def _njit(*args, **kwargs):
+        # Support both @_njit and @_njit(...) usage.
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+        def _wrap(fn):
+            return fn
+        return _wrap
+
 # UI — Obsidian Quant Terminal System
 from ui.theme import inject_css, apply_chart_theme, progress_bar
 import ui.components as ui
@@ -91,6 +109,11 @@ def _today_ist() -> datetime.date:
 
 _REGISTRY_KEY  = "data_registry"
 _MAX_DAYS_BACK = 500  # fetch the maximum once; all modes slice what they need
+# Bound the L1 registry so cycling through indices (or stock_list variations from
+# transient fetch failures) can't accumulate stale 500-day universe DataFrames in
+# session_state until the tab closes. Keep only the N most-recently-used universes;
+# each entry is one universe's worth of OHLCV (~a few hundred rows × N symbols).
+_REGISTRY_MAX_ENTRIES = 6
 
 
 def _registry_ttl_seconds() -> int:
@@ -104,7 +127,11 @@ def _registry_ttl_seconds() -> int:
 
 
 def _registry_get(stock_list: list, end_date: datetime.date):
-    """Return cached data_dict if still fresh for this universe+date, else None."""
+    """Return cached data_dict if still fresh for this universe+date, else None.
+
+    On a hit, the key is moved to the most-recently-used position so the LRU
+    eviction in _registry_put drops genuinely-cold universes, not just oldest-stored.
+    """
     reg   = st.session_state.get(_REGISTRY_KEY, {})
     key   = frozenset(stock_list)
     entry = reg.get(key)
@@ -113,6 +140,8 @@ def _registry_get(stock_list: list, end_date: datetime.date):
     age = (datetime.datetime.now(_IST) - entry["fetched_at"]).total_seconds()
     if age > _registry_ttl_seconds():
         return None
+    # Mark as recently used (dict preserves insertion order → re-insert = move to end).
+    reg[key] = reg.pop(key)
     return entry["data"]
 
 
@@ -120,15 +149,74 @@ def _registry_put(stock_list: list, end_date: datetime.date, data_dict: dict):
     """Store data_dict in the session-state registry under frozenset(stock_list).
 
     DataFrames are stored as copies so downstream mutation (adding indicator
-    columns) never corrupts the cached source data.
+    columns) never corrupts the cached source data. Bounded LRU: when the registry
+    exceeds _REGISTRY_MAX_ENTRIES, the least-recently-used universes are evicted so
+    memory can't grow without limit across index switches / re-fetches.
     """
     if _REGISTRY_KEY not in st.session_state:
         st.session_state[_REGISTRY_KEY] = {}
-    st.session_state[_REGISTRY_KEY][frozenset(stock_list)] = {
+    reg = st.session_state[_REGISTRY_KEY]
+    key = frozenset(stock_list)
+    reg.pop(key, None)            # ensure re-insert lands at the most-recent end
+    reg[key] = {
         "data":       {k: v.copy() for k, v in data_dict.items()},
         "end_date":   end_date,
         "fetched_at": datetime.datetime.now(_IST),
     }
+    # Evict least-recently-used (front of the insertion-ordered dict) past the cap.
+    while len(reg) > _REGISTRY_MAX_ENTRIES:
+        reg.pop(next(iter(reg)))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Analyzed-frame cache (L1.5) — avoid re-running the per-stock analysis pipeline
+# (run_full_analysis + run_regime_analysis + calculate_divergences) twice when a
+# forced/missing-profile screener run first harvests the timeseries and then
+# re-screens the same universe in the same rerun.
+#
+# Safe because the analysis is causal: every bar's values depend only on trailing
+# data, so a frame ending at `analysis_date` (harvest) and one extending to today
+# (screener) share identical values on the overlapping bars. The cache key
+# therefore encodes `end_date` — a backdated screener (different date basis, needs
+# post-analysis-date bars) gets a different key and correctly bypasses the cache.
+#
+# Frames are stored post-analysis; consumers must not mutate them in place (the
+# screener copies before adding its own columns). Scoped per screener run: the
+# harvest writes it, the screener reads it, then it is cleared.
+# ──────────────────────────────────────────────────────────────────────────────
+_ANALYZED_CACHE_KEY = "analyzed_frame_cache"
+
+
+def _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
+                         wt2_len, wt2_type, end_date) -> tuple:
+    """Identity of an analyzed frame — everything that changes its computed values."""
+    return (str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
+            tuple(levels), int(wt2_len), str(wt2_type), end_date)
+
+
+def _analyzed_cache_reset(params_sig: tuple):
+    """Start a fresh analyzed-frame cache for one screener run under params_sig."""
+    st.session_state[_ANALYZED_CACHE_KEY] = {"sig": params_sig, "frames": {}}
+
+
+def _analyzed_cache_put(ticker: str, df: pd.DataFrame, params_sig: tuple):
+    """Store an analyzed frame if the active cache matches params_sig."""
+    cache = st.session_state.get(_ANALYZED_CACHE_KEY)
+    if cache is None or cache.get("sig") != params_sig:
+        return
+    cache["frames"][ticker] = df
+
+
+def _analyzed_cache_get(ticker: str, params_sig: tuple):
+    """Return a cached analyzed frame for (ticker, params_sig), or None on miss."""
+    cache = st.session_state.get(_ANALYZED_CACHE_KEY)
+    if cache is None or cache.get("sig") != params_sig:
+        return None
+    return cache["frames"].get(ticker)
+
+
+def _analyzed_cache_clear():
+    st.session_state.pop(_ANALYZED_CACHE_KEY, None)
 
 
 def get_universe_data(stock_list: list, end_date: datetime.date = None):
@@ -430,6 +518,99 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
                 f'<b style="color:var(--ink-secondary);">{top_factor}</b> · {top_share:.1f}% of variance.</div>',
                 unsafe_allow_html=True,
             )
+
+    # ── Reference: Context & Entry signal-aging columns ──
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    _render_aging_reference()
+
+
+# Legend rows mirror the bands in _context_status / _entry_status — those helpers
+# are the source of truth for the cell colors, so keep these hexes in sync.
+_CONTEXT_LEGEND = [
+    ("Confirmed", "#2DD4A8", "Intel confidence rose since the signal fired — the thesis is strengthening."),
+    ("Holding",   "#A3E635", "Confidence broadly unchanged — the regime that backed the signal still holds."),
+    ("Fading",    "#FB923C", "Confidence slipping — the supporting context is weakening."),
+    ("Stale",     "#E8555A", "Confidence collapsed (or now very low) — the thesis has broken down."),
+    ("New",       "#94A3B8", "Fired today — nothing has aged yet."),
+]
+_ENTRY_LEGEND = [
+    ("Open",     "#2DD4A8", "Price has barely moved (under ½σ) — the entry is still fresh."),
+    ("Running",  "#5EBFA8", "Moving your way (½–1½σ) — the move is in progress."),
+    ("Extended", "#FB923C", "Stretched ≥ 1½σ — most of the move is spent; a late entry."),
+    ("Adverse",  "#E8555A", "Gone ≥ 1σ against the signal — price moved the wrong way."),
+    ("Now",      "#94A3B8", "Fired today — entry is current."),
+]
+
+
+def _render_aging_reference():
+    """Reference guide for the Context & Entry columns on the signal tables.
+
+    Context = has the thesis held since firing (Intel-confidence trajectory);
+    Entry = has price already run (σ-scaled move since the fire bar). The two are
+    orthogonal — one judges the signal, the other the timing. Rendered with the
+    Intelligence tab's own token vocabulary (no new CSS classes)."""
+    def _rows(legend):
+        out = []
+        for label, color, meaning in legend:
+            out.append(
+                '<div style="display:flex; align-items:baseline; gap:0.6rem; padding:0.32rem 0; '
+                'border-bottom:1px solid var(--border-subtle);">'
+                f'<span style="font-family:var(--data); font-size:0.7rem; font-weight:700; '
+                f'color:{color}; min-width:78px; letter-spacing:0.02em;">{label}</span>'
+                '<span style="font-family:var(--data); font-size:0.68rem; color:var(--ink-tertiary); '
+                f'line-height:1.45;">{meaning}</span>'
+                '</div>'
+            )
+        return "".join(out)
+
+    ui.render_section_header(
+        "Signal Aging Reference",
+        "Context & Entry — the two columns beside Intel on the signal tables",
+        icon="clock", accent="violet",
+    )
+    st.markdown(
+        '<div style="font-family:var(--data); font-size:0.70rem; color:var(--ink-tertiary); '
+        'padding:0.1rem 0 0.7rem 0; line-height:1.5;">'
+        'On the Momentum / Crossover / Threshold tables, each aged signal (1d / 2d / … ago) carries '
+        'two <b>orthogonal</b> reads, both scored <b>at the bar it fired</b>. '
+        '<b style="color:var(--ink-secondary);">Context</b> asks whether the signal is still good; '
+        '<b style="color:var(--ink-secondary);">Entry</b> asks whether the move has already run.</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:1rem; margin-top:0.1rem;">
+            <div class="metric-card neutral" style="margin:0; text-align:left;">
+                <div style="font-family:var(--display); font-size:0.8rem; font-weight:700;
+                            color:var(--ink-secondary); letter-spacing:0.02em; margin-bottom:0.1rem;">
+                    Context <span style="color:var(--ink-tertiary); font-weight:500;">· thesis decay</span>
+                </div>
+                <div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary);
+                            line-height:1.4; padding-bottom:0.45rem;">
+                    Intel confidence at the fire bar vs today.
+                </div>
+                {_rows(_CONTEXT_LEGEND)}
+            </div>
+            <div class="metric-card neutral" style="margin:0; text-align:left;">
+                <div style="font-family:var(--display); font-size:0.8rem; font-weight:700;
+                            color:var(--ink-secondary); letter-spacing:0.02em; margin-bottom:0.1rem;">
+                    Entry <span style="color:var(--ink-tertiary); font-weight:500;">· move exhaustion</span>
+                </div>
+                <div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary);
+                            line-height:1.4; padding-bottom:0.45rem;">
+                    Directional move since firing, scaled by the symbol's own volatility (σ).
+                </div>
+                {_rows(_ENTRY_LEGEND)}
+            </div>
+        </div>
+        <div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary);
+                    padding:0.55rem 0 0.1rem 0; line-height:1.5;">
+            A “—” means the value isn't available for that bar. Today's signals show
+            <b>New</b> / <b>Now</b> — there is nothing yet to age.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1161,8 +1342,16 @@ def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True
                 sample_df.index = sample_df.index.tz_convert(None)
 
             _ist_today = _today_ist()
-            has_today = any(idx.date() == _ist_today for idx in sample_df.index)
-            if not has_today:
+            # NOTE: `sample_df` is only the first ticker — used as a cheap hint for
+            # whether a live append is worth attempting. The actual today-already-present
+            # check is done PER TICKER below, by calendar date, because (a) tickers can be
+            # heterogeneous (some already have today's bar, some not) and (b) yfinance live
+            # 1d bars are stamped with an intraday time while historical daily bars are
+            # stamped 00:00:00 — an exact-timestamp .difference() would therefore append a
+            # SECOND "today" row next to the 00:00 one, double-counting today and corrupting
+            # the 3/5-bar momentum oscillators.
+            _hint_has_today = any(idx.date() == _ist_today for idx in sample_df.index)
+            if not _hint_has_today:
                 try:
                     live_data = yf.download(list(data_dict.keys()), period="1d", progress=False, auto_adjust=True, group_by='ticker')
                     if not live_data.empty:
@@ -1175,9 +1364,15 @@ def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True
                                     if hist_df.index.tz is not None: hist_df.index = hist_df.index.tz_convert(None)
                                     live_ticker.index = pd.to_datetime(live_ticker.index)
                                     if live_ticker.index.tz is not None: live_ticker.index = live_ticker.index.tz_convert(None)
-                                    new_dates = live_ticker.index.difference(hist_df.index)
-                                    if len(new_dates) > 0:
-                                        data_dict[ticker] = pd.concat([hist_df, live_ticker.loc[new_dates]]).sort_index()
+                                    # Normalize the live bar to midnight and keep only calendar
+                                    # dates not already present in history — date-based, so an
+                                    # intraday-stamped live bar can't duplicate a 00:00 daily bar.
+                                    live_norm = live_ticker.copy()
+                                    live_norm.index = live_norm.index.normalize()
+                                    hist_dates = set(hist_df.index.normalize())
+                                    keep = live_norm[~live_norm.index.isin(hist_dates)]
+                                    if len(keep) > 0:
+                                        data_dict[ticker] = pd.concat([hist_df, keep]).sort_index()
                             except KeyError:
                                 pass
                 except Exception as e:
@@ -1315,6 +1510,27 @@ def calculate_hma(series, length):
     return calculate_wma(diff, sqrt_length)
 
 
+@_njit
+def _ema_recur(values, start_pos, alpha, seed):
+    """Recursive EMA core (TradingView NaN semantics). JIT-accelerated, bit-identical
+    to the pure-Python loop. Returns the ema_values array."""
+    n = len(values)
+    ema = np.full(n, np.nan)
+    ema[start_pos] = seed
+    for i in range(start_pos + 1, n):
+        if np.isnan(values[i]):
+            ema[i] = np.nan
+        else:
+            prev_ema = ema[i - 1]
+            if np.isnan(prev_ema):
+                j = i - 1
+                while j >= start_pos and np.isnan(ema[j]):
+                    j -= 1
+                prev_ema = ema[j] if j >= start_pos else values[i]
+            ema[i] = (values[i] - prev_ema) * alpha + prev_ema
+    return ema
+
+
 def calculate_ema(series, length):
     """
     Exponential Moving Average matched to TradingView's ta.ema.
@@ -1322,41 +1538,22 @@ def calculate_ema(series, length):
     """
     if length <= 1:
         return series
-    
+
     # Calculate initial SMA for startup
     sma = series.rolling(window=length, min_periods=length).mean()
-    
+
     # Find the first valid SMA index
     first_idx = sma.first_valid_index()
     if first_idx is None:
         return pd.Series(np.nan, index=series.index)
-        
+
     start_pos = series.index.get_loc(first_idx)
     alpha = 2.0 / (length + 1)
-    
-    # Recursive calculation
-    values = series.values
-    ema_values = np.empty(len(series))
-    ema_values.fill(np.nan)
-    ema_values[start_pos] = sma.loc[first_idx]
-    
-    for i in range(start_pos + 1, len(series)):
-        if np.isnan(values[i]):
-            # If current price is NaN, EMA is NaN but state is preserved
-            ema_values[i] = np.nan
-        else:
-            # If previous EMA was NaN (due to NaN price), find the last valid EMA
-            prev_ema = ema_values[i-1]
-            if np.isnan(prev_ema):
-                # Look back for last valid EMA to continue recursion
-                # Standard TV behavior: if price was NaN, recursion skips it
-                j = i - 1
-                while j >= start_pos and np.isnan(ema_values[j]):
-                    j -= 1
-                prev_ema = ema_values[j] if j >= start_pos else values[i]
-            
-            ema_values[i] = (values[i] - prev_ema) * alpha + prev_ema
-            
+
+    ema_values = _ema_recur(
+        series.to_numpy(dtype=np.float64), int(start_pos), float(alpha),
+        float(sma.loc[first_idx]),
+    )
     return pd.Series(ema_values, index=series.index)
 
 
@@ -1476,6 +1673,35 @@ def calculate_trend_count(series, length):
 
 
 
+@_njit
+def _ehlers_hpf(src, n, window):
+    """2-pole high-pass IIR (Pine f_hpf). JIT, bit-identical to the Python loop."""
+    w  = 1.414 * np.pi / window
+    q  = np.exp(-w)
+    c1 = 2.0 * q * np.cos(w)
+    c2 = q * q
+    a0 = 0.25 * (1.0 + c1 + c2)
+    hp = np.zeros(n)
+    for t in range(4, n):
+        hp[t] = a0 * (src[t] - 2.0 * src[t-1] + src[t-2]) + c1 * hp[t-1] - c2 * hp[t-2]
+    return hp
+
+
+@_njit
+def _ehlers_bpf(src, dc, n, bw):
+    """2-pole band-pass IIR with per-bar centre period (Pine f_bpf). JIT, bit-identical."""
+    bp = np.zeros(n)
+    for t in range(3, n):
+        period = max(dc[t], 2.0)
+        w0  = 2.0 * np.pi / period
+        l1  = np.cos(w0)
+        g1  = np.cos(w0 * bw)
+        inv = 1.0 / g1
+        s1  = inv - np.sqrt(max(inv * inv - 1.0, 0.0))
+        bp[t] = 0.5 * (1.0 - s1) * (src[t] - src[t-2]) + l1 * (1.0 + s1) * bp[t-1] - s1 * bp[t-2]
+    return bp
+
+
 def compute_autotune(close: pd.Series, window: int = 20, bw: float = 0.25) -> pd.Series:
     """Ehlers AutoTune band-pass filter (TASC 2026.05) — faithful port of wrci.pine §2.
 
@@ -1495,14 +1721,7 @@ def compute_autotune(close: pd.Series, window: int = 20, bw: float = 0.25) -> pd
         return pd.Series(dtype=float, index=close.index)
 
     # ── 2-pole high-pass (constant coeffs, cutoff = window) — Pine f_hpf ──
-    w  = 1.414 * np.pi / window
-    q  = np.exp(-w)
-    c1 = 2.0 * q * np.cos(w)
-    c2 = q * q
-    a0 = 0.25 * (1.0 + c1 + c2)
-    hp = np.zeros(n)
-    for t in range(4, n):
-        hp[t] = a0 * (src[t] - 2.0 * src[t-1] + src[t-2]) + c1 * hp[t-1] - c2 * hp[t-2]
+    hp = _ehlers_hpf(src, n, float(window))
     hp_s = pd.Series(hp)
 
     # ── Rolling autocorrelation → dominant cycle (vectorised over lags) ──
@@ -1532,15 +1751,7 @@ def compute_autotune(close: pd.Series, window: int = 20, bw: float = 0.25) -> pd
         prev = d
 
     # ── 2-pole band-pass, per-bar centre period = dc — Pine f_bpf ──
-    bp = np.zeros(n)
-    for t in range(3, n):
-        period = max(dc[t], 2.0)
-        w0  = 2.0 * np.pi / period
-        l1  = np.cos(w0)
-        g1  = np.cos(w0 * bw)
-        inv = 1.0 / g1
-        s1  = inv - np.sqrt(max(inv * inv - 1.0, 0.0))
-        bp[t] = 0.5 * (1.0 - s1) * (src[t] - src[t-2]) + l1 * (1.0 + s1) * bp[t-1] - s1 * bp[t-2]
+    bp = _ehlers_bpf(src, dc, n, float(bw))
 
     return pd.Series(bp, index=close.index)
 
@@ -2018,7 +2229,19 @@ def run_regime_analysis(df):
         hmm.update(_filt)
         cusum.update(_filt)
         signal_history.append(_obs)
-    signal_history.clear()   # reset history list; detector internal state is kept
+    # End of warmup. Keep the *adapted scalar estimates* (emission means/stds,
+    # current/long-term variance, Kalman estimate, CUSUM accumulators, running
+    # mean/std) — that is the priming benefit — but clear the raw rolling-history
+    # LISTS. Otherwise the main loop below re-feeds bars 0..warmup-1, recording
+    # them a SECOND time into these windows and creating an "echo" that skews the
+    # rolling variance/emission baselines. Clearing lets the windows rebuild
+    # naturally from bar 0 while starting from the warmed estimates.
+    signal_history.clear()
+    hmm.observation_history.clear()
+    hmm.state_history.clear()
+    garch.shock_history.clear()
+    cusum.value_history.clear()
+    kalman.innovation_history.clear()
 
     for i in range(len(df)):
         # Joint observation: weighted mean of orthogonal views
@@ -2217,17 +2440,6 @@ def render_landing_page():
            <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will compute Wave Trend oscillations · Analyze Abnormal Acceleration · Rank by calibrated Priority</span></p>
     </div>
     """, unsafe_allow_html=True)
-
-
-def get_signal_strength_score(row):
-    """Calculate signal strength from magnitude with diminishing returns above 50.
-
-    Returns: Strength score (0-100) where magnitude 0-50 = linear, >50 = diminishing returns.
-    """
-    base_score = abs(row.get('Signal', 0))
-    if base_score > 50:
-        base_score = 50 + (base_score - 50) * 0.5
-    return min(100, base_score)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2587,6 +2799,13 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     # fired, not at the snapshot date — consistent with how Layer 2 was trained.
     intel_windows: dict = {}
 
+    # If an intelligence harvest just ran for this exact universe + params + date,
+    # its analyzed frames are cached — reuse them instead of recomputing the whole
+    # per-stock pipeline (the duplicate-work path on forced/missing-profile runs).
+    _cache_sig = _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
+                                      wt2_len, wt2_type, end_date)
+    _cache_hits = 0
+
     _tf_label = "weekly" if timeframe == "Weekly" else "daily"
     console.section(f"Signal Analysis — {len(data_dict)} {_tf_label} instruments")
 
@@ -2596,27 +2815,47 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             if show_progress or external_progress_slot is not None:
                 progress_bar(progress_slot, pct, f"Analyzing Signals", f"{i + 1}/{len(data_dict)} stocks")
 
-            if timeframe == "Weekly":
-                df = resample_to_weekly(df)
+            _cached = _analyzed_cache_get(ticker, _cache_sig)
+            if _cached is not None:
+                # Copy so the screener's own column additions never mutate the cache.
+                # Analysis adds columns, not rows, so the cached frame's length equals
+                # the resampled input — the insufficient-data guard below still applies.
+                df = _cached.copy()
+                _cache_hits += 1
+            else:
+                if timeframe == "Weekly":
+                    df = resample_to_weekly(df)
 
+            # Insufficient-data guard — applied on both cache hit and miss so a short
+            # frame cached by the (unguarded) harvest can't slip a stock the screener
+            # would otherwise skip.
             if len(df) < reg_len + 30:
                 console.detail(f"{ticker}: Skipped (Insufficient data: {len(df)} rows)")
                 continue
 
-            df = run_full_analysis(df, reg_len, wt_n1, wt_n2, obLevel1, obLevel2, osLevel1, osLevel2,
-                                   wt2_len=wt2_len, wt2_type=wt2_type)
-            df = run_regime_analysis(df)        # adds HMM_Bull/Bear, Vol_Regime, Change_Point, Regime_Confidence
-            df = calculate_divergences(df, timeframe=timeframe)      # adds Bullish_Div, Bearish_Div
+            if _cached is None:
+                df = run_full_analysis(df, reg_len, wt_n1, wt_n2, obLevel1, obLevel2, osLevel1, osLevel2,
+                                       wt2_len=wt2_len, wt2_type=wt2_type)
+                df = run_regime_analysis(df)        # adds HMM_Bull/Bear, Vol_Regime, Change_Point, Regime_Confidence
+                df = calculate_divergences(df, timeframe=timeframe)      # adds Bullish_Div, Bearish_Div
 
-            # Sample at analysis_date or last available
+            # Sample at analysis_date — snap to the correct historical bar.
+            # Weekly resampling re-labels bars to week-start Mondays, so an exact
+            # match on a non-Monday selection would fail; 'pad' snaps any date back
+            # to the most recent bar at-or-before it (the bar the date falls within).
+            # This is what makes historical weekly snapshots work — without it a miss
+            # silently fell through to len(df)-1, i.e. the live/current bar.
             df.index = pd.to_datetime(df.index)
             target_dt = pd.to_datetime(analysis_date)
 
-            if target_dt in df.index:
-                idx_pos = df.index.get_loc(target_dt)
-            else:
-                idx_pos = len(df) - 1
-                console.detail(f"{ticker}: analysis_date {analysis_date} not in data — using nearest available {df.index[idx_pos].date()}")
+            _pos = df.index.get_indexer([target_dt], method='pad')[0]
+            if _pos == -1:
+                # Requested date precedes all available history — nothing to snap to.
+                console.detail(f"{ticker}: analysis_date {analysis_date} precedes available history — skipped")
+                continue
+            idx_pos = int(_pos)
+            if df.index[idx_pos] != target_dt:
+                console.detail(f"{ticker}: snapped {analysis_date} → bar {df.index[idx_pos].date()}")
 
             if idx_pos < 5:
                 continue
@@ -2761,6 +3000,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             continue
 
     console.end_phase("WRCI MOMENTUM ANALYSIS")
+    if _cache_hits:
+        console.detail(f"Analyzed-frame cache: reused {_cache_hits}/{len(data_dict)} frames from the intelligence harvest (skipped re-analysis)")
+    # One-shot cache — release the harvested frames now that the screener has consumed them.
+    _analyzed_cache_clear()
 
     _fail_count = len(_failed_symbols)
     console.summary("RUN SUMMARY", {
@@ -2826,8 +3069,12 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         # Intelligence Confirmation (Layer 1): per-signal confidence from regime
         # state + own-factor agreement. Non-destructive — annotates fired signals only.
         results_df = pe.compute_signal_confidence(results_df, weights=_get_active_weights())
-        # Default sort by Long Percentile for the global table
-        results_df = results_df.sort_values('Priority_Long', ascending=False)
+        # Default sort by Priority_Long for the global table. kind='stable' is
+        # load-bearing: compute_priority already sorted by the full tiebreaker
+        # cascade (_tb_long = Priority, Confidence, Vol-regime, |PriceMom|). A stable
+        # sort preserves that cascade as the secondary order within equal Priority_Long
+        # groups, so ties resolve by regime safety — not by arbitrary index order.
+        results_df = results_df.sort_values('Priority_Long', ascending=False, kind='stable')
         
     return results_df
 
@@ -2895,13 +3142,19 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     progress_bar(progress_slot, 15, "Initializing Processing Intelligence", f"{len(data_dict)} stocks")
     all_results = []
 
+    # Analyzed-frame cache for this run — lets the screener that follows skip
+    # re-running the identical per-stock analysis pipeline (see helper comment).
+    _cache_sig = _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
+                                      wt2_len, wt2_type, end_date)
+    _analyzed_cache_reset(_cache_sig)
+
     for i, (ticker, df) in enumerate(data_dict.items()):
         try:
             elapsed = time.time() - start_harvest
             avg_time = elapsed / (i + 1)
             remaining = avg_time * (len(data_dict) - (i + 1))
             eta_str = time.strftime("%M:%S", time.gmtime(remaining))
-            
+
             # Global progress scale: 15% -> 85% for harvesting
             pct = int(15 + (i + 1) / len(data_dict) * 70)
             progress_bar(progress_slot, pct, "Intelligence Harvesting", f"Processing {i + 1}/{len(data_dict)} Symbols | ETA: {eta_str}")
@@ -2911,6 +3164,10 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                                    wt2_len=wt2_len, wt2_type=wt2_type)
             df = run_regime_analysis(df)
             df = calculate_divergences(df, timeframe=timeframe)
+            # Cache the analyzed frame so run_screener_analysis can reuse it instead
+            # of recomputing. Stored by reference — the harvest-only columns appended
+            # below (Ret_*, SignalType) are harmless extras; the screener copies on read.
+            _analyzed_cache_put(ticker, df, _cache_sig)
 
             # Calculate forward returns for each training horizon
             for h in pe.HOLD_HORIZONS:
@@ -2988,6 +3245,19 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     ts_df['Date'] = pd.to_datetime(ts_df['Date'])
     ts_df = ts_df.sort_values('Date')
 
+    # Score every harvested bar with the same Signal Intelligence used live, so the
+    # historical dashboard and Excel export show what the Layer-2 model (or its
+    # heuristic fallback) would have rated each past signal. compute_flags=False —
+    # the per-row flag string is skipped on this large frame for speed; the
+    # Intel_Confidence column (the value users backtest against) is what matters.
+    try:
+        ts_df = pe.compute_signal_confidence(
+            ts_df, weights=_get_active_weights(),
+            conf_model=pe.get_active_conf_model(), compute_flags=False,
+        )
+    except Exception as _e:
+        console.detail(f"Historical Intel scoring skipped: {type(_e).__name__}: {_e}")
+
     daily_agg, summary = _aggregate_timeseries(ts_df)
 
     console.summary("HISTORICAL RANGE SUMMARY", {
@@ -3064,6 +3334,13 @@ def _aggregate_timeseries(ts_df):
     daily_agg['Regime_Bull_Pct']       = (regime_bull  / total_per_day * 100).fillna(0)
     daily_agg['Regime_Bear_Pct']       = (regime_bear  / total_per_day * 100).fillna(0)
     daily_agg['Regime_Transition_Pct'] = (regime_trans / total_per_day * 100).fillna(0)
+
+    # Mean Signal-Intelligence confidence of the fired signals each day (Intel is
+    # NaN on non-fired bars, so this is a conviction-of-firing-signals breadth read).
+    if 'Intel_Confidence' in ts_df.columns:
+        daily_agg['Avg_Intel'] = ts_df.groupby('Date')['Intel_Confidence'].mean()
+    else:
+        daily_agg['Avg_Intel'] = np.nan
 
     summary = {
         'total_signals':       int(daily_agg['TotalSignals'].sum()),
@@ -3305,10 +3582,13 @@ def render_timeseries_dashboard():
         display_cols = ['Date', 'LongSignal', 'ShortSignal', 'Signal',
                         'Oversold_Pct', 'Overbought_Pct',
                         'Regime_Bull_Pct', 'Regime_Bear_Pct', 'Change_Point']
+        _has_intel = 'Avg_Intel' in display_ts.columns and display_ts['Avg_Intel'].notna().any()
+        if _has_intel:
+            display_cols.append('Avg_Intel')
         display_ts = display_ts[display_cols]
         display_ts.columns = ['Date', 'Long Sig', 'Short Sig', 'Avg Signal',
                               'Oversold %', 'Overbought %',
-                              'Bull Regime %', 'Bear Regime %', 'Change Pts']
+                              'Bull Regime %', 'Bear Regime %', 'Change Pts'] + (['Avg Intel'] if _has_intel else [])
         st.dataframe(
             display_ts, width='stretch', hide_index=True,
             column_config={
@@ -3321,6 +3601,7 @@ def render_timeseries_dashboard():
                 'Bull Regime %':st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BULL'."),
                 'Bear Regime %':st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BEAR'."),
                 'Change Pts':   st.column_config.NumberColumn(help="Sum of Change_Point flags — count of symbols with a regime-state transition on this day."),
+                'Avg Intel':    st.column_config.NumberColumn(help="Mean Signal-Intelligence confidence of the fired signals on this day (0–1). Calibrated P(true) when a model is active, else the Layer-1 heuristic.", format="%.2f"),
             },
         )
 
@@ -3399,9 +3680,11 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             console.detail(
                 f"Target ticker '{target_ticker}' not in registry — fetching individually"
             )
-            target_raw, _ = fetch_batch_data(
-                [target_ticker], end_date=analysis_date, days_back=_MAX_DAYS_BACK
-            )
+            # Registry-first single-ticker fetch: get_universe_data checks the
+            # session registry (15-min TTL) before yfinance and stores the result,
+            # so repeated correlation runs on the same target reuse the cache instead
+            # of re-hitting the network with identical requests.
+            target_raw, _ = get_universe_data([target_ticker], end_date=analysis_date)
             if target_raw and target_ticker in target_raw:
                 # Merge into a new dict so we don't mutate the registry entry
                 data_dict = {**data_dict, target_ticker: target_raw[target_ticker]}
@@ -3484,31 +3767,22 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         console.item("Computing rolling correlations", f"method={method}, lookback={lookback}, cols={len(universe_returns.columns)}")
 
         try:
-            # Convert to numpy for faster computation
-            target_vals = target_returns.values
+            # Vectorized rolling correlation of every universe column against the
+            # target in one C-level pass — replaces a per-column Python loop that
+            # built a temp DataFrame and called .rolling().corr() per symbol. Output
+            # is byte-identical (verified): same NaN handling (universe cols filled
+            # with 0.0, target raw, as before), same Pearson rolling window, same
+            # warmup NaNs. RangeIndex preserved to match the prior positional frame.
+            _uni = universe_returns.fillna(0.0).reset_index(drop=True)
+            _tgt = pd.Series(target_returns.values)             # positional align
+            rolling_corr_df = _uni.rolling(window=lookback).corr(_tgt)
 
-            for col in universe_returns.columns:
-                try:
-                    col_vals = universe_returns[col].fillna(0.0).values
+            console.item("Rolling corr dict entries", rolling_corr_df.shape[1])
 
-                    # Compute rolling correlation using DataFrame.rolling.corr()
-                    temp_df = pd.DataFrame({
-                        'col': col_vals,
-                        'target': target_vals
-                    })
-                    rolling_corr = temp_df['col'].rolling(window=lookback).corr(temp_df['target'])
-                    rolling_corr_dict[col] = rolling_corr
-                except Exception as col_err:
-                    console.item(f"Skipping column {col}", str(col_err)[:50])
-                    continue
-
-            console.item("Rolling corr dict entries", len(rolling_corr_dict))
-
-            if len(rolling_corr_dict) == 0:
+            if rolling_corr_df.shape[1] == 0:
                 st.error("Could not compute rolling correlations for any column")
                 return None
 
-            rolling_corr_df = pd.DataFrame(rolling_corr_dict)
             console.item("Rolling corr DataFrame shape", rolling_corr_df.shape)
         except Exception as e:
             st.error(f"Error in rolling correlation: {str(e)}")
@@ -3556,9 +3830,23 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             console.detail("Correlation: reusing cached screener results from session state")
             wrci_results = _sdf
         else:
+            # Resolve calibrated weights BEFORE screening, exactly like the Single-Date
+            # path — otherwise the Confluence Score (built from Priority_Long/Short)
+            # would rank with factory-default weights, blind to the calibration engine.
+            _corr_reg_len, _corr_n1, _corr_n2 = 20, 10, 21
+            _corr_levels = (80, 40, -80, -40)
+            _corr_wt2_len, _corr_wt2_type = 20, "ALMA"
+            _calib = st.session_state.get("_calib_settings") or {}
+            _ensure_intel_weights(
+                universe, selected_index, timeframe, analysis_date,
+                _corr_reg_len, _corr_n1, _corr_n2, _corr_levels,
+                _corr_wt2_len, _corr_wt2_type, _calib,
+            )
             wrci_results = run_screener_analysis(
-                universe, selected_index, analysis_date, 20, 10, 21, (80, 40, -80, -40), timeframe,
-                show_progress=False, external_progress_slot=progress_slot, progress_offset=75, progress_scale=15
+                universe, selected_index, analysis_date,
+                _corr_reg_len, _corr_n1, _corr_n2, _corr_levels, timeframe,
+                show_progress=False, external_progress_slot=progress_slot, progress_offset=75, progress_scale=15,
+                wt2_len=_corr_wt2_len, wt2_type=_corr_wt2_type,
             )
 
         progress_bar(progress_slot, 90, "Building Results DataFrame", "Computing Divergence Metrics")
@@ -3569,11 +3857,25 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             if symbol not in close_df.columns or symbol not in current_corr.index:
                 continue
 
-            # Get current data
-            current_price = close_df[symbol].iloc[-1] if symbol in close_df.columns else np.nan
-            price_change = (close_df[symbol].pct_change().iloc[-1] * 100) if symbol in close_df.columns else np.nan
-            target_price = close_df[target_ticker].iloc[-1]
-            target_change = (close_df[target_ticker].pct_change().iloc[-1] * 100)
+            # Get current data — aligned to the last bar where BOTH the symbol and
+            # the target have data. Independent iloc[-1] on each column would compare
+            # mismatched sessions when exchanges run on different calendars/timezones
+            # (e.g. NSE universe vs a US target during the Asian session: the symbol's
+            # last row is Tuesday, the target's last valid bar is Monday). dropna()
+            # over the pair yields the most recent common session, so the divergence
+            # math compares the same trading day for both legs.
+            _pair = close_df[[symbol, target_ticker]].dropna()
+            if len(_pair) >= 2:
+                current_price  = _pair[symbol].iloc[-1]
+                price_change   = _pair[symbol].pct_change().iloc[-1] * 100
+                target_price   = _pair[target_ticker].iloc[-1]
+                target_change  = _pair[target_ticker].pct_change().iloc[-1] * 100
+            else:
+                # Not enough overlapping history to compute a same-session move.
+                current_price = _pair[symbol].iloc[-1] if len(_pair) else np.nan
+                price_change = np.nan
+                target_price = _pair[target_ticker].iloc[-1] if len(_pair) else np.nan
+                target_change = np.nan
 
             # Get WRCI data if available — pull calibrated priorities from the
             # screener's already-computed compute_priority output so Correlation
@@ -3583,6 +3885,8 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             wrci_signal_type = "Neutral"
             priority_long = np.nan
             priority_short = np.nan
+            intel_conf = np.nan
+            intel_source = ''
             if wrci_results is not None and len(wrci_results) > 0:
                 wrci_row = wrci_results[wrci_results['SimpleName'] == symbol.replace('.NS', '').replace('^', '')]
                 if len(wrci_row) > 0:
@@ -3593,6 +3897,13 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                         priority_long = wrci_row['Priority_Long'].values[0]
                     if 'Priority_Short' in wrci_row.columns:
                         priority_short = wrci_row['Priority_Short'].values[0]
+                    # Layer-2 Signal Intelligence for this symbol's fired signal (NaN
+                    # when it didn't fire) — used below to penalize the confluence of
+                    # likely false positives.
+                    if 'Intel_Confidence' in wrci_row.columns:
+                        intel_conf = wrci_row['Intel_Confidence'].values[0]
+                    if 'Intel_Source' in wrci_row.columns:
+                        intel_source = wrci_row['Intel_Source'].values[0]
 
             # Compute divergence
             expected_change = current_corr[symbol] * target_change
@@ -3616,6 +3927,8 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 'WRCI_Signal_Type': wrci_signal_type,
                 'Priority_Long':  priority_long,
                 'Priority_Short': priority_short,
+                'Intel_Confidence': intel_conf,
+                'Intel_Source':     intel_source,
             })
 
         corr_df = pd.DataFrame(corr_data_list)
@@ -3644,6 +3957,23 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             corr_df['Priority_Strength'] = pri_norm
             corr_df['Confluence_Score'] = (corr_df['Corr_Current'].abs() * pri_norm).clip(0.0, 1.0)
             console.item("Confluence formula", "|Corr| × calibrated Priority strength")
+
+            # ── Signal-Intelligence penalty ──────────────────────────────────
+            # A high-correlation, high-priority name can still be a trap if the
+            # Layer-2 model rates its fired signal a likely false positive (e.g. a
+            # bearish-divergence long at 15% confidence). Penalize the confluence of
+            # FIRED signals by their Intel confidence: factor = 0.5 + 0.5·Intel, so a
+            # fully-corroborated signal (Intel=1) is unchanged and a near-certain
+            # false positive (Intel→0) is halved (not zeroed — the correlation read
+            # still carries information). Non-fired rows (Intel NaN) are untouched.
+            if 'Intel_Confidence' in corr_df.columns and corr_df['Intel_Confidence'].notna().any():
+                _intel = corr_df['Intel_Confidence']
+                _factor = np.where(_intel.notna(), 0.5 + 0.5 * _intel.fillna(0.0), 1.0)
+                corr_df['Confluence_Raw'] = corr_df['Confluence_Score']
+                corr_df['Confluence_Score'] = (corr_df['Confluence_Score'] * _factor).clip(0.0, 1.0)
+                _n_penalized = int((_intel.notna() & (_intel < 0.5)).sum())
+                console.item("Confluence formula", "|Corr| × Priority × (0.5 + 0.5·Intel)")
+                console.item("Intel-penalized signals", f"{_n_penalized} fired signal(s) below 0.50 confidence")
         else:
             # Normalise by the 95th-percentile absolute oscillator value so the
             # scale adapts to the current universe (weekly ≈ ±40, crypto ≈ ±200)
@@ -3736,7 +4066,7 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="8" style="
+            <td colspan="10" style="
                 text-align: center;
                 color: #374151;
                 font-family: 'IBM Plex Mono', monospace;
@@ -3756,6 +4086,9 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
             expected = float(row.get('Expected_Change', 0))
             divergence = float(row.get('Divergence', 0))
             confluence = float(row.get('Confluence_Score', 0))
+            
+            # Format the Intel cell
+            intel_cell, _ = _intel_cell_and_style(row.get('Intel_Confidence'), row.get('Intel_Source', ''), 'Off', 0.0)
 
             # Note: confluence uses strict > 0 (not >=), so zero is "red" here.
             corr_color = _GREEN if corr > 0 else _RED
@@ -3774,6 +4107,7 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
                 <td class="numeric" style="color: #94A3B8;">{actual:+.2f}%</td>
                 <td class="numeric" style="color: #94A3B8;">{expected:+.2f}%</td>
                 <td class="numeric" style="color: {div_color}; font-weight: 600;">{divergence:+.2f}%</td>
+                {intel_cell}
                 <td class="numeric" style="color:{conf_color}; font-weight:600;">{confluence:.2f}</td>
             </tr>
             """)
@@ -3839,6 +4173,7 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
                 <th class="numeric" title="Symbol's price change on the analysis date">Actual %</th>
                 <th class="numeric" title="Expected move = target asset return × rolling correlation">Expected %</th>
                 <th class="numeric" title="Divergence = Actual − Expected (positive = outperforming expectation)">Div %</th>
+                <th class="numeric" title="Layer 2 Signal Intelligence Confidence">Intel</th>
                 <th class="numeric" title="Confluence = |Correlation| × normalised Priority strength [0–1]">Confluence</th>
             </tr>
         </thead>
@@ -4682,7 +5017,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="9" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="10" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
                 — no data available —
             </td>
@@ -4705,6 +5040,10 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
             pulse_delta_color = _signed_color(pulse_delta, pos="#4a9eff", neg="#D4A853")
             conv_delta_arrow  = _delta_arrow(conv_delta)
             pulse_delta_arrow = _delta_arrow(pulse_delta)
+            # Layer-2 Signal Intelligence — same snapshot Intel cell used elsewhere
+            # (calibrated % or muted ~heuristic; "—" when this symbol has no fired signal).
+            intel_cell, _ = _intel_cell_and_style(
+                row.get('Intel_Confidence'), row.get('Intel_Source', ''), 'Off', 0.0)
 
             table_rows.append(f"""
             <tr>
@@ -4717,6 +5056,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
                 <td class="numeric" style="color: #4a9eff; font-weight: 600;">{pulse:+.2f}</td>
                 <td class="numeric" style="color: {pulse_delta_color}; font-size: 0.65rem; font-weight: 600;">{pulse_delta_arrow}{abs(pulse_delta):.1f}</td>
                 <td class="numeric" style="color: {at_color}; font-weight: 600;">{at_filter:+.2f}</td>
+                {intel_cell}
             </tr>
             """)
 
@@ -4791,6 +5131,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
                     <th class="numeric">Pulse</th>
                     <th class="numeric">Δ Pulse</th>
                     <th class="numeric">AT Filter</th>
+                    <th class="numeric">Intel</th>
                 </tr>
             </thead>
             <tbody>
@@ -5444,6 +5785,10 @@ def main():
                 reg_len, wt_n1, wt_n2, levels, timeframe,
                 wt2_len=wt2_len, wt2_type=wt2_type,
             )
+            # Standalone harvest — no screener follows to consume the analyzed-frame
+            # cache the harvest just populated, so release it here. (In the Single-Date
+            # / Correlation flows the screener consumes then clears it itself.)
+            _analyzed_cache_clear()
 
         elif mode == "Correlation Analysis":
             corr_data = run_correlation_analysis(

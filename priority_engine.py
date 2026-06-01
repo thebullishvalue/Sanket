@@ -16,10 +16,22 @@ in ``~/.sanket/profiles.json`` so switching universes auto-loads the
 matching profile rather than silently re-using a stale one.
 """
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+# Optional cross-process file lock for the shared profiles JSON. On multi-user
+# deployments (Streamlit Cloud) two simultaneous calibrations would otherwise
+# read-modify-write the same file and clobber each other (lost-update race).
+# Degrades to a no-op if filelock isn't installed, so the app never hard-fails on
+# a missing optional dependency — it just loses the cross-process guarantee.
+try:
+    from filelock import FileLock, Timeout as _LockTimeout
+    _HAVE_FILELOCK = True
+except Exception:
+    _HAVE_FILELOCK = False
 
 VOL_REGIME_W   = {'LOW': 1.20, 'NORMAL': 1.00, 'HIGH': 0.85, 'EXTREME': 0.55}
 VOL_REGIME_IDX = {'LOW': 0,    'NORMAL': 1,    'HIGH': 2,    'EXTREME': 3}
@@ -105,6 +117,34 @@ def get_active_weights():
 # ──────────────────────────────────────────────────────────────────────
 PROFILES_PATH = Path.home() / ".sanket" / "profiles.json"
 _LEGACY_SINGLE_PATH = Path.home() / ".sanket" / "profile.json"
+_PROFILES_LOCK_PATH = Path.home() / ".sanket" / "profiles.json.lock"
+
+
+@contextmanager
+def _profiles_lock(timeout: float = 10.0):
+    """Hold an exclusive lock around a profiles read-modify-write.
+
+    No-op when filelock is unavailable or the lock can't be acquired in time —
+    best-effort, never blocks the UI indefinitely or crashes on a missing dep.
+    """
+    if not _HAVE_FILELOCK:
+        yield
+        return
+    lock = None
+    try:
+        _PROFILES_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        lock = FileLock(str(_PROFILES_LOCK_PATH), timeout=timeout)
+        lock.acquire()
+    except Exception:
+        lock = None   # couldn't lock (timeout/FS issue) — proceed best-effort
+    try:
+        yield
+    finally:
+        if lock is not None:
+            try:
+                lock.release()
+            except Exception:
+                pass
 
 
 def _profile_key(universe, selected_index, timeframe=None) -> str:
@@ -132,10 +172,14 @@ def _profiles_load_all() -> dict:
 
 
 def _profiles_save_all(profiles: dict) -> bool:
+    # Atomic write: serialize to a sibling temp file, then os-replace into place.
+    # Prevents a crash/concurrent-read mid-write from leaving a truncated JSON.
     try:
         PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(PROFILES_PATH, "w") as f:
+        tmp_path = PROFILES_PATH.with_suffix('.json.tmp')
+        with open(tmp_path, "w") as f:
             json.dump(profiles, f, indent=2, default=str)
+        tmp_path.replace(PROFILES_PATH)
         return True
     except Exception:
         return False
@@ -170,19 +214,22 @@ def save_profile(opt_results: dict) -> bool:
     selected_index = opt_results.get("selected_index")
     timeframe      = opt_results.get("timeframe")
     key = _profile_key(universe, selected_index, timeframe)
-    profiles = _profiles_load_all()
-    profiles[key] = {
-        "weights":        opt_results.get("weights", {}),
-        "train_score":    opt_results.get("train_score"),
-        "val_score":      opt_results.get("val_score"),
-        "sensitivity":    opt_results.get("sensitivity", {}),
-        "signal_conf":    opt_results.get("signal_conf"),   # Layer 2 calibrated confidence model
-        "timestamp":      opt_results.get("timestamp"),
-        "universe":       universe,
-        "selected_index": selected_index,
-        "timeframe":      timeframe,
-    }
-    return _profiles_save_all(profiles)
+    # Lock the whole read-modify-write so a concurrent calibration on another
+    # universe can't read the file before our write and then clobber our key.
+    with _profiles_lock():
+        profiles = _profiles_load_all()
+        profiles[key] = {
+            "weights":        opt_results.get("weights", {}),
+            "train_score":    opt_results.get("train_score"),
+            "val_score":      opt_results.get("val_score"),
+            "sensitivity":    opt_results.get("sensitivity", {}),
+            "signal_conf":    opt_results.get("signal_conf"),   # Layer 2 calibrated confidence model
+            "timestamp":      opt_results.get("timestamp"),
+            "universe":       universe,
+            "selected_index": selected_index,
+            "timeframe":      timeframe,
+        }
+        return _profiles_save_all(profiles)
 
 
 def load_profile_for(universe, selected_index, timeframe=None):
@@ -225,10 +272,11 @@ def delete_profile(universe=None, selected_index=None, timeframe=None) -> bool:
             return False
 
     key = _profile_key(universe, selected_index, timeframe)
-    profiles = _profiles_load_all()
-    if key in profiles:
-        del profiles[key]
-        return _profiles_save_all(profiles)
+    with _profiles_lock():
+        profiles = _profiles_load_all()
+        if key in profiles:
+            del profiles[key]
+            return _profiles_save_all(profiles)
     return True
 
 
@@ -353,10 +401,18 @@ def compute_priority(df: pd.DataFrame, weights=None) -> pd.DataFrame:
                  - weights['gamma_divergence_short'] * short_div)
 
     # ── F6: rank of damped inner score within the cross-section [-1, +1] ──
+    # A cross-sectional factor is meaningless with fewer than 2 names: rank(pct=True)
+    # of a lone asset is 1.0 → F6 = +1.0, awarding maximum "outperformance" points for
+    # outperforming nobody. Neutralize F6 to 0 when n < 2 so a single-asset screen
+    # (e.g. an isolated correlation target) doesn't get an inflated baseline priority.
     pre_long  = inner_long  * damp
     pre_short = inner_short * damp
-    F6_long  = (pre_long.rank(pct=True)  - 0.5) * 2.0
-    F6_short = (pre_short.rank(pct=True) - 0.5) * 2.0
+    if len(df) < 2:
+        F6_long  = pd.Series(0.0, index=df.index)
+        F6_short = pd.Series(0.0, index=df.index)
+    else:
+        F6_long  = (pre_long.rank(pct=True)  - 0.5) * 2.0
+        F6_short = (pre_short.rank(pct=True) - 0.5) * 2.0
 
     # ── Final priority: F6 added inside the damping path (uniform treatment) ──
     df['Priority_Long']  = (inner_long  + weights['beta_F6_xsect_long']  * F6_long)  * damp
