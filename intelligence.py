@@ -623,3 +623,171 @@ def calibrate_signal_confidence(ts_df: pd.DataFrame,
             model['n_val'] = int(ok.sum())
 
     return model
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Layer 3 — Meta-Conviction calibration
+# ════════════════════════════════════════════════════════════════════════
+
+def _spearman_ir(dates, scores, ret_mat, min_n: int = 5) -> float:
+    """Cross-sectional rank-IR of ``scores`` against DIRECTIONAL forward returns.
+
+    Mirrors the Priority Engine's IC methodology: per horizon, per date, the
+    Spearman IC (rank-correlation) of scores vs directional return across that
+    date's signals; IR_h = mean / std of the per-date ICs; IR = mean over
+    horizons. ``ret_mat`` is (n, H) of direction-signed returns, so a good
+    long OR short reads as positive — making meta and priority directly
+    comparable. Dates with < ``min_n`` usable rows are skipped.
+    """
+    dates = np.asarray(dates)
+    scores = np.asarray(scores, dtype=float)
+    ret_mat = np.asarray(ret_mat, dtype=float)
+    if ret_mat.ndim == 1:
+        ret_mat = ret_mat[:, None]
+    uniq = np.unique(dates)
+    irs = []
+    for h in range(ret_mat.shape[1]):
+        rh = ret_mat[:, h]
+        ics = []
+        for d in uniq:
+            m = (dates == d) & np.isfinite(rh) & np.isfinite(scores)
+            if int(m.sum()) < min_n:
+                continue
+            s = scores[m]; r = rh[m]
+            if np.std(s) < 1e-9 or np.std(r) < 1e-9:
+                continue
+            sr = pd.Series(s).rank().to_numpy()
+            rr = pd.Series(r).rank().to_numpy()
+            ic = np.corrcoef(sr, rr)[0, 1]
+            if np.isfinite(ic):
+                ics.append(ic)
+        if len(ics) >= 3:
+            a = np.asarray(ics)
+            irs.append(a.mean() / max(a.std(), 1e-6))
+    return float(np.mean(irs)) if irs else float('nan')
+
+
+def calibrate_meta_conviction(ts_df: pd.DataFrame,
+                              weights: dict,
+                              train_frac: float = 0.70,
+                              l2: float = 1.0,
+                              deadband_frac: float = 0.10,
+                              min_total_samples: int = 150,
+                              min_xsect: int = 5) -> dict:
+    """Fit the Layer-3 meta-conviction model on harvested fired signals. None if sparse.
+
+    Fuses the two orthogonal inputs — cross-sectional Priority rank and per-signal
+    Intel confidence — into a single calibrated P(true). The harvested panel does
+    not carry Priority_*_pct (compute_priority is cross-sectional and only runs
+    live), so we materialize it here with a per-date pass using the just-tuned
+    ``weights``. Features come from pe.meta_conf_features so train and inference
+    are identical. Split chronologically by date.
+
+    Probation: the returned model is ``active`` only if its out-of-sample rank-IR
+    BEAT naked Priority's rank-IR (and is positive). An inactive model is kept
+    for annotation but must not drive Hide/filter actions. Returns a model dict
+    {coef, intercept, feat_mean, feat_std, feature_names, deadband, horizons,
+    val_auc, meta_val_ir, priority_val_ir, active, n_train, n_val, base_rate}.
+    """
+    if ts_df is None or ts_df.empty or not {'Date', 'SignalType'}.issubset(ts_df.columns):
+        return None
+    df = ts_df.copy()
+    df['Date'] = pd.to_datetime(df['Date'])
+
+    ret_cols = [f'Ret_{h}b' for h in pe.HOLD_HORIZONS if f'Ret_{h}b' in df.columns]
+    if not ret_cols:
+        return None
+    horizons_used = [int(c[4:-1]) for c in ret_cols]
+
+    # ── Materialize cross-sectional Priority rank per date (the orthogonal input) ──
+    # Explicit per-date loop (not groupby.apply) so the Date column survives and we
+    # avoid the grouping-column deprecation; compute_priority is cross-sectional.
+    try:
+        parts = [pe.compute_priority(g, weights=weights)
+                 for _, g in df.groupby('Date', sort=False)]
+        df = pd.concat(parts) if parts else df
+    except Exception:
+        return None
+    if 'Priority_Long_pct' not in df.columns:
+        return None
+
+    # Intel_Confidence should already be on the harvest panel; compute if not.
+    if 'Intel_Confidence' not in df.columns:
+        try:
+            df = pe.compute_signal_confidence(
+                df, weights=weights, conf_model=pe.get_active_conf_model(),
+                compute_flags=False)
+        except Exception:
+            return None
+
+    X_all, dir_sign, fired = pe.meta_conf_features(df)
+    d = np.nan_to_num(dir_sign, nan=0.0)
+
+    # Direction-signed forward returns (good long OR short → positive).
+    R = df[ret_cols].to_numpy(dtype=float) * d[:, None]
+    with np.errstate(invalid='ignore'):
+        dr = np.nanmean(R, axis=1)
+    fired = np.asarray(fired) & np.isfinite(dr)
+    if int(fired.sum()) < min_total_samples:
+        return None
+
+    typ = float(np.median(np.abs(dr[fired]))) if fired.any() else 0.0
+    deadband = deadband_frac * typ
+    y_all = (dr > deadband).astype(float)
+
+    dates = df['Date'].to_numpy()
+    fired_dates = np.unique(dates[fired])
+    if len(fired_dates) < 8:
+        return None
+    n_train = max(1, int(len(fired_dates) * train_frac))
+    is_train = np.isin(dates, fired_dates[:n_train])
+    tr = fired & is_train
+    va = fired & ~is_train
+    if (int(tr.sum()) < min_total_samples
+            or y_all[tr].sum() < 5 or (tr.sum() - y_all[tr].sum()) < 5):
+        return None
+
+    Xtr = X_all[tr]
+    mean = Xtr.mean(axis=0)
+    std = Xtr.std(axis=0)
+    std = np.where(std < 1e-9, 1.0, std)
+    Xz_tr = (Xtr - mean) / std
+    coef, b0 = _fit_logistic(Xz_tr, y_all[tr], l2=l2)
+
+    model = {
+        'version': 1,
+        'feature_names': list(pe.META_FEATURES),
+        'feat_mean': [float(v) for v in mean],
+        'feat_std': [float(v) for v in std],
+        'coef': [float(c) for c in coef],
+        'intercept': float(b0),
+        'deadband': float(deadband),
+        'horizons': horizons_used,
+        'label': 'mean directional return over horizons > deadband',
+        'base_rate': float(y_all[tr].mean()),
+        'n_train': int(tr.sum()),
+        'active': False,
+    }
+
+    # ── Probation: meta OOS rank-IR vs naked Priority OOS rank-IR ──
+    if int(va.sum()) >= max(30, min_xsect):
+        proba = pe.predict_meta_conviction(df, model)
+        meta_scores = proba[va]
+        prio_scores = X_all[va, pe.META_FEATURES.index('rank_pct')]
+        Rva = R[va]
+        dv = dates[va]
+        ok = np.isfinite(meta_scores)
+        if int(ok.sum()) >= max(30, min_xsect):
+            meta_ir = _spearman_ir(dv[ok], meta_scores[ok], Rva[ok], min_n=min_xsect)
+            prio_ir = _spearman_ir(dv[ok], prio_scores[ok], Rva[ok], min_n=min_xsect)
+            yv = y_all[va][ok]
+            model['val_auc'] = (_auc(yv, meta_scores[ok])
+                                if 0 < yv.sum() < len(yv) else float('nan'))
+            model['meta_val_ir'] = meta_ir
+            model['priority_val_ir'] = prio_ir
+            model['n_val'] = int(ok.sum())
+            # Filter/reorder ONLY if the meta layer beat naked priority OOS + adds edge.
+            model['active'] = bool(np.isfinite(meta_ir) and np.isfinite(prio_ir)
+                                   and meta_ir > prio_ir and meta_ir > 0.0)
+
+    return model

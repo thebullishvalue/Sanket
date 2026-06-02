@@ -82,7 +82,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v3.2.1"
+VERSION = "v3.4.0"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -312,6 +312,7 @@ def _ensure_intel_weights(universe, selected_index, timeframe, analysis_date,
     if profile and made_today and not force and isinstance(profile.get("weights"), dict):
         _set_active_weights(profile["weights"])
         pe.set_active_conf_model(profile.get("signal_conf"))   # Layer 2 model rides with the profile
+        pe.set_active_meta_model(profile.get("meta_conviction"))  # Layer 3 meta-conviction rides too
         st.session_state["opt_results"] = profile
         console.detail(f"Intelligence: reusing today's profile · val IR {profile.get('val_score', float('nan')):+.3f}")
         return "cached"
@@ -329,12 +330,14 @@ def _ensure_intel_weights(universe, selected_index, timeframe, analysis_date,
         if profile and isinstance(profile.get("weights"), dict):
             _set_active_weights(profile["weights"])
             pe.set_active_conf_model(profile.get("signal_conf"))
+            pe.set_active_meta_model(profile.get("meta_conviction"))
             st.session_state["opt_results"] = profile
             console.warning("Intelligence: harvest empty — falling back to existing profile")
             st.session_state["timeseries_done"] = False
             return "harvest_failed_cached"
         _set_active_weights(pe.DEFAULT_W)
         pe.set_active_conf_model(None)
+        pe.set_active_meta_model(None)
         console.warning("Intelligence: harvest empty and no profile — using factory defaults")
         st.session_state["timeseries_done"] = False
         return "harvest_failed_default"
@@ -460,6 +463,63 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
                 'padding:0.3rem 0 0.1rem 0; line-height:1.5;">No calibrated confirmation model — the '
                 'panel is too sparse, so <b>Intel Confidence</b> falls back to the Layer-1 heuristic '
                 '(regime alignment × own-factor agreement × trust). Widen the historical range for a trained filter.</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Meta-Conviction (Layer 3) — final fused ranking + filter ──
+        _mc = res.get("meta_conviction")
+        st.markdown(
+            '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
+            'letter-spacing:0.08em; text-transform:uppercase; padding:0.9rem 0 0.3rem 0;">'
+            'Meta-Conviction · fuses cross-sectional rank × per-signal confidence</div>',
+            unsafe_allow_html=True,
+        )
+        if _mc and isinstance(_mc, dict):
+            _mir  = _mc.get("meta_val_ir")
+            _pir  = _mc.get("priority_val_ir")
+            _mact = bool(_mc.get("active"))
+            _mauc = _mc.get("val_auc")
+            _mir_s = f"{_mir:+.3f}" if isinstance(_mir, (int, float)) else "—"
+            _pir_s = f"{_pir:+.3f}" if isinstance(_pir, (int, float)) else "—"
+            _mauc_s = f"{_mauc:.3f}" if isinstance(_mauc, (int, float)) else "—"
+            _delta = (_mir - _pir) if (isinstance(_mir, (int, float)) and isinstance(_pir, (int, float))) else None
+            _delta_s = f"{_delta:+.3f}" if _delta is not None else "—"
+            st.markdown(f"""
+            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:1rem; margin-top:0.2rem;">
+                <div class="metric-card {"success" if _mact else "warning"}" style="margin:0;">
+                    <h4>Status</h4><h2>{"Active" if _mact else "Advisory"}</h2>
+                    <div class="sub-metric">{"reorders + filters" if _mact else "annotates only"}</div>
+                </div>
+                <div class="metric-card {"success" if _mact else "neutral"}" style="margin:0;">
+                    <h4>Meta IR</h4><h2>{_mir_s}</h2>
+                    <div class="sub-metric">out-of-sample · fused</div>
+                </div>
+                <div class="metric-card info" style="margin:0;">
+                    <h4>Priority IR</h4><h2>{_pir_s}</h2>
+                    <div class="sub-metric">naked rank baseline</div>
+                </div>
+                <div class="metric-card {"success" if (_delta is not None and _delta > 0) else "warning"}" style="margin:0;">
+                    <h4>Edge vs Priority</h4><h2>{_delta_s}</h2>
+                    <div class="sub-metric">AUC {_mauc_s} · n {_mc.get('n_val', 0)}</div>
+                </div>
+            </div>
+            <div style="font-family:var(--data); font-size:0.70rem; color:var(--ink-tertiary);
+                 padding:0.5rem 0 0.1rem 0; line-height:1.5;">
+                Layer 3 fuses each fired signal's <b>cross-sectional Priority rank</b> with its
+                <b>per-signal Intel confidence</b> into one calibrated Conviction. It is allowed to
+                <b>reorder and filter</b> only when its out-of-sample rank-IR <b>beat naked Priority's</b>
+                ({_mir_s} vs {_pir_s}) — otherwise it stays <b>advisory</b> (annotates Conviction tiers
+                but never hides), and the screen falls back to rank × confidence. Same probation
+                discipline as the rest of the stack: it refuses to act on unproven edge.
+                {"" if _mact else "<b>Not active here</b> — the fused score did not beat the raw ranking out-of-sample on this universe."}
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
+                'padding:0.3rem 0 0.1rem 0; line-height:1.5;">No meta-conviction model — the panel is too '
+                'sparse to fit one, so <b>Layer 3 falls back to rank × confidence</b> (advisory). '
+                'Widen the historical range to train and validate the fused layer.</div>',
                 unsafe_allow_html=True,
             )
     else:
@@ -2621,6 +2681,7 @@ def render_sidebar() -> SidebarState:
             if _profile and isinstance(_profile.get("weights"), dict):
                 _set_active_weights(_profile["weights"])
                 pe.set_active_conf_model(_profile.get("signal_conf"))
+                pe.set_active_meta_model(_profile.get("meta_conviction"))
                 st.session_state["opt_results"] = _profile
                 # Don't log the very first sync of a session (already covered by the
                 # session-start banner); only log genuine universe transitions.
@@ -2633,6 +2694,7 @@ def render_sidebar() -> SidebarState:
             else:
                 _set_active_weights(pe.DEFAULT_W)
                 pe.set_active_conf_model(None)
+                pe.set_active_meta_model(None)
                 if "opt_results" in st.session_state:
                     del st.session_state["opt_results"]
                 if _previous_uni_key is not None:
@@ -3069,6 +3131,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         # Intelligence Confirmation (Layer 1): per-signal confidence from regime
         # state + own-factor agreement. Non-destructive — annotates fired signals only.
         results_df = pe.compute_signal_confidence(results_df, weights=_get_active_weights())
+        # Meta-Conviction (Layer 3): fuse cross-sectional Priority rank with the
+        # per-signal Intel confidence into a final Conviction + tier. Needs both
+        # Priority_*_pct and Intel_Confidence (just computed) on the frame.
+        results_df = pe.compute_conviction(results_df)
         # Default sort by Priority_Long for the global table. kind='stable' is
         # load-bearing: compute_priority already sorted by the full tiebreaker
         # cascade (_tb_long = Priority, Confidence, Vol-regime, |PriceMom|). A stable
@@ -4592,6 +4658,32 @@ def _intel_cell_and_style(conf, source, mode, thr):
     return cell, style
 
 
+def _conviction_cell(conv, tier=None, source=''):
+    """Render a Layer-3 Meta-Conviction table cell (tier-banded fused score).
+
+    conv ∈ [0,1] or NaN/None (non-fired / no snapshot fusion → '—'). The fused
+    score blends cross-sectional Priority rank × per-signal Intel confidence.
+    source 'meta' (the calibrated fused model, active or advisory) shows a filled
+    ◆; 'fallback' (rank × confidence) a hollow ◇. Colour follows the 0–3 tier band.
+    """
+    if conv is None or pd.isna(conv):
+        return '<td class="numeric" style="color:#4B5563;">—</td>'
+    c = float(conv)
+    if tier is None or pd.isna(tier):
+        tier = 1 + sum(c >= b for b in (0.35, 0.55, 0.70))
+    t = int(tier)
+    if   c >= 0.70: col = '#2DD4A8'
+    elif c >= 0.55: col = '#A3E635'
+    elif c >= 0.35: col = '#D4A853'
+    else:           col = '#FB923C'
+    is_meta = str(source) == 'meta'
+    mark  = '◆' if is_meta else '◇'
+    txt   = f'{mark} {c*100:.0f}%'
+    title = (f'Meta-Conviction {c*100:.0f}% · tier {t}/3 · '
+             + ('fused model (rank × confidence)' if is_meta else 'fallback rank × confidence'))
+    return f'<td class="numeric" style="color:{col}; font-weight:700;" title="{title}">{txt}</td>'
+
+
 def _status_cell(status) -> str:
     """Render a (label, color, title) status tuple as a small table cell."""
     label, color, title = (status if isinstance(status, (tuple, list)) and len(status) == 3
@@ -4759,15 +4851,31 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
         for _, r in subset.iterrows():
             sym = r['Symbol']
             m = _fire_bar_metrics(_windows.get(sym), side, condition_set, _offset, r)
-            fc = m['conf']
+            # Layer 3: today's fired signals carry a cross-sectional Conviction —
+            # the fused rank × confidence — which takes precedence over the per-bar
+            # Intel score. Aged signals (no snapshot conviction) fall back to the
+            # fire-bar Intel score. Probation: an ADVISORY meta conviction (model
+            # did not beat naked priority OOS) may dim but never HIDE — only an
+            # active meta conviction or the legacy fire-bar Intel may hide.
+            _conv = r.get('Conviction')
+            _has_conv = _conv is not None and not pd.isna(_conv)
+            if _has_conv:
+                fc = float(_conv)
+                _fc_src = 'calibrated' if bool(r.get('Conviction_Active')) else 'heuristic'
+                _may_hide = bool(r.get('Conviction_Active'))
+            else:
+                fc = m['conf']
+                _fc_src = m['src']
+                _may_hide = True
             # Hide mode — drop low-confidence signals (and don't let an older
             # fire of the same symbol resurface in a later bucket).
-            if _filter_mode == "Hide" and fc is not None and not pd.isna(fc) and fc < _filter_thr:
+            if (_filter_mode == "Hide" and _may_hide and fc is not None
+                    and not pd.isna(fc) and fc < _filter_thr):
                 seen.add(sym)
                 continue
             r = r.copy()
             r['_fire_conf'] = fc
-            r['_fire_src'] = m['src']
+            r['_fire_src'] = _fc_src
             r['_ctx'] = m['ctx']      # (label, color, title) — context decay
             r['_entry'] = m['entry']  # (label, color, title) — move exhaustion
             buckets[age].append(r)
@@ -4839,7 +4947,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
         count = stats[age]['count']
         table_rows.append(f"""
         <tr style="background: {header_bg}; border-bottom: 2px solid {border_color};">
-            <td colspan="13" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
+            <td colspan="14" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
                 {age} · {count} signal{'s' if count != 1 else ''} · Avg Conv: {avg_conv:+.1f} · Avg %: {avg_pct:+.1f}
             </td>
         </tr>
@@ -4878,6 +4986,9 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
             # Context (thesis decay) + Entry (move exhaustion) status cells.
             ctx_cell   = _status_cell(row.get('_ctx',   ('—', '#4B5563', '')))
             entry_cell = _status_cell(row.get('_entry', ('—', '#4B5563', '')))
+            # Layer-3 Meta-Conviction (today's snapshot fusion; '—' for aged rows).
+            meta_cell  = _conviction_cell(row.get('Conviction'), row.get('Conviction_Tier'),
+                                          row.get('Conviction_Source', ''))
 
             table_rows.append(f"""
             <tr style="{_row_style}">
@@ -4891,6 +5002,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                 <td class="numeric" style="color: {pulse_delta_color}; font-size: 0.65rem; font-weight: 600;">{pulse_delta_arrow}{abs(pulse_delta):.1f}</td>
                 <td class="numeric" style="color: {at_color}; font-weight: 600;">{at_filter:+.2f}</td>
                 {intel_cell}
+                {meta_cell}
                 {ctx_cell}
                 {entry_cell}
             </tr>
@@ -4899,7 +5011,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
     if not table_rows:
         table_rows.append(f"""
         <tr>
-            <td colspan="12" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="13" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
                 — no signals detected —
             </td>
@@ -4994,6 +5106,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                     <th class="numeric">Δ Pulse</th>
                     <th class="numeric">AT Filter</th>
                     <th class="numeric">Intel</th>
+                    <th class="numeric" title="Layer-3 Meta-Conviction · rank × confidence">Meta</th>
                     <th class="numeric">Context</th>
                     <th class="numeric">Entry</th>
                 </tr>
@@ -5017,7 +5130,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="10" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="11" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
                 — no data available —
             </td>
@@ -5044,6 +5157,8 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
             # (calibrated % or muted ~heuristic; "—" when this symbol has no fired signal).
             intel_cell, _ = _intel_cell_and_style(
                 row.get('Intel_Confidence'), row.get('Intel_Source', ''), 'Off', 0.0)
+            meta_cell = _conviction_cell(row.get('Conviction'), row.get('Conviction_Tier'),
+                                         row.get('Conviction_Source', ''))
 
             table_rows.append(f"""
             <tr>
@@ -5057,6 +5172,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
                 <td class="numeric" style="color: {pulse_delta_color}; font-size: 0.65rem; font-weight: 600;">{pulse_delta_arrow}{abs(pulse_delta):.1f}</td>
                 <td class="numeric" style="color: {at_color}; font-weight: 600;">{at_filter:+.2f}</td>
                 {intel_cell}
+                {meta_cell}
             </tr>
             """)
 
@@ -5132,6 +5248,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
                     <th class="numeric">Δ Pulse</th>
                     <th class="numeric">AT Filter</th>
                     <th class="numeric">Intel</th>
+                    <th class="numeric" title="Layer-3 Meta-Conviction · rank × confidence">Meta</th>
                 </tr>
             </thead>
             <tbody>
@@ -5163,7 +5280,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="13" style="
+            <td colspan="14" style="
                 text-align: center;
                 color: #374151;
                 font-family: 'IBM Plex Mono', monospace;
@@ -5215,6 +5332,8 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
             # (no Context/Entry, no Dim). '—' where the symbol has no fired signal.
             _intel_cell, _ = _intel_cell_and_style(
                 row.get('Intel_Confidence'), row.get('Intel_Source', ''), 'Off', 0.0)
+            _meta_cell = _conviction_cell(row.get('Conviction'), row.get('Conviction_Tier'),
+                                          row.get('Conviction_Source', ''))
 
             table_rows.append(f"""
             <tr>
@@ -5231,6 +5350,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                 <td class="numeric" style="color: {vol_color}; font-weight: 700; font-size: 0.65rem;">{vol_reg}</td>
                 <td class="numeric" style="color: {at_color}; font-weight: 600;">{at_filter:+.2f}</td>
                 {_intel_cell}
+                {_meta_cell}
             </tr>
             """)
 
@@ -5316,6 +5436,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                     <th class="numeric">Vol</th>
                     <th class="numeric">AT Filter</th>
                     <th class="numeric">Intel</th>
+                    <th class="numeric" title="Layer-3 Meta-Conviction · rank × confidence">Meta</th>
                 </tr>
             </thead>
             <tbody>
@@ -5936,17 +6057,26 @@ def main():
                         accent="amber"
                     )
 
-                    # Layer 3 · Intelligence Filter status banner (opt-in false-positive suppression).
+                    # Layer 3 · Conviction Filter status banner (opt-in false-positive suppression).
                     _if_mode, _if_thr = _intel_filter_active()
                     if _if_mode != "Off":
+                        _meta_active = bool((pe.get_active_meta_model() or {}).get("active"))
                         _if_verb = "hiding" if _if_mode == "Hide" else "dimming"
-                        _if_src = "calibrated model" if pe.get_active_conf_model() else "Layer-1 heuristic"
+                        if _meta_active:
+                            _if_src = "active meta-conviction (rank × confidence, beat naked priority OOS)"
+                        elif pe.get_active_meta_model():
+                            _if_src = "advisory meta-conviction (rank × confidence) — dims only, never hides"
+                        elif pe.get_active_conf_model():
+                            _if_src = "rank × calibrated confidence (fallback)"
+                        else:
+                            _if_src = "rank × Layer-1 heuristic (fallback)"
                         st.markdown(
                             f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--amber); '
                             f'background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22); '
                             f'border-radius:6px; padding:0.45rem 0.7rem; margin:0 0 0.7rem 0;">'
-                            f'⚙ Intelligence Filter <b>{_if_mode}</b> — {_if_verb} signals with '
-                            f'Intel Confidence &lt; <b>{_if_thr:.2f}</b> · scored by {_if_src}. '
+                            f'⚙ Conviction Filter <b>{_if_mode}</b> — {_if_verb} signals with '
+                            f'Conviction &lt; <b>{_if_thr:.2f}</b> · scored by {_if_src}. '
+                            f'Today\'s fired signals use Conviction; aged signals fall back to fire-bar Intel. '
                             f'Adjust in the sidebar ▸ Self-Tuning Intelligence.</div>',
                             unsafe_allow_html=True,
                         )
@@ -6301,13 +6431,15 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                 help="Re-harvest and re-tune even if today's profile already exists.",
             )
 
-            # ── Layer 3 · Intelligence Filter (opt-in false-positive suppression) ──
+            # ── Layer 3 · Conviction Filter (opt-in false-positive suppression) ──
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             st.markdown(
                 '<div style="font-family:var(--data); font-size:0.62rem; color:var(--ink-tertiary); '
-                'line-height:1.55; padding:0 0 0.4rem 0;">Filter fired signals by <b>Intel Confidence</b>. '
-                'Soft (dim) keeps everything visible but greys low-confidence signals; Hard removes them '
-                'from the Action Dashboard. Off shows all signals.</div>',
+                'line-height:1.55; padding:0 0 0.4rem 0;">Filter fired signals by <b>Conviction</b> — the '
+                'Layer-3 fusion of cross-sectional Priority rank × per-signal Intel confidence. '
+                'Dim greys low-conviction signals; Hide removes them from the Action Dashboard. '
+                'An <b>advisory</b> meta model (one that did not beat naked priority out-of-sample) '
+                'only dims, never hides. Off shows all signals.</div>',
                 unsafe_allow_html=True,
             )
             # Dynamic default for Min Confidence: track the calibrated Confirm AUC so
@@ -6317,8 +6449,11 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
             # AUC-derived default whenever it changes, UNLESS the user has manually
             # dragged the slider (detected by the value diverging from the last auto-seed).
             _res = st.session_state.get("opt_results") or {}
+            _mc  = (_res.get("meta_conviction") or {}) if isinstance(_res, dict) else {}
             _sc  = (_res.get("signal_conf") or {}) if isinstance(_res, dict) else {}
-            _auc = _sc.get("val_auc")
+            # Prefer the Layer-3 meta AUC (the filter now acts on Conviction); fall
+            # back to the Layer-2 confidence AUC, then a fixed default.
+            _auc = _mc.get("val_auc") if isinstance(_mc.get("val_auc"), (int, float)) else _sc.get("val_auc")
             _thr_default = float(_auc) if isinstance(_auc, (int, float)) and 0.0 <= _auc <= 1.0 else 0.45
             _thr_default = round(_thr_default / 0.05) * 0.05   # align to slider's step grid
             _prev_seed = st.session_state.get("_intel_thr_autoseed")
@@ -6331,16 +6466,17 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
             st.session_state.setdefault("intel_filter_mode", "Dim")
 
             intel_filter_mode = st.radio(
-                "Intelligence Filter", ["Off", "Dim", "Hide"],
+                "Conviction Filter", ["Off", "Dim", "Hide"],
                 horizontal=True, key="intel_filter_mode",
-                help="Off: show all. Dim: grey signals below the threshold. Hide: drop them entirely.",
+                help="Off: show all. Dim: grey signals below the threshold. Hide: drop them entirely "
+                     "(active meta-conviction or aged fire-bar Intel only; advisory meta never hides).",
             )
             intel_filter_threshold = st.slider(
-                "Min Confidence", min_value=0.0, max_value=1.0,
+                "Min Conviction", min_value=0.0, max_value=1.0,
                 step=0.05, key="intel_filter_threshold",
                 disabled=(intel_filter_mode == "Off"),
-                help=("Signals with Intel Confidence below this are dimmed or hidden. "
-                      "Defaults to the calibrated Confirm AUC (or 0.45 if uncalibrated)."),
+                help=("Fired signals with Conviction below this are dimmed or hidden. "
+                      "Defaults to the calibrated AUC (or 0.45 if uncalibrated)."),
             )
     else:
         calib_trials, calib_train_frac = 75, 0.70
@@ -6363,6 +6499,7 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                 if isinstance(payload, dict) and isinstance(payload.get("weights"), dict):
                     _set_active_weights(payload["weights"])
                     pe.set_active_conf_model(payload.get("signal_conf"))
+                    pe.set_active_meta_model(payload.get("meta_conviction"))
                     st.session_state["opt_results"] = payload
                     pe.save_profile(payload)
                     _imp_label = payload.get("selected_index") or payload.get("universe") or "—"
@@ -6370,6 +6507,7 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                 else:
                     _set_active_weights(payload)  # legacy: file IS a weights dict
                     pe.set_active_conf_model(None)
+                    pe.set_active_meta_model(None)
                     _had_calibration = "opt_results" in st.session_state
                     if _had_calibration:
                         del st.session_state["opt_results"]
@@ -6607,6 +6745,30 @@ def run_priority_optimization(ts_data, calib_settings):
     else:
         console.detail("Signal confidence: panel too sparse — using Layer-1 heuristic")
 
+    # ─── Layer 3 · Meta-conviction calibration ────────────────────────────
+    # Fuse the cross-sectional Priority rank with the per-signal Intel confidence
+    # into a single calibrated conviction. Walk-forward gated: it is marked active
+    # (allowed to reorder/filter) ONLY if its OOS rank-IR beat naked Priority's.
+    # Otherwise it stays advisory. Best-effort — a sparse panel leaves it None.
+    meta_model = None
+    try:
+        meta_model = intel.calibrate_meta_conviction(ts_data, weights=best_w,
+                                                      train_frac=train_frac)
+    except Exception as _e:
+        console.warning(f"Meta-conviction calibration skipped: {_e}")
+    pe.set_active_meta_model(meta_model)
+    if meta_model:
+        _mir = meta_model.get("meta_val_ir")
+        _pir = meta_model.get("priority_val_ir")
+        _act = meta_model.get("active")
+        console.detail(
+            f"Meta-conviction calibrated · meta IR {(_mir if _mir is not None else float('nan')):+.3f} "
+            f"vs priority IR {(_pir if _pir is not None else float('nan')):+.3f} · "
+            f"{'ACTIVE (beats priority OOS)' if _act else 'advisory (did not beat priority OOS)'}"
+        )
+    else:
+        console.detail("Meta-conviction: panel too sparse — Layer-3 falls back to rank×conf")
+
     ts_meta = st.session_state.get("ts_meta") or {}
     opt_results = {
         "weights":        best_w,
@@ -6614,6 +6776,7 @@ def run_priority_optimization(ts_data, calib_settings):
         "val_score":      val_score,
         "sensitivity":    importance,
         "signal_conf":    signal_conf,
+        "meta_conviction": meta_model,
         "timestamp":      datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "universe":       ts_meta.get("universe"),
         "selected_index": ts_meta.get("selected_index"),
