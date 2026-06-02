@@ -1,11 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
-//  WRCI · Wave-Regime Composite Index   —   [Sanket Core]
+//  WRCI · Wave-Regime Composite Index   —   @thebullishvalue
 //  Conviction · Pulse · Liquidity Engine · AT Filter (Ehlers AutoTune)
-//  Version 3.4.0
+//  Version 3.4.1
 // ═══════════════════════════════════════════════════════════════════════════
 
 //@version=5
-indicator("WRCI [Sanket Core]", "WRCI", overlay=false, precision=2, max_bars_back=500)
+indicator("Wave-Regime Composite Index", "WRCI", overlay=false, precision=2, max_bars_back=500)
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  SECTION 1 · INPUTS & CONFIGURATION
@@ -42,6 +42,24 @@ zscore_clip   = input.float(3.0, "Z-Score Clip Threshold",  group=grp_liq, displ
 grp_lo     = "WRCI: LO Crossover"
 lt_level   = input.int(-75, "LO Lower Band (LT)", group=grp_lo, display=display.none, tooltip="Set B Crossover BUY when the LO (liquidity-adjusted stochastic) crosses UP through this band.")
 ut_level   = input.int(75,  "LO Upper Band (UT)", group=grp_lo, display=display.none, tooltip="Set B Crossover SELL when the LO crosses DOWN through this band.")
+
+// ── 1F · HEMREK COUNT (HCI) ──
+grp_hci      = "WRCI: Hemrek Count (HCI)"
+hci_price_src = input.source(close, "HCI Price Source",     group=grp_hci, display=display.none, tooltip="Price/external series used when 'HCI Source Series' = Price (also lets you point HCI at another indicator's plot).")
+hci_src_sel   = input.string("Price", "HCI Source Series",  group=grp_hci, display=display.none, options=["Price", "WT1", "WT2", "Conviction", "Pulse", "LO", "AT Filter"], tooltip="Drive the Hemrek streak off a WRCI internal series. input.source can't list this script's own variables, so the WRCI series are selected here; 'Price' uses the HCI Price Source above.")
+hci_thres     = input.float(1.0, "HCI Step Threshold",      group=grp_hci, display=display.none, minval=0.0, step=0.1, tooltip="Per-bar move magnitude that counts as one up/down step in the Hemrek streak. For the Price source this is a % return; for the zero-centred WRCI oscillator sources it is the raw per-bar change (points).")
+hci_look     = input.int(50,  "HCI Baseline Window",       group=grp_hci, display=display.none, minval=2, tooltip="SMA lookback that detrends the raw streak into the zero-centred Count Index.")
+hci_sig_len  = input.int(20,  "HCI Signal Line Length",    group=grp_hci, display=display.none, minval=2, tooltip="Smoothing period for the HCI Count Signal line.")
+hci_sig_type = input.string("SMA", "HCI Signal Line Type", group=grp_hci, display=display.none, options=["SMA", "EMA", "HMA", "WMA", "VWMA", "ALMA", "RMA"], tooltip="Smoothing function for the HCI signal line (reuses the shared f_smooth dispatcher).")
+show_hci     = input.bool(false, "Show HCI on Pane",       group=grp_hci, display=display.none, tooltip="Overlay the Count Index + Signal on the WRCI pane. Off by default — the HCI count scale differs from the ±100 WRCI scale.")
+hci_gate_on  = input.bool(true,  "Apply HCI Trend Gate",   group=grp_hci, display=display.none, tooltip="Gate all signals by the Hemrek Count trend: longs require Count Index ABOVE its signal line, shorts require it BELOW. Off = ignore HCI in signal logic.")
+
+// ── 1G · SIGNAL GATES (toggle each filter; OFF = pass-through) ──
+grp_gates         = "WRCI: Signal Gates"
+delta_gate_on     = input.bool(true, "Δ-Polarity Gate (ΔConv + ΔPulse)", group=grp_gates, display=display.none, tooltip="All sets: long requires Conviction Δ > 0 AND Pulse Δ > 0; short requires both < 0. Off = ignore Δ-polarity.")
+liq_level_gate_on = input.bool(true, "Liquidity Level Gate (Set A)",     group=grp_gates, display=display.none, tooltip="Set A Momentum: long requires Liquidity Oscillator > 0, short < 0 (net flow on the trade's side).")
+liq_vel_gate_on   = input.bool(true, "Liquidity Velocity Gate (Set C)",  group=grp_gates, display=display.none, tooltip="Set C Threshold: long requires liquidity velocity (Liq Δ) > 0, short < 0 (early flow turn).")
+veto_gate_on      = input.bool(true, "Set A Opposite-B Veto",            group=grp_gates, display=display.none, tooltip="Set A Momentum long is vetoed when the opposite-side Set B (Crossover short) fires on the same bar, and vice versa.")
 
 // ── Color Palette: Obsidian Quant ──
 var color C_BG_DARK   = #1a1a1a // UMA Background
@@ -158,7 +176,7 @@ f_autotune(float src, simple int window, float bw) =>
 ap         = hlc3
 esa        = ta.ema(ap, n1)
 d          = ta.ema(math.abs(ap - esa), n1)
-ci         = (ap - esa) / (0.015 * math.max(d, 1e-9))   // guard: flat-bar zero deviation
+ci         = (ap - esa) / math.max(0.015 * d, 1e-6)     // guard: flat-bar zero deviation (denom floor 1e-6 — matches sanket.py run_full_analysis)
 tci        = ta.ema(ci, n2)
 
 wt1        = tci
@@ -264,6 +282,39 @@ pulse = math.max(-6, math.min(6, math.sign(conv_vel_3) * math.sqrt(math.abs(vel_
 pulse_delta = ta.change(pulse)
 conv_delta  = ta.change(conviction)
 
+// ── 3E · HEMREK COUNT ENGINE (HCI) ────────────────────────────────────────
+// A signed run-length of directional momentum: the streak steps up when the
+// per-bar return clears +threshold, down when it clears −threshold, and holds
+// otherwise. Detrended against its own SMA baseline into a zero-centred Count
+// Index, then a configurable signal line + their spread (histogram).
+// Resolve the HCI source. input.source can only list chart price feeds / other
+// indicators' plots — never this script's own variables — so the WRCI internal
+// series are offered via the string selector and bound here, after Section 3A–3D
+// have computed them.
+hci_src = switch hci_src_sel
+    "WT1"        => wt1
+    "WT2"        => wt2
+    "Conviction" => conviction
+    "Pulse"      => pulse
+    "LO"         => lo
+    "AT Filter"  => at_filter
+    =>              hci_price_src
+
+// Price sources step on a % return (their natural scale); the zero-centred WRCI
+// oscillators can't be %-normalized (they cross zero), so they step on the raw
+// per-bar change in points.
+hci_step = hci_src_sel == "Price" ? (hci_src - hci_src[1]) / hci_src[1] * 100.0 : (hci_src - hci_src[1])
+
+var float hci_count = 0.0
+hci_count := hci_step >  hci_thres ? nz(hci_count[1]) + 1.0 : hci_step < -hci_thres ? nz(hci_count[1]) - 1.0 : nz(hci_count[1])
+
+hci_index  = hci_count - ta.sma(hci_count, hci_look)
+hci_signal = f_smooth(hci_index, hci_sig_len, hci_sig_type)
+hci_hist   = hci_index - hci_signal
+
+hci_cross_up   = ta.crossover(hci_index,  hci_signal)
+hci_cross_down = ta.crossunder(hci_index, hci_signal)
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  SECTION 4 · SANKET ENGINE (SIGNAL LOGIC)
@@ -273,23 +324,36 @@ conv_delta  = ta.change(conviction)
 sig_bull_cross = ta.crossover(wt1,  wt2)
 sig_bear_cross = ta.crossunder(wt1, wt2)
 
-// Set B: Crossover — liq_osc band-cross on the liquidity-adjusted stochastic (LO), gated by
-// Conviction Δ + Pulse Δ. Long: LO crosses UP through the lower band (LT, −75) with ΔConv > 0
-// and ΔPulse > 0 — a recovery from a liquidity low confirmed by improving structure + energy.
-// Short: LO crosses DOWN through the upper band (UT, +75) with both Δ < 0.
-crossover_long  = ta.crossover(lo,  lt_level) and conv_delta > 0 and pulse_delta > 0
-crossover_short = ta.crossunder(lo, ut_level) and conv_delta < 0 and pulse_delta < 0
+// ── Toggleable signal gates ──
+// Each gate passes neutrally (always true) when its toggle is OFF, so disabling one
+// leaves the others intact. Defaults all ON ⇒ unchanged behaviour. The Δ-polarity gate
+// applies to all sets; liquidity LEVEL gates Set A; liquidity VELOCITY gates Set C; the
+// opposite-side veto and HCI trend gate as described below.
+// (Keep these mirrored in sanket.py compute_signal_sets for 1:1 screener parity.)
+delta_gate_long   = not delta_gate_on     or (conv_delta > 0 and pulse_delta > 0)
+delta_gate_short  = not delta_gate_on     or (conv_delta < 0 and pulse_delta < 0)
+liqlvl_gate_long  = not liq_level_gate_on or liquidity_oscillator > 0
+liqlvl_gate_short = not liq_level_gate_on or liquidity_oscillator < 0
+liqvel_gate_long  = not liq_vel_gate_on   or liq_vel > 0
+liqvel_gate_short = not liq_vel_gate_on   or liq_vel < 0
+hci_gate_long     = not hci_gate_on       or hci_index > hci_signal
+hci_gate_short    = not hci_gate_on       or hci_index < hci_signal
 
-// Set A: Momentum — base WRCI crossings, vetoed by the opposite-side Set B,
-// and gated by Δ-polarity + Liquidity: long requires ΔConv > 0 and ΔPulse > 0; short
-// requires both < 0. Same Δ + liquidity-level gate as the other sets.
-momentum_long   = sig_bull_cross and not crossover_short and conv_delta > 0 and pulse_delta > 0 and liquidity_oscillator > 0
-momentum_short  = sig_bear_cross and not crossover_long  and conv_delta < 0 and pulse_delta < 0 and liquidity_oscillator < 0
+// Set B: Crossover — LO band cross on the liquidity-adjusted stochastic. Long: LO crosses
+// UP through the lower band (LT, −75); short: DOWN through the upper band (UT, +75).
+// Gated by Δ-polarity + HCI trend.
+crossover_long  = ta.crossover(lo,  lt_level) and delta_gate_long  and hci_gate_long
+crossover_short = ta.crossunder(lo, ut_level) and delta_gate_short and hci_gate_short
 
-// Set C: Threshold Zone Entry
-// KINEMATIC GATE: Reversions need VELOCITY (Early Stealth Accumulation) rather than static baseline level.
-threshold_long  = wt1 < osLevel2 and wt1[1] >= osLevel2 and wt2 > osLevel2 and conv_delta > 0 and pulse_delta > 0 and liq_vel > 0
-threshold_short = wt1 > obLevel2 and wt1[1] <= obLevel2 and wt2 < obLevel2 and conv_delta < 0 and pulse_delta < 0 and liq_vel < 0
+// Set A: Momentum — base WRCI crossings, opposite-side Set B veto (toggleable), Δ-polarity
+// + liquidity LEVEL + HCI trend gates.
+momentum_long   = sig_bull_cross and (not veto_gate_on or not crossover_short) and delta_gate_long  and liqlvl_gate_long  and hci_gate_long
+momentum_short  = sig_bear_cross and (not veto_gate_on or not crossover_long)  and delta_gate_short and liqlvl_gate_short and hci_gate_short
+
+// Set C: Threshold Zone Entry — fresh entry into the OS/OB band while wt2 still sits outside.
+// Δ-polarity + liquidity VELOCITY (early stealth accumulation) + HCI trend gates.
+threshold_long  = wt1 < osLevel2 and wt1[1] >= osLevel2 and wt2 > osLevel2 and delta_gate_long  and liqvel_gate_long  and hci_gate_long
+threshold_short = wt1 > obLevel2 and wt1[1] <= obLevel2 and wt2 < obLevel2 and delta_gate_short and liqvel_gate_short and hci_gate_short
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -313,6 +377,10 @@ plot(_hist_v,   "WRCI Histogram",    style=plot.style_columns, color=color.new(_
 plot(wt1,   "Composite Index",   color=color.new(color.aqua, 15), linewidth=2)
 plot(wt2, "Composite Signal",  color=color.new(color.orange, 25), linewidth=1)
 plot(lo,  "LO (Liquidity Osc)", color=color.new(C_STEALTH, 55), linewidth=1, display=display.all - display.status_line)
+
+// ── 5B-2 · Hemrek Count (HCI) — opt-in overlay (off by default) ──
+plot(show_hci ? hci_index  : na, "HCI Count Index",  color=color.new(C_ACCENT, 0),  linewidth=2, display=display.all - display.status_line)
+plot(show_hci ? hci_signal : na, "HCI Count Signal", color=color.new(C_WARN,   15), linewidth=1, display=display.all - display.status_line)
 
 // ── 5C · Signal Markers ──
 plotshape(momentum_long,   "Momentum Long",   style=shape.arrowup,      location=location.bottom, color=C_POS,    size=size.small, display=display.all - display.status_line)
