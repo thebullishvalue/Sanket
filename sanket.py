@@ -17,6 +17,7 @@ import io
 import urllib3
 import priority_engine as pe
 import intelligence as intel
+import breadth_engine as breadth
 from priority_engine import compute_priority
 import warnings
 import logging
@@ -82,7 +83,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v3.4.1"
+VERSION = "v3.5.0"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -540,7 +541,7 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
             "Active Weights", "factor coefficients · long vs short",
             icon="grid", accent="amber",
         )
-        st.components.v1.html(_build_active_weights_table_html(active), height=620, scrolling=False)
+        st.components.v1.html(_build_active_weights_table_html(active), height=820, scrolling=False)
     with col_s:
         ui.render_section_header(
             "Factor Importance", "Optuna fANOVA · share of objective variance",
@@ -2872,6 +2873,17 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         return None
 
     console.success(f"Successfully downloaded data for {len(data_dict)} stocks")
+
+    # ── Breadth Engine (Paths A/B/C) — built once from the universe panel ──
+    # Same data_dict the screener ranks, so zero new fetch. Universe breadth
+    # drives the Path-A regime tilt + Path-B confidence feature; sector-relative
+    # breadth (India only) drives the Path-C F8 factor. Attached per stock below.
+    _sector_map = breadth.build_sector_map(universe, selected_index, get_index_stock_list)
+    _breadth_panel = breadth.build_breadth_panel(data_dict, sector_map=_sector_map)
+    if _breadth_panel.available:
+        _bnow = _breadth_panel.universe.dropna()
+        console.item("Market Breadth", f"{_bnow.iloc[-1]:.3f}" if len(_bnow) else "n/a")
+        console.item("Sectors mapped", f"{len(_breadth_panel.sector_rel)}" if _sector_map else "0 (Path C off)")
     console.end_phase("DATA ACQUISITION")
 
     console.start_phase("WRCI MOMENTUM ANALYSIS", 2, 2)
@@ -2935,6 +2947,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 df = run_regime_analysis(df)        # adds HMM_Bull/Bear, Vol_Regime, Change_Point, Regime_Confidence
                 df = calculate_divergences(df, timeframe=timeframe)      # adds Bullish_Div, Bearish_Div
 
+            # Breadth columns (Universe_Breadth / Breadth_Momentum / Sector_Rel_Breadth).
+            # Re-attached on cache hits too so the columns track this run's panel.
+            df = _breadth_panel.attach(df, ticker)
+
             # Sample at analysis_date — snap to the correct historical bar.
             # Weekly resampling re-labels bars to week-start Mondays, so an exact
             # match on a non-Monday selection would fail; 'pad' snaps any date back
@@ -2968,7 +2984,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             _win_cols = ['HMM_Bull', 'HMM_Bear', 'Vol_Regime', 'Regime_Confidence',
                          'Change_Point', 'Bullish_Div', 'Bearish_Div', 'WT1',
                          'WT1_5ago', 'Conviction', 'F1_PriceMom', 'Pulse', 'Close',
-                         'Liquidity_Osc', 'LO']
+                         'Liquidity_Osc', 'LO', 'Universe_Breadth']
             _win = df.iloc[max(0, idx_pos - 4): idx_pos + 1]
             intel_windows[ticker] = _win[[c for c in _win_cols if c in _win.columns]].copy()
             # Recent daily-return volatility — the asset-agnostic scale for the
@@ -3033,6 +3049,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "F2_VolQual":    float(last_row.get('F2_VolQual', 0)),
                 "Liquidity_Osc": float(last_row.get('Liquidity_Osc', 0)),
                 "LO":            float(last_row.get('LO', 0)),
+                # Breadth (Paths A/B/C) — market-wide tape + sector participation.
+                "Universe_Breadth":   float(last_row.get('Universe_Breadth', breadth.BREADTH_NEUTRAL)),
+                "Breadth_Momentum":   float(last_row.get('Breadth_Momentum', 0.0)),
+                "Sector_Rel_Breadth": float(last_row.get('Sector_Rel_Breadth', 0.0)),
                 # Set A: Momentum — legacy L_/S_ alias of LA_/SA_ below
                 # (kept for Range Study compat; reads the same long_cond column).
                 "L_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
@@ -3234,7 +3254,12 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         return
 
     console.success(f"Downloaded depth for {len(data_dict)} entities")
-    
+
+    # ── Breadth Engine (Paths A/B/C) — identical construction to the live
+    # screener so the harvested training features match apply bar-for-bar. ──
+    _sector_map = breadth.build_sector_map(universe, selected_index, get_index_stock_list)
+    _breadth_panel = breadth.build_breadth_panel(data_dict, sector_map=_sector_map)
+
     # Start Unified Harvesting Phase
     console.start_phase("INTELLIGENCE HARVESTING", 2, 2)
     start_harvest = time.time()
@@ -3264,6 +3289,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                                    wt2_len=wt2_len, wt2_type=wt2_type)
             df = run_regime_analysis(df)
             df = calculate_divergences(df, timeframe=timeframe)
+            df = _breadth_panel.attach(df, ticker)   # breadth columns (Paths A/B/C)
             # Cache the analyzed frame so run_screener_analysis can reuse it instead
             # of recomputing. Stored by reference — the harvest-only columns appended
             # below (Ret_*, SignalType) are harmless extras; the screener copies on read.
@@ -3327,6 +3353,11 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'Pulse': row.get('Pulse', 0),
                     'Liquidity_Osc': row.get('Liquidity_Osc', 0),
                     'LO': row.get('LO', 0),
+                    # Breadth (Paths A/B/C) — must mirror the live screener row so
+                    # the tuner (F8) and Layer-2 (breadth_align) train on apply-identical features.
+                    'Universe_Breadth': row.get('Universe_Breadth', breadth.BREADTH_NEUTRAL),
+                    'Breadth_Momentum': row.get('Breadth_Momentum', 0.0),
+                    'Sector_Rel_Breadth': row.get('Sector_Rel_Breadth', 0.0),
                 })
             
         except Exception as e:
@@ -5684,6 +5715,9 @@ def _build_active_weights_table_html(active_weights: dict) -> str:
         # F7 dormant by default (0/0) — gated out of the ranking search pending
         # real-data validation; the "exp" tag signals experimental/probation, not a bug.
         ("F7 · Liq (LO) ᵉˣᵖ", "beta_F7_liq_long",      "beta_F7_liq_short"),
+        # F8 (sector-relative breadth) IS searched by default — a live calibrated
+        # factor (no exp tag), unlike the dormant F7.
+        ("F8 · Breadth",    "beta_F8_breadth_long",    "beta_F8_breadth_short"),
         ("γ · Reversion",   "gamma_reversion_long",    "gamma_reversion_short"),
         ("γ · Divergence",  "gamma_divergence_long",   "gamma_divergence_short"),
     ]
@@ -5718,6 +5752,25 @@ def _build_active_weights_table_html(active_weights: dict) -> str:
             <tr>
                 <td class="aw-label">{label}</td>
                 <td class="aw-num" style="color:{v_color};">{v:.2f}×</td>
+            </tr>
+        """)
+
+    # Fixed structural parameters — applied by compute_priority but NOT searched by
+    # the optimizer (Path-A breadth tilt has zero within-date variance, so it can't
+    # earn cross-sectional IC). Shown separately so they aren't mistaken for tuned weights.
+    bt_long  = float(active_weights.get('breadth_tilt_long', 0.0))
+    bt_short = float(active_weights.get('breadth_tilt_short', 0.0))
+    fixed_pairs = [
+        (f"Breadth Tilt α · Long",  bt_long,  f"×[{1-bt_long:.2f}, {1+bt_long:.2f}]"),
+        (f"Breadth Tilt α · Short", bt_short, f"×[{1-bt_short:.2f}, {1+bt_short:.2f}]"),
+    ]
+    fixed_rows = []
+    for label, v, rng in fixed_pairs:
+        fixed_rows.append(f"""
+            <tr>
+                <td class="aw-label">{label}</td>
+                <td class="aw-num" style="color:#94A3B8;">{v:.2f}</td>
+                <td class="aw-num" style="color:#64748B; font-size:0.62rem;">{rng}</td>
             </tr>
         """)
 
@@ -5819,10 +5872,27 @@ def _build_active_weights_table_html(active_weights: dict) -> str:
         <tbody>{''.join(tier_rows)}</tbody>
     </table>
 
+    <div class="aw-section-title">FIXED · STRUCTURAL (not calibrated)</div>
+    <table class="aw-table">
+        <thead>
+            <tr>
+                <th>Parameter</th>
+                <th>α</th>
+                <th>Exposure ×</th>
+            </tr>
+        </thead>
+        <tbody>{''.join(fixed_rows)}</tbody>
+    </table>
+
     <div class="aw-footnote">
         Long / Short are independent weight vectors — Δ &gt; 0 means the factor
         contributes more to the bullish ranking than the bearish, and vice versa.
         Tier multipliers scale signal-class quality and are direction-agnostic.
+        The <b>Breadth Tilt α</b> (Path A) is a <i>fixed</i> market-regime exposure
+        multiplier — <code>long ×(1+α·b)</code>, <code>short ×(1−α·b)</code>, breadth
+        state <code>b∈[−1,1]</code> — applied after ranking and <b>not</b> optimized
+        (it has no within-date variance to calibrate against), so it rescales
+        long-vs-short exposure without reordering either side.
     </div>
 
     </body></html>
@@ -6655,6 +6725,9 @@ def run_priority_optimization(ts_data, calib_settings):
         # it's collinear with the existing reversion machinery and unproven on real
         # data, so default-off prevents spurious weight. Opt in via calib_settings.
         enable_f7=bool(calib_settings.get("enable_f7", False)),
+        # F8 (sector-relative breadth) is genuinely cross-sectional and de-meaned
+        # against the market level, so it can earn real IC — searched by default.
+        enable_f8=bool(calib_settings.get("enable_f8", True)),
     )
     n_train_dates = tuner._train_pre.n_groups if not tuner._train_pre.empty else 0
     n_val_dates   = tuner._val_pre.n_groups   if not tuner._val_pre.empty   else 0

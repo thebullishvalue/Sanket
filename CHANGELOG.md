@@ -7,6 +7,32 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v3.5.0] · 2026-06-02
+### Breadth Intelligence — Market & Sector Advance/Decline as a Three-Axis Edge
+
+**"The Tape Joins the Engine"**
+
+A feature release that folds advance/decline **breadth** into the ranking + intelligence stack along **three orthogonal axes**, from a single shared engine. Breadth is derived from the universe close panel the screener already holds (`get_universe_data`), so there is **zero new data dependency** — the same advances/declines the market shows are now read by the engine. A universe-wide breadth value is a *timing/regime* signal (one number per date), not a stock-discriminating one, so it deliberately enters in three different places rather than as a naïve cross-sectional factor (which would be inert — identical for every stock on a date → zero cross-sectional IC).
+
+#### Features
+- **Breadth Engine** (`breadth_engine.py`, new): ports the Hemrek "Relative Breadth" oscillator — EMA(10)-smoothed `A/(A+D)` blended with six Fibonacci-period SMAs (~[0,1], 0.40/0.50 oversold/overbought bands) — and adds `Breadth_Momentum` (3-bar) plus **sector-relative breadth** (`Sector_Rel_Breadth = sector_breadth − universe_breadth`, de-meaned so it's orthogonal to the market level). Built once per run from `data_dict`; attached identically in the live-screener and calibration-harvest paths so train and apply features match bar-for-bar. Self-tested.
+- **Path A · Market-breadth regime tilt** (`priority_engine.py :: _breadth_tilt`, in `compute_priority`): a **bounded per-side multiplier** on final priority — `long ×(1+α·b)`, `short ×(1−α·b)`, where `b∈[-1,1]` blends breadth level + momentum and `α=0.20`. Breadth is uniform within a date, so this rescales **long-vs-short exposure** without reordering either side (within-side rank is invariant to the tilt — verified). Tilt is bounded to `[0.80, 1.20]` so it can never dominate the calibrated factors. Not IC-calibratable (zero within-date variance) → fixed, not searched.
+- **Path B · Breadth confidence feature** (Layer 2): new `breadth_align = dir·(Universe_Breadth − 0.45)` in `CONF_FEATURES` / `signal_conf_features` — a long fired into an advancing tape scores positive, a short into a strong tape negative. A legitimate *temporal* feature (market-wide is fine for a per-signal classifier). Flows through `calibrate_signal_confidence` automatically (persisted in `feature_names`; name-aligned at predict, so old models still score).
+- **Path C · F8 sector-relative breadth factor** (cross-sectional): `beta_F8_breadth_long/short` added to the inner score, the IC tuner kernel (`_PrecomputedDataset.M` → 7 factors, `_evaluate_ic`), and the Optuna search space. Because F8 is de-meaned against the market it varies across the cross-section (stocks in out-participating sectors rank up) and **can earn real IC** — unlike F7, it's searched by default (`enable_f8=True`), with the gate retained so it can be pinned to 0 if validation shows no edge. Sector map built from NSE sectoral-index membership (India universes only; fail-fast + cached, degrades to Path-C-off elsewhere so the screener is never stalled by breadth).
+- **Intelligence-tab UI**: the **Active Weights** table now lists **F8 · Breadth** (a live calibrated factor, no probation tag) alongside F1–F7; the Optuna fANOVA importance chart surfaces F8's searched params automatically. A new **Fixed · Structural** section shows the Path-A **Breadth Tilt α** (long/short) with its implied `×[0.80, 1.20]` exposure band, explicitly flagged as *not calibrated* so it isn't mistaken for a tuned weight.
+
+#### Design discipline
+- **No double-counting**: Path C uses *sector minus universe* breadth, keeping it orthogonal to Path A's market-level tilt; Path A and Path B both condition on the same tape but on different stages (exposure scaling vs per-signal confidence), and Path B must prove marginal AUC under the existing probation gate. The self-regulating mechanisms (Optuna IC search for F8, Layer-2 calibration for `breadth_align`) shrink breadth toward zero automatically if it has no edge — so "default-on" is safe by construction.
+- **Pine parity unaffected**: breadth is a market-wide / cross-sectional concept with no single-symbol equivalent, so — like Layer 3 — it is Python-only and `wrci.pine` carries the version stamp only. 1:1 indicator parity is preserved.
+
+#### Versioning
+- **Unification to `v3.5.0`** across `sanket.py`, `ui/theme.py`, `logger.py`, `breadth_engine.py`, `wrci.pine`, `count.pine` (stamp), `README.md`, and `LICENSE`.
+
+#### Documentation
+- **README**: new `breadth_engine.py` in the project structure; line counts refreshed — `sanket.py` (6,910), `priority_engine.py` (1,041), `intelligence.py` (807), `breadth_engine.py` (292).
+
+---
+
 ## [v3.4.1] · 2026-06-02
 ### WaveTrend Parity Patch — `ci` Denominator Guard
 
