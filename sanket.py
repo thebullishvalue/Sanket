@@ -1843,7 +1843,7 @@ def compute_autotune(close: pd.Series, window: int = 20, bw: float = 0.25) -> pd
 
 def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40,
                       wt2_len=20, wt2_type="ALMA",
-                      hci_thres=3.1, hci_look=78, hci_sig_len=40, hci_sig_type="EMA", hci_roc_len=8):
+                      hci_thres=0.25, hci_look=102, hci_sig_len=53, hci_sig_type="SMA", hci_roc_len=15):
     reg_len = max(reg_len, 2)
     # Auto-correct inverted OB levels (obLevel1 must be the stronger/higher bound)
     if obLevel1 < obLevel2:
@@ -2065,7 +2065,7 @@ def compute_signal_sets(df: pd.DataFrame,
                         wt1: pd.Series, wt2: pd.Series,
                         obLevel1: float, obLevel2: float,
                         osLevel1: float, osLevel2: float,
-                        hci_roc_len: int = 8) -> pd.DataFrame:
+                        hci_roc_len: int = 15) -> pd.DataFrame:
     """Compute the two signal sets and the zone Condition (parity with count.pine §3).
 
     Both sets trigger directly off the Hemrek Count Index (HCI) engine — they are the
