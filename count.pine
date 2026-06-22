@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //  HCI · Hemrek Count Index   —   @thebullishvalue
-//  Momentum-Streak Counter · Count Index · Count Signal
-//  Version 3.5.0
+//  Momentum-Streak Counter · Count Index · Count Signal · Kinematic Traces
+//  Version 3.6.0
 // ═══════════════════════════════════════════════════════════════════════════
 
 //@version=5
@@ -14,15 +14,22 @@ indicator("Hemrek Count Index", "HCI", overlay=false, precision=2, max_bars_back
 // ── 1A · COUNT ENGINE ──
 grp_count = "HCI: Count Engine"
 src       = input.source(close, "Source",               group=grp_count, display=display.none, tooltip="Series the per-bar return is measured on.")
-thres     = input.float(1.0, "Step Threshold (%)",      group=grp_count, display=display.none, minval=0.0, step=0.1, tooltip="Per-bar % return magnitude that counts as one up/down step in the streak. Moves smaller than ±threshold hold the count.")
-look      = input.int(50,  "Count Baseline Window",     group=grp_count, display=display.none, minval=2, tooltip="Lookback for the SMA baseline subtracted from the raw streak (Tom DeMark-style detrend → the Count Index oscillates around zero).")
-sig_len   = input.int(20,  "Signal Line Length",        group=grp_count, display=display.none, minval=2, tooltip="Smoothing period for the Count Signal line.")
-sig_type  = input.string("SMA", "Signal Line Type",     group=grp_count, display=display.none, options=["SMA", "EMA", "HMA", "WMA", "VWMA", "ALMA", "RMA"], tooltip="Smoothing function for the Count Signal line (ALMA = Arnaud Legoux MA, RMA = Wilder's MA). Default SMA preserves the original Hemrek Count signal.")
+thres     = input.float(3.1, "Step Threshold (%)",      group=grp_count, display=display.none, minval=0.0, step=0.05, tooltip="Per-bar % return magnitude that counts as one up/down step in the streak. Moves smaller than ±threshold hold the count. Research-optimal: 3.1 (filters micro-noise; only meaningful momentum moves step the count).")
+look      = input.int(78,  "Count Baseline Window",     group=grp_count, display=display.none, minval=2, tooltip="Lookback for the SMA baseline subtracted from the raw streak (Tom DeMark-style detrend → the Count Index oscillates around zero). Research-optimal: 78.")
+sig_len   = input.int(40,  "Signal Line Length",        group=grp_count, display=display.none, minval=2, tooltip="Smoothing period for the Count Signal line. Research-optimal: 40.")
+roc_len   = input.int(8,   "Set B · ROC Length",        group=grp_count, display=display.none, minval=1, tooltip="Lookback for the Count Signal's rate of change (Set B Crossover). The signal's ROC rolling through zero flags the smoothed streak turning. Research-optimal: 8.")
+sig_type  = input.string("EMA", "Signal Line Type",     group=grp_count, display=display.none, options=["SMA", "EMA", "HMA", "WMA", "VWMA", "ALMA", "RMA"], tooltip="Smoothing function for the Count Signal line (ALMA = Arnaud Legoux MA, RMA = Wilder's MA). Research-optimal: EMA (faster response than SMA while still smooth).")
 
 // ── 1B · VISUALIZATION ──
 grp_viz   = "HCI: Visualization"
 show_hist = input.bool(true, "Show Index − Signal Histogram", group=grp_viz, display=display.none)
 show_sig  = input.bool(true, "Show Cross Markers",            group=grp_viz, display=display.none, tooltip="Mark Count Index / Count Signal crossovers.")
+
+// ── 1C · KINEMATIC TRACES (MTF & Source Selectable) ──
+grp_traces    = "HCI: Kinematic Traces"
+show_traces   = input.bool(false,          "Show Kinematic Traces", group=grp_traces, display=display.none)
+trace_src_sel = input.string("Count Index", "Trace Source",      group=grp_traces, display=display.none, options=["Count Index", "Count Signal", "Histogram"], tooltip="Select which metric drives the Velocity & Acceleration bands.")
+trace_tf_sel  = input.timeframe("",       "Trace Timeframe",     group=grp_traces, display=display.none, tooltip="Select timeframe (e.g. Chart, D, W, M) for the Kinematic Traces.")
 
 // ── Color Palette: Obsidian Quant ──
 var color C_BG_DARK    = #1a1a1a // UMA Background
@@ -70,6 +77,18 @@ hist         = count_index - count_signal
 cross_up   = ta.crossover(count_index,  count_signal)
 cross_down = ta.crossunder(count_index, count_signal)
 
+// ── SCREENER SIGNAL SETS ──
+// Set A · Momentum — Count Index crossing its Count Signal line.
+setA_buy  = cross_up
+setA_sell = cross_down
+
+// Set B · Crossover — ROC(roc_len) of the Count Signal crossing zero. The
+// signal's rate of change rolling through zero flags the smoothed streak turning:
+// buy when ROC dips below zero, sell when it lifts above.
+roc_signal = ta.roc(count_signal, roc_len)
+setB_buy   = ta.crossunder(roc_signal, 0.0)
+setB_sell  = ta.crossover(roc_signal,  0.0)
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  SECTION 4 · VISUALIZATION
@@ -84,5 +103,66 @@ plot(show_hist ? hist : na, "Index − Signal", style=plot.style_columns, color=
 plot(count_index,  "Count Index",  color=color.new(C_ACCENT, 0),  linewidth=2)
 plot(count_signal, "Count Signal", color=color.new(C_SIGNAL, 15), linewidth=1)
 
-//plotshape(show_sig and cross_up,   "Count Cross Up",   style=shape.triangleup,   location=location.bottom, color=C_POS, size=size.tiny, display=display.all - display.status_line)
-//plotshape(show_sig and cross_down, "Count Cross Down", style=shape.triangledown, location=location.top,    color=C_NEG, size=size.tiny, display=display.all - display.status_line)
+// Set A · Momentum markers (Count Index / Count Signal cross).
+plotshape(show_sig and setA_buy,  "Set A Buy",  style=shape.triangleup,   location=location.bottom, color=C_POS,    size=size.tiny, display=display.all - display.status_line)
+plotshape(show_sig and setA_sell, "Set A Sell", style=shape.triangledown, location=location.top,    color=C_NEG,    size=size.tiny, display=display.all - display.status_line)
+
+// Set B · Crossover markers (ROC(3) of Count Signal crossing zero).
+plotshape(show_sig and setB_buy,  "Set B Buy",  style=shape.circle, location=location.bottom, color=C_ACCENT, size=size.tiny, display=display.all - display.status_line)
+plotshape(show_sig and setB_sell, "Set B Sell", style=shape.circle, location=location.top,    color=C_SIGNAL, size=size.tiny, display=display.all - display.status_line)
+
+
+// ── 5 · KINEMATIC TRACES (MTF & Source Selectable) ──
+// Trace base selected via input
+float trace_base = switch trace_src_sel
+    "Count Signal" => count_signal
+    "Histogram"    => hist
+    =>                count_index
+
+// Calculate Local Kinematics (needed for MTF pull)
+local_vel       = trace_base - nz(trace_base[1])
+local_vel_mag   = ta.stdev(local_vel, 30)
+local_accel     = local_vel - nz(local_vel[1])
+local_accel_mag = ta.stdev(local_accel, 30)
+
+// Request via MTF (if timeframe string is empty, it evaluates on chart timeframe)
+[mtf_vel, mtf_vel_mag, mtf_accel, mtf_accel_mag] = request.security(syminfo.tickerid, trace_tf_sel, [local_vel, local_vel_mag, local_accel, local_accel_mag])
+
+// Fallback safety to chart timeframe if string is empty
+_vel       = trace_tf_sel == "" ? local_vel       : mtf_vel
+_vel_mag   = trace_tf_sel == "" ? local_vel_mag   : mtf_vel_mag
+_accel     = trace_tf_sel == "" ? local_accel     : mtf_accel
+_accel_mag = trace_tf_sel == "" ? local_accel_mag : mtf_accel_mag
+
+// ── Adaptive Flat Bounds (Constant but Dynamic) ──
+// Uses 'var' to track the maximum historical expansion of the index.
+// This creates a flat (constant) line that won't wiggle, but is uniquely
+// scaled to the asset's overall volatility (dynamic).
+var float trace_upper = 10.0
+var float trace_lower = -10.0
+
+if count_index > 0
+    trace_upper := math.max(trace_upper, count_index * 1.2)
+if count_index < 0
+    trace_lower := math.min(trace_lower, count_index * 1.2)
+
+// Plot 1: MTF Velocity at Dynamic Lower Bound
+vel_int      = math.min(math.abs(_vel) / math.max(_vel_mag * 2.0, 1e-6), 1.0)
+vel_eased    = math.pow(vel_int, 0.6)          // gamma ease
+vel_transp   = int(70 - 65 * vel_eased)        // 70 always-visible → 5 vivid
+vel_col      = _vel >= 0 ? color.new(C_POS, vel_transp) : color.new(C_NEG, vel_transp)
+plot(show_traces ? trace_lower : na, "Trace Velocity", color=vel_col, linewidth=3)
+
+// Plot 2: MTF Acceleration at Dynamic Upper Bound
+accel_int    = math.min(math.abs(_accel) / math.max(_accel_mag * 2.0, 1e-6), 1.0)
+accel_eased  = math.pow(accel_int, 0.6)        // gamma ease
+accel_transp = int(70 - 65 * accel_eased)      // 70 always-visible → 5 vivid
+accel_col    = _accel >= 0 ? color.new(C_POS, accel_transp) : color.new(C_NEG, accel_transp)
+plot(show_traces ? trace_upper : na, "Trace Acceleration", color=accel_col, linewidth=3)
+
+
+// ── ALERTS ──
+alertcondition(setA_buy,  "Set A · Buy",  "HCI Set A Buy — Count Index crossed up through Count Signal")
+alertcondition(setA_sell, "Set A · Sell", "HCI Set A Sell — Count Index crossed down through Count Signal")
+alertcondition(setB_buy,  "Set B · Buy",  "HCI Set B Buy — ROC(3) of Count Signal crossed below zero")
+alertcondition(setB_sell, "Set B · Sell", "HCI Set B Sell — ROC(3) of Count Signal crossed above zero")

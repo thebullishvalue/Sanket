@@ -3,6 +3,30 @@ Sanket - Market Signal Screener | A Pragyam Product Family Member
 WRCI Engine Quantitative Signal Screener Terminal
 """
 
+import os
+
+# ── BLAS thread pinning (MUST run before numpy/sklearn import) ────────────────
+# The screener fits priority/confidence models sequentially across a 500-symbol
+# universe. On Streamlit Community Cloud the container is throttled to ~1 shared
+# vCPU but the host reports many logical CPUs, so OpenBLAS/MKL spawn one thread
+# per reported core and thrash — turning each small matrix solve into a
+# thread-contention storm (the #1 reason the screener is far slower on cloud
+# than locally). One thread per process is strictly faster for many-small-matrix
+# workloads. os.environ.setdefault → respects any explicit override from the env.
+for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+           "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_v, "1")
+
+# ── Numba cache OUTSIDE the app tree (MUST run before numba is imported) ──────
+# @_njit(cache=True) kernels write .nbc/.nbi artifacts. If those land in the app
+# directory (default: <module>/__pycache__), Streamlit's file watcher treats each
+# write as a source change and reruns the script — restarting the screener mid-
+# compile. Point Numba's cache at the home cache dir (writable, NOT watched).
+os.environ.setdefault(
+    "NUMBA_CACHE_DIR",
+    os.path.join(os.path.expanduser("~"), ".cache", "sanket", "numba"),
+)
+
 import html
 import re
 import streamlit as st
@@ -632,7 +656,7 @@ def _render_aging_reference():
     st.markdown(
         '<div style="font-family:var(--data); font-size:0.70rem; color:var(--ink-tertiary); '
         'padding:0.1rem 0 0.7rem 0; line-height:1.5;">'
-        'On the Momentum / Crossover / Threshold tables, each aged signal (1d / 2d / … ago) carries '
+        'On the Momentum / Crossover tables, each aged signal (1d / 2d / … ago) carries '
         'two <b>orthogonal</b> reads, both scored <b>at the bar it fired</b>. '
         '<b style="color:var(--ink-secondary);">Context</b> asks whether the signal is still good; '
         '<b style="color:var(--ink-secondary);">Entry</b> asks whether the move has already run.</div>',
@@ -1818,8 +1842,8 @@ def compute_autotune(close: pd.Series, window: int = 20, bw: float = 0.25) -> pd
 
 
 def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40,
-                      wt2_len=20, wt2_type="ALMA", lt_level=-75, ut_level=75,
-                      hci_thres=1.0, hci_look=50, hci_sig_len=20, hci_sig_type="SMA", hci_gate_on=True):
+                      wt2_len=20, wt2_type="ALMA",
+                      hci_thres=3.1, hci_look=78, hci_sig_len=40, hci_sig_type="EMA", hci_roc_len=8):
     reg_len = max(reg_len, 2)
     # Auto-correct inverted OB levels (obLevel1 must be the stronger/higher bound)
     if obLevel1 < obLevel2:
@@ -1858,7 +1882,7 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
 
     # ── LIQUIDITY SCORE ENGINE (parity with wrci.pine §3B) ───────────────────
     # Microstructure blend → clipped z-score → sigmoid → ±100 oscillator, plus its
-    # velocity (the kinematic gate for Set C).
+    # velocity. Feeds the priority engine (F7 / liq_support); no longer gates signals.
     liq_length, impact_window, zscore_clip = 20, 3, 3.0
     liq_spread  = (df['High'] + df['Low']) / 2.0 - df['Open']
     liq_vol_ma  = vol.rolling(liq_length).mean().replace(0, np.nan)
@@ -1876,7 +1900,7 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     df['Liquidity_Osc'] = liquidity_oscillator
     df['Liq_Vel']       = liq_vel
 
-    # LO — liquidity-adjusted stochastic (parity with wrci.pine §3B; powers Set B Crossover).
+    # LO — liquidity-adjusted stochastic (parity with wrci.pine §3B; feeds priority F7).
     # (close + microstructure_raw) range-normalized to ±100. microstructure_raw == liquidity_score.
     lo_src   = df['Close'] + microstructure_raw
     lo_lo    = lo_src.rolling(liq_length).min()
@@ -2020,7 +2044,8 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     # own SMA baseline into a zero-centred Count Index, then a configurable signal line.
     # The screener uses the Close/% path — the Pine source selector's WRCI-internal
     # options are chart-only sugar (the SMA-detrend cancels any history-length offset,
-    # so HCI_Index/Signal match Pine regardless of bar count). Drives the HCI trend gate.
+    # so HCI_Index/Signal match Pine regardless of bar count). Drives Set A (Index/Signal
+    # cross) and Set B (ROC(3) of Signal zero-cross) — parity with count.pine §3.
     close_prev = df['Close'].shift(1)
     hci_step   = (df['Close'] - close_prev) / close_prev * 100.0
     step_dir   = np.where(hci_step > hci_thres, 1.0, np.where(hci_step < -hci_thres, -1.0, 0.0))
@@ -2031,7 +2056,7 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     df['HCI_Signal'] = hci_signal.fillna(0)
 
     df = compute_signal_sets(df, wt1, wt2, obLevel1, obLevel2, osLevel1, osLevel2,
-                             lt_level, ut_level, hci_gate_on=hci_gate_on)
+                             hci_roc_len=hci_roc_len)
 
     return df
 
@@ -2040,70 +2065,41 @@ def compute_signal_sets(df: pd.DataFrame,
                         wt1: pd.Series, wt2: pd.Series,
                         obLevel1: float, obLevel2: float,
                         osLevel1: float, osLevel2: float,
-                        lt_level: float = -75, ut_level: float = 75,
-                        hci_gate_on: bool = True) -> pd.DataFrame:
-    """Compute the three signal sets and the zone Condition (parity with wrci.pine §4).
+                        hci_roc_len: int = 8) -> pd.DataFrame:
+    """Compute the two signal sets and the zone Condition (parity with count.pine §3).
 
-    All three sets confirm with the Δ-polarity gate (long needs Conviction Δ > 0 and
-    Pulse Δ > 0; short needs both < 0). Sets A & C add a kinematic liquidity gate
-    (LEVEL for A, VELOCITY for C); Set B's trigger is the LO band cross itself. All
-    three additionally pass the HCI trend gate (Hemrek Count Index vs its signal line):
-    longs require HCI_Index > HCI_Signal, shorts require HCI_Index < HCI_Signal. When
-    hci_gate_on is False the gate passes neutrally (parity with wrci.pine §4A).
+    Both sets trigger directly off the Hemrek Count Index (HCI) engine — they are the
+    raw count.pine crosses with no confirmation gates (no Δ-polarity, liquidity, or
+    HCI trend gate):
 
-    Set A (Momentum):  base wt1/wt2 crossings, vetoed by the opposite-side Set B,
-                       gated by Δ + liquidity LEVEL (Liquidity_Osc same-signed).
-    Set B (Crossover): the liquidity-adjusted stochastic LO crossing its bands — UP
-                       through lt_level (−75) = long, DOWN through ut_level (+75) =
-                       short — confirmed by Conviction Δ + Pulse Δ (ported liq_osc.pine).
-    Set C (Threshold): fresh entry into the OS/OB zone (wt1 crosses ±OS2/OB2 while wt2
-                       still sits outside), gated by Δ + liquidity VELOCITY (Liq_Vel).
+    Set A (Momentum):  Count Index crossing its Count Signal line — UP = long,
+                       DOWN = short (count.pine setA_buy / setA_sell).
+    Set B (Crossover): ROC(3) of the Count Signal crossing zero — crossing DOWN
+                       through zero = long, crossing UP = short (count.pine
+                       setB_buy = ta.crossunder(roc, 0), setB_sell = ta.crossover(roc, 0)).
 
-    Writes long_cond/short_cond (A), *_comp (B), *_wt (C), and Condition.
+    Writes long_cond/short_cond (A), *_comp (B), and Condition.
     """
-    # Base WaveTrend crossings (Set A trigger)
-    sig_bull_cross = (wt1 > wt2) & (wt1.shift(1) <= wt2.shift(1))
-    sig_bear_cross = (wt1 < wt2) & (wt1.shift(1) >= wt2.shift(1))
+    hci_index  = df['HCI_Index']
+    hci_signal = df['HCI_Signal']
 
-    liq_osc = df['Liquidity_Osc']
-    liq_vel = df['Liq_Vel']
-    lo      = df['LO']
-    conv_d  = df['Conviction_Delta']
-    pulse_d = df['Pulse_Delta']
+    # Set A: Momentum — Count Index crossing its Count Signal line (count.pine setA).
+    # cross_up → long, cross_down → short.
+    momentum_long  = (hci_index > hci_signal) & (hci_index.shift(1) <= hci_signal.shift(1))
+    momentum_short = (hci_index < hci_signal) & (hci_index.shift(1) >= hci_signal.shift(1))
 
-    # HCI trend gate (parity with wrci.pine §4A): the Hemrek Count Index leading its own
-    # signal line confirms the streak is accelerating in the trade's direction — Index
-    # ABOVE Signal for longs, BELOW for shorts. Off → passes neutrally (all-True), so the
-    # other gates are unaffected. Applied to all three signal sets below.
-    if hci_gate_on and 'HCI_Index' in df.columns and 'HCI_Signal' in df.columns:
-        hci_gate_long  = df['HCI_Index'] > df['HCI_Signal']
-        hci_gate_short = df['HCI_Index'] < df['HCI_Signal']
-    else:
-        hci_gate_long  = pd.Series(True, index=df.index)
-        hci_gate_short = pd.Series(True, index=df.index)
+    # Set B: Crossover — ROC(hci_roc_len) of the Count Signal crossing zero (count.pine setB).
+    # ta.roc(src, n) = 100*(src − src[n]) / src[n]. Buy when ROC crosses BELOW zero
+    # (crossunder), sell when it crosses ABOVE zero (crossover).
+    prev3      = hci_signal.shift(hci_roc_len)
+    roc_signal = (hci_signal - prev3) / prev3.replace(0, np.nan) * 100.0
+    crossover_long  = (roc_signal < 0.0) & (roc_signal.shift(1) >= 0.0)
+    crossover_short = (roc_signal > 0.0) & (roc_signal.shift(1) <= 0.0)
 
-    # Set B: Crossover — LO band cross (ported liq_osc.pine), gated by ΔConv + ΔPulse + HCI.
-    # Long: LO crosses UP through lt_level (−75). Short: LO crosses DOWN through ut_level (+75).
-    crossover_long  = (lo > lt_level) & (lo.shift(1) <= lt_level) & (conv_d > 0) & (pulse_d > 0) & hci_gate_long
-    crossover_short = (lo < ut_level) & (lo.shift(1) >= ut_level) & (conv_d < 0) & (pulse_d < 0) & hci_gate_short
-
-    # Set A: Momentum — base WRCI crossings, vetoed by the opposite-side Set B,
-    # gated by Δ-polarity + liquidity LEVEL + HCI trend.
-    momentum_long   = sig_bull_cross & (~crossover_short) & (conv_d > 0) & (pulse_d > 0) & (liq_osc > 0) & hci_gate_long
-    momentum_short  = sig_bear_cross & (~crossover_long)  & (conv_d < 0) & (pulse_d < 0) & (liq_osc < 0) & hci_gate_short
-
-    # Set C: Threshold — wt1 freshly entering the OS/OB band while wt2 still sits outside
-    # (wt2 lags wt1, so "wt2 hasn't crossed yet" = fresh). Δ-polarity gated AND a kinematic
-    # liquidity VELOCITY gate (liq_vel) + HCI trend — early stealth accumulation into the dip/pop.
-    threshold_long  = (wt1 < osLevel2) & (wt1.shift(1) >= osLevel2) & (wt2 > osLevel2) & (conv_d > 0) & (pulse_d > 0) & (liq_vel > 0) & hci_gate_long
-    threshold_short = (wt1 > obLevel2) & (wt1.shift(1) <= obLevel2) & (wt2 < obLevel2) & (conv_d < 0) & (pulse_d < 0) & (liq_vel < 0) & hci_gate_short
-
-    df['long_cond']       = momentum_long
-    df['short_cond']      = momentum_short
-    df['long_cond_comp']  = crossover_long
-    df['short_cond_comp'] = crossover_short
-    df['long_cond_wt']    = threshold_long
-    df['short_cond_wt']   = threshold_short
+    df['long_cond']       = momentum_long.fillna(False)
+    df['short_cond']      = momentum_short.fillna(False)
+    df['long_cond_comp']  = crossover_long.fillna(False)
+    df['short_cond_comp'] = crossover_short.fillna(False)
 
     # Zone label. Predicate order is load-bearing: stricter (Extreme) bound
     # must precede looser bound — np.select returns the first match.
@@ -2380,15 +2376,13 @@ def run_regime_analysis(df):
 def _classify_signal_type(row) -> str:
     """Return priority-ordered signal type for a single bar row (pandas Series).
 
-    Priority: B (composite) > A (momentum) > C (threshold) > Zone.
+    Priority: B (crossover) > A (momentum) > Zone.
     Matches the vectorised np.select used in the timeseries harvest path.
     """
     if row.get('long_cond_comp'):  return "B: Long"
     if row.get('short_cond_comp'): return "B: Short"
     if row.get('long_cond'):       return "A: Long"
     if row.get('short_cond'):      return "A: Short"
-    if row.get('long_cond_wt'):    return "C: Long"
-    if row.get('short_cond_wt'):   return "C: Short"
     cond = row.get('Condition', 'Neutral')
     return cond if cond != 'Neutral' else '-'
 
@@ -2495,9 +2489,9 @@ def render_landing_page():
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
                 SIGNAL STRUCTURE
             </h3>
-            <p>Hierarchical signal generation (Sets A-C) contextualized by Pulse and structural trend regime alignment.</p>
+            <p>Hierarchical signal generation (Sets A-B) contextualized by Pulse and structural trend regime alignment.</p>
             <div class='spec'>
-                <span>Sets:</span> Momentum / Crossover / Threshold<br>
+                <span>Sets:</span> Momentum / Crossover<br>
                 <span>Ranking:</span> Sorted by Abnormal Acceleration<br>
                 <span>Long/Short:</span> Dual-sided directional logic<br>
                 <span>Timing:</span> Age-weighted signal aging
@@ -3090,18 +3084,6 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "SB_2d": "●" if sample_range.iloc[-3]['short_cond_comp'] else "—",
                 "SB_3d": "●" if sample_range.iloc[-4]['short_cond_comp'] else "—",
                 "SB_5d": "●" if sample_range.tail(5)['short_cond_comp'].any() else "—",
-                # Set C: Threshold — Historical Long Signals
-                "LC_Today": "●" if sample_range.iloc[-1]['long_cond_wt'] else "—",
-                "LC_1d": "●" if sample_range.iloc[-2]['long_cond_wt'] else "—",
-                "LC_2d": "●" if sample_range.iloc[-3]['long_cond_wt'] else "—",
-                "LC_3d": "●" if sample_range.iloc[-4]['long_cond_wt'] else "—",
-                "LC_5d": "●" if sample_range.tail(5)['long_cond_wt'].any() else "—",
-                # Set C: Threshold — Historical Short Signals
-                "SC_Today": "●" if sample_range.iloc[-1]['short_cond_wt'] else "—",
-                "SC_1d": "●" if sample_range.iloc[-2]['short_cond_wt'] else "—",
-                "SC_2d": "●" if sample_range.iloc[-3]['short_cond_wt'] else "—",
-                "SC_3d": "●" if sample_range.iloc[-4]['short_cond_wt'] else "—",
-                "SC_5d": "●" if sample_range.tail(5)['short_cond_wt'].any() else "—",
                 # Additional fields for detail cards
                 "Osc_Value": round(last_row.get('Unified_Osc', 0), 2),
                 "MA_Alignment": int(last_row.get('MA_Alignment', 0)),
@@ -3171,7 +3153,6 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             "L_Today", "L_1d", "L_2d", "L_3d", "L_5d", "S_Today", "S_1d", "S_2d", "S_3d", "S_5d",
             "LA_Today", "LA_1d", "LA_2d", "LA_3d", "LA_5d", "SA_Today", "SA_1d", "SA_2d", "SA_3d", "SA_5d",
             "LB_Today", "LB_1d", "LB_2d", "LB_3d", "LB_5d", "SB_Today", "SB_1d", "SB_2d", "SB_3d", "SB_5d",
-            "LC_Today", "LC_1d", "LC_2d", "LC_3d", "LC_5d", "SC_Today", "SC_1d", "SC_2d", "SC_3d", "SC_5d",
             "Osc_Value", "MA_Alignment", "ZScore_Value",
         ]
         return pd.DataFrame(columns=expected_cols)
@@ -3299,18 +3280,16 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
             for h in pe.HOLD_HORIZONS:
                 df[f'Ret_{h}b'] = df['Close'].shift(-h) / df['Close'] - 1
 
-            # Vectorized SignalType per bar (priority order: B > A > C > Zone)
+            # Vectorized SignalType per bar (priority order: B > A > Zone)
             df['SignalType'] = np.select(
                 [
                     df['long_cond_comp'], df['short_cond_comp'],
                     df['long_cond'],      df['short_cond'],
-                    df['long_cond_wt'],   df['short_cond_wt'],
                     df['Condition'] != 'Neutral',
                 ],
                 [
                     'B: Long', 'B: Short',
                     'A: Long', 'A: Short',
-                    'C: Long', 'C: Short',
                     df['Condition'],
                 ],
                 default='-',
@@ -4856,7 +4835,7 @@ def _fire_bar_metrics(window, side: str, condition_set: str, offset: int, row) -
     conf, src = np.nan, ''
     ctx = ('—', '#4B5563', '')
     confs = np.array([])
-    if window is not None and len(window) and condition_set in ('A', 'B', 'C'):
+    if window is not None and len(window) and condition_set in ('A', 'B'):
         confs, srcs = _cached_conf_series(row.get('Symbol'), window, side, condition_set)
         fidx = len(confs) - 1 - offset
         if 0 <= fidx < len(confs):
@@ -4871,20 +4850,16 @@ def _fire_bar_metrics(window, side: str, condition_set: str, offset: int, row) -
     return {'conf': conf, 'src': src, 'ctx': ctx, 'entry': entry}
 
 
-def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'C', timeframe: str = 'Daily') -> dict:
+def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'A', timeframe: str = 'Daily') -> dict:
     """Bucket signals by age (Today, 1d, 2d, 3d, 5d) with stats for timeline display.
 
-    condition_set: 'A' = Momentum (LA_/SA_), 'B' = Crossover (LB_/SB_), 'C' = Threshold (LC_/SC_)
+    condition_set: 'A' = Momentum (LA_/SA_), 'B' = Crossover (LB_/SB_)
     timeframe: 'Daily' or 'Weekly' — determines age label names
     """
     if condition_set == 'A':
         prefix = 'LA' if side == 'long' else 'SA'
     elif condition_set == 'B':
         prefix = 'LB' if side == 'long' else 'SB'
-    elif condition_set == 'C':
-        prefix = 'LC' if side == 'long' else 'SC'
-    elif condition_set == 'D':
-        prefix = 'LD' if side == 'long' else 'SD'
     else:
         prefix = 'L' if side == 'long' else 'S'
     target_indicator = "●"
@@ -5526,14 +5501,11 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
 
 _SIGNAL_TYPE_REFERENCE = [
     ("Set A · Momentum",  "amber",
-     "Composite Line crosses the Signal Line, vetoed by an opposing Crossover. "
-     "Confirmed by Conviction Δ + Pulse Δ + positive liquidity flow. Rides confirmed momentum."),
+     "The Hemrek Count Index crosses its Count Signal line (count.pine) — crossing up = long, "
+     "crossing down = short. Rides the momentum-streak turning."),
     ("Set B · Crossover", "violet",
-     "The liquidity-adjusted stochastic (LO) crosses its ±75 bands — recovery from a liquidity "
-     "low (long) / rollover from a high (short). Confirmed by Conviction Δ + Pulse Δ."),
-    ("Set C · Threshold", "cyan",
-     "Composite Line freshly enters the OS / OB zone while the Signal Line still lags outside. "
-     "Confirmed by Conviction Δ + Pulse Δ + liquidity velocity — earliest stealth entry."),
+     "The 3-bar rate of change of the Count Signal crosses zero (count.pine) — crossing down "
+     "through zero = long, crossing up = short. Flags the smoothed streak rolling over."),
 ]
 
 
@@ -5724,7 +5696,6 @@ def _build_active_weights_table_html(active_weights: dict) -> str:
     tier_pairs = [
         ("Set A · Momentum",  "tier_A_mult"),
         ("Set B · Crossover", "tier_B_mult"),
-        ("Set C · Threshold", "tier_C_mult"),
         ("Default",           "tier_default_mult"),
     ]
 
@@ -6063,7 +6034,7 @@ def main():
             # Safety: Ensure required columns exist
             if 'SimpleName' not in results_df.columns and not results_df.empty:
                 results_df['SimpleName'] = results_df['Symbol'].str.replace(".NS", "", regex=False).str.lstrip("^")
-            for _col in ['LA_Today','LA_1d','LA_2d','LA_3d','LA_5d','SA_Today','SA_1d','SA_2d','SA_3d','SA_5d','LB_Today','LB_1d','LB_2d','LB_3d','LB_5d','SB_Today','SB_1d','SB_2d','SB_3d','SB_5d','LC_Today','LC_1d','LC_2d','LC_3d','LC_5d','SC_Today','SC_1d','SC_2d','SC_3d','SC_5d']:
+            for _col in ['LA_Today','LA_1d','LA_2d','LA_3d','LA_5d','SA_Today','SA_1d','SA_2d','SA_3d','SA_5d','LB_Today','LB_1d','LB_2d','LB_3d','LB_5d','SB_Today','SB_1d','SB_2d','SB_3d','SB_5d']:
                 if _col not in results_df.columns: results_df[_col] = "—"
 
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -6163,7 +6134,7 @@ def main():
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
                         f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
-                        "Momentum (A) · Crossover (B) · Threshold (C)",
+                        "Momentum (A) · Crossover (B)",
                         icon="zap",
                         accent="amber"
                     )
@@ -6207,26 +6178,22 @@ def main():
                     longs_b_df = results_df[results_df['LB_5d'] != "—"].copy().sort_values('Priority_Long', ascending=False)
                     shorts_b_df = results_df[results_df['SB_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False)
 
-                    # Set C: Threshold
-                    longs_c_df = results_df[results_df['LC_5d'] != "—"].copy().sort_values('Priority_Long', ascending=False)
-                    shorts_c_df = results_df[results_df['SC_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False)
-
                     if timeframe == 'Weekly':
                         _age_order = ["This Week", "1 Week Ago", "2 Weeks Ago", "3 Weeks Ago", "Within 5 Weeks"]
                     else:
                         _age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
 
-                    has_signals = any(not df_.empty for df_ in [longs_a_df, shorts_a_df, longs_b_df, shorts_b_df, longs_c_df, shorts_c_df])
+                    has_signals = any(not df_.empty for df_ in [longs_a_df, shorts_a_df, longs_b_df, shorts_b_df])
 
                     if has_signals:
-                        total_longs  = len(longs_a_df) + len(longs_b_df) + len(longs_c_df)
-                        total_shorts = len(shorts_a_df) + len(shorts_b_df) + len(shorts_c_df)
-                        all_longs  = pd.concat([longs_a_df, longs_b_df, longs_c_df]).drop_duplicates('Symbol').sort_values('Priority_Long', ascending=False)
-                        all_shorts = pd.concat([shorts_a_df, shorts_b_df, shorts_c_df]).drop_duplicates('Symbol').sort_values('Priority_Short', ascending=False)
+                        total_longs  = len(longs_a_df) + len(longs_b_df)
+                        total_shorts = len(shorts_a_df) + len(shorts_b_df)
+                        all_longs  = pd.concat([longs_a_df, longs_b_df]).drop_duplicates('Symbol').sort_values('Priority_Long', ascending=False)
+                        all_shorts = pd.concat([shorts_a_df, shorts_b_df]).drop_duplicates('Symbol').sort_values('Priority_Short', ascending=False)
 
                         mc1, mc2, mc3, mc4 = st.columns(4)
-                        with mc1: ui.render_metric_card("Long Signals", str(total_longs), f"A:{len(longs_a_df)} B:{len(longs_b_df)} C:{len(longs_c_df)}", "success")
-                        with mc2: ui.render_metric_card("Short Signals", str(total_shorts), f"A:{len(shorts_a_df)} B:{len(shorts_b_df)} C:{len(shorts_c_df)}", "danger")
+                        with mc1: ui.render_metric_card("Long Signals", str(total_longs), f"A:{len(longs_a_df)} B:{len(longs_b_df)}", "success")
+                        with mc2: ui.render_metric_card("Short Signals", str(total_shorts), f"A:{len(shorts_a_df)} B:{len(shorts_b_df)}", "danger")
                         with mc3:
                             strongest_long = all_longs.iloc[0] if not all_longs.empty else None
                             ui.render_metric_card("Strongest Long", strongest_long['SimpleName'] if strongest_long is not None else "—", f"Signal: {strongest_long['Signal']:.1f}" if strongest_long is not None else "No signals", "info")
@@ -6237,7 +6204,7 @@ def main():
                         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                         bull_tab, bear_tab = st.tabs(["Bullish Signals by Timing", "Bearish Signals by Timing"])
                         with bull_tab:
-                            mom_bull_tab, cross_bull_tab, thresh_bull_tab, prio_bull_tab = st.tabs(["Momentum", "Crossover", "Threshold", "Priority Rank"])
+                            mom_bull_tab, cross_bull_tab, prio_bull_tab = st.tabs(["Momentum", "Crossover", "Priority Rank"])
                             with mom_bull_tab:
                                 _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A', timeframe=timeframe)
                                 la_html = _build_signal_table_html(la_stats, side='long', timeframe=timeframe)
@@ -6250,12 +6217,6 @@ def main():
                                 _g = sum(1 for a in _age_order if lb_stats[a]['count'] > 0)
                                 _r = sum(lb_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(lb_html, height=max(70 + _g * 46 + _r * 44, 110))
-                            with thresh_bull_tab:
-                                _, lc_stats, _, _ = _bucket_signals_by_age(longs_c_df, side='long', condition_set='C', timeframe=timeframe)
-                                lc_html = _build_signal_table_html(lc_stats, side='long', timeframe=timeframe)
-                                _g = sum(1 for a in _age_order if lc_stats[a]['count'] > 0)
-                                _r = sum(lc_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(lc_html, height=max(70 + _g * 46 + _r * 44, 110))
                             with prio_bull_tab:
                                 # Entire universe ranked by the self-tuned LONG priority score —
                                 # not gated by any signal set; this is the Intelligence ranking.
@@ -6263,13 +6224,13 @@ def main():
                                 st.markdown(
                                     '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
                                     'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the self-tuned long priority '
-                                    'score (Intelligence weights) — independent of signal sets A–C.</div>',
+                                    'score (Intelligence weights) — independent of signal sets A–B.</div>',
                                     unsafe_allow_html=True,
                                 )
                                 st.components.v1.html(_build_signal_strength_table_html(_all_long, side='long'),
                                                       height=min(150 + len(_all_long) * 55, 900), scrolling=True)
                         with bear_tab:
-                            mom_bear_tab, cross_bear_tab, thresh_bear_tab, prio_bear_tab = st.tabs(["Momentum", "Crossover", "Threshold", "Priority Rank"])
+                            mom_bear_tab, cross_bear_tab, prio_bear_tab = st.tabs(["Momentum", "Crossover", "Priority Rank"])
                             with mom_bear_tab:
                                 _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A', timeframe=timeframe)
                                 sa_html = _build_signal_table_html(sa_stats, side='short', timeframe=timeframe)
@@ -6282,19 +6243,13 @@ def main():
                                 _g = sum(1 for a in _age_order if sb_stats[a]['count'] > 0)
                                 _r = sum(sb_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(sb_html, height=max(70 + _g * 46 + _r * 44, 110))
-                            with thresh_bear_tab:
-                                _, sc_stats, _, _ = _bucket_signals_by_age(shorts_c_df, side='short', condition_set='C', timeframe=timeframe)
-                                sc_html = _build_signal_table_html(sc_stats, side='short', timeframe=timeframe)
-                                _g = sum(1 for a in _age_order if sc_stats[a]['count'] > 0)
-                                _r = sum(sc_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(sc_html, height=max(70 + _g * 46 + _r * 44, 110))
                             with prio_bear_tab:
                                 # Entire universe ranked by the self-tuned SHORT priority score.
                                 _all_short = results_df.sort_values('Priority_Short', ascending=False)
                                 st.markdown(
                                     '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
                                     'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the self-tuned short priority '
-                                    'score (Intelligence weights) — independent of signal sets A–C.</div>',
+                                    'score (Intelligence weights) — independent of signal sets A–B.</div>',
                                     unsafe_allow_html=True,
                                 )
                                 st.components.v1.html(_build_signal_strength_table_html(_all_short, side='short'),
@@ -6307,9 +6262,9 @@ def main():
                         )
 
 
-                # Omni-channel base: include any stock with a signal in ANY set (A, B, or C)
-                long_sets = ['LA_5d', 'LB_5d', 'LC_5d']
-                short_sets = ['SA_5d', 'SB_5d', 'SC_5d']
+                # Omni-channel base: include any stock with a signal in ANY set (A or B)
+                long_sets = ['LA_5d', 'LB_5d']
+                short_sets = ['SA_5d', 'SB_5d']
                 _longs_base = results_df[results_df[long_sets].ne("—").any(axis=1)].copy()
                 _shorts_base = results_df[results_df[short_sets].ne("—").any(axis=1)].copy()
                 top_longs = _longs_base.sort_values('Priority_Long', ascending=False).head(10)
@@ -6325,7 +6280,7 @@ def main():
                 with tab_strength:
                     ui.render_section_header(
                         "Abnormal Acceleration (Pulse)",
-                        "Top signals ranked by Pulse — Momentum (A) · Crossover (B) · Threshold (C)",
+                        "Top signals ranked by Pulse — Momentum (A) · Crossover (B)",
                         icon="zap",
                         accent="amber"
                     )

@@ -64,7 +64,6 @@ DEFAULT_W = {
     # Tier multipliers (signal-class quality) — direction-agnostic
     'tier_A_mult':              1.00,
     'tier_B_mult':              1.30,
-    'tier_C_mult':              0.85,
     'tier_default_mult':        0.90,
     # Path A · market-breadth regime tilt. A bounded per-side multiplier on the
     # final priority (NOT a cross-sectional factor — breadth is uniform within a
@@ -359,11 +358,9 @@ def _col(df: pd.DataFrame, name: str, default):
 def _tier_map(weights: dict) -> dict:
     a = weights['tier_A_mult']
     b = weights['tier_B_mult']
-    c = weights['tier_C_mult']
     return {
         'A: Long': a, 'A: Short': a,
         'B: Long': b, 'B: Short': b,
-        'C: Long': c, 'C: Short': c,
     }
 
 
@@ -522,15 +519,14 @@ def compute_priority(df: pd.DataFrame, weights=None) -> pd.DataFrame:
 # Non-fired rows (Zone labels / '-') get NaN — they are not signals.
 # ──────────────────────────────────────────────────────────────────────
 _SIG_DIR = {
-    'A: Long': 1,  'B: Long': 1,  'C: Long': 1,
-    'A: Short': -1, 'B: Short': -1, 'C: Short': -1,
+    'A: Long': 1,  'B: Long': 1,
+    'A: Short': -1, 'B: Short': -1,
 }
 
 # Map SignalType → set letter, for per-set calibrated models (Layer 2).
 _SIG_SET = {
     'A: Long': 'A', 'A: Short': 'A',
     'B: Long': 'B', 'B: Short': 'B',
-    'C: Long': 'C', 'C: Short': 'C',
 }
 
 # Directional feature names for the signal-confidence logistic (Layer 2).

@@ -28,9 +28,8 @@ _VR_W = {'LOW': 1.20, 'NORMAL': 1.00, 'HIGH': 0.85, 'EXTREME': 0.55}
 _TIER_IDX = {
     'A: Long': 0, 'A: Short': 0,
     'B: Long': 1, 'B: Short': 1,
-    'C: Long': 2, 'C: Short': 2,
 }
-_TIER_DEFAULT_IDX = 3
+_TIER_DEFAULT_IDX = 2
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -252,7 +251,6 @@ def _evaluate_ic(precomp: _PrecomputedDataset, weights: dict, min_xsect: int = 5
     tier_arr = np.array([
         weights['tier_A_mult'],
         weights['tier_B_mult'],
-        weights['tier_C_mult'],
         weights['tier_default_mult'],
     ], dtype=np.float64)
 
@@ -391,7 +389,6 @@ class PriorityTuner:
                 # Shared tier multipliers
                 'tier_A_mult':       trial.suggest_float('tier_A_mult',       0.5, 2.0),
                 'tier_B_mult':       trial.suggest_float('tier_B_mult',       0.5, 2.0),
-                'tier_C_mult':       trial.suggest_float('tier_C_mult',       0.5, 2.0),
                 'tier_default_mult': trial.suggest_float('tier_default_mult', 0.5, 2.0),
             }
 
@@ -601,7 +598,7 @@ def calibrate_signal_confidence(ts_df: pd.DataFrame,
         return None
     sets_out['_pooled'] = pooled
 
-    for s in ('A', 'B', 'C'):
+    for s in ('A', 'B'):
         m = _fit_subset(tr & (set_arr == s))
         if m is not None:
             sets_out[s] = m
