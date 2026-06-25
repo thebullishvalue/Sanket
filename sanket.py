@@ -2202,7 +2202,8 @@ def compute_signal_sets(df: pd.DataFrame,
     # BOTH directions, per spec. Filters crosses that fire while strength is still
     # pushing the other way.
     strength_falling = strength.shift(1) > strength
-    c_long  = _cross_up(kvo, kvo_sig) & strength_falling
+    strength_rising = strength.shift(1) < strength
+    c_long  = _cross_up(kvo, kvo_sig) & strength_rising
     c_short = _cross_dn(kvo, kvo_sig) & strength_falling
 
     df['long_cond']        = a_long.fillna(False)
