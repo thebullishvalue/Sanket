@@ -491,8 +491,8 @@ def render_interpretation_card(
 def render_signal_guide() -> None:
     """Render the Signal Interpretation Guide with three signal types.
 
-    Displays Momentum (A), Crossover (B), and Threshold (C) explanations
-    in a premium glassmorphic card matching the terminal design.
+    Displays Ignition (A), Regime (B), and Reversal (C) explanations — the three
+    native Directional Logistic Oscillator signals — in a glassmorphic card.
     """
     st.markdown(
         '''
@@ -507,33 +507,28 @@ def render_signal_guide() -> None:
 
             <div class="signal-guide-grid">
                 <div class="signal-type momentum">
-                    <div class="signal-type-label">Set A: Momentum</div>
-                    <div class="signal-type-desc">WT1/WT2 crossover, gated by Conviction Δ and Pulse Δ polarity + liquidity level • Vetoed by the opposite-side Set B • Tactical trend entry</div>
+                    <div class="signal-type-label">Set A: Ignition</div>
+                    <div class="signal-type-desc">DLO oscillator crosses the zero line • Up = long, down = short • Momentum / trend regime shift</div>
                 </div>
 
                 <div class="signal-type crossover">
-                    <div class="signal-type-label">Set B: Crossover</div>
-                    <div class="signal-type-desc">Regime Filter voltrend crossing trend, Δ-polarity + liquidity level gated • Cross-indicator confirmation • Highest tier weight (1.30×)</div>
+                    <div class="signal-type-label">Set B: Regime</div>
+                    <div class="signal-type-desc">DLO bar-color flip (deep-bearish→recovering = long, bullish→fading = short) confirmed by Klinger flow • Strength regime turn • Highest tier weight (1.30×)</div>
                 </div>
 
                 <div class="signal-type threshold">
-                    <div class="signal-type-label">Set C: Threshold</div>
-                    <div class="signal-type-desc">WT1 freshly enters OS/OB zone (±40) with signal line wt2 still outside • Liquidity velocity (flow turning) • Earliest oscillator entry</div>
-                </div>
-
-                <div class="signal-type squeeze">
-                    <div class="signal-type-label">Set D: Squeeze</div>
-                    <div class="signal-type-desc">Regime Filter trend crossing zero, Δ-polarity gated + liquidity acceleration • Structural regime flip • Lowest tier weight (0.75×)</div>
+                    <div class="signal-type-label">Set C: Flow</div>
+                    <div class="signal-type-desc">Klinger Volume Oscillator crosses its signal line (up = long, down = short), gated by DLO strength falling • Volume-flow momentum, orthogonal to the price-based A/B</div>
                 </div>
             </div>
 
             <div class="signal-guide-metrics">
                 <div class="signal-guide-metrics-title">Key Metrics</div>
                 <div class="signal-guide-metrics-grid">
-                    <div class="metric-item"><span class="metric-label">Pulse</span> · Abnormal Acceleration (Velocity * Z-Score)</div>
-                    <div class="metric-item"><span class="metric-label">Δ Pulse</span> · Velocity change in Abnormal Acceleration</div>
-                    <div class="metric-item"><span class="metric-label">Conviction</span> · Signal magnitude + trend confluence</div>
-                    <div class="metric-item"><span class="metric-label">Δ Conv</span> · Rate of change in system conviction</div>
+                    <div class="metric-item"><span class="metric-label">DLO Strength</span> · Bounded directional oscillator (≈ −1…+1)</div>
+                    <div class="metric-item"><span class="metric-label">Pulse</span> · DLO oscillator velocity (±6)</div>
+                    <div class="metric-item"><span class="metric-label">DLO Cycle</span> · Double-smoothed line for turning-point detection</div>
+                    <div class="metric-item"><span class="metric-label">Conviction</span> · Oscillator level rescaled to ±100</div>
                 </div>
             </div>
         </div>
