@@ -61,9 +61,12 @@ DEFAULT_W = {
     # Penalty weights, per side
     'gamma_reversion_long':    20.0,   'gamma_reversion_short':    20.0,
     'gamma_divergence_long':   18.0,   'gamma_divergence_short':   18.0,
-    # Tier multipliers (signal-class quality) — direction-agnostic
+    # Tier multipliers (signal-class quality) — direction-agnostic.
+    # A=Ignition (confluence trend entry), B=Regime (structural flip, highest tier),
+    # C=Reversal (bold/early, lower default tier until calibration proves its edge).
     'tier_A_mult':              1.00,
     'tier_B_mult':              1.30,
+    'tier_C_mult':              0.80,
     'tier_default_mult':        0.90,
     # Path A · market-breadth regime tilt. A bounded per-side multiplier on the
     # final priority (NOT a cross-sectional factor — breadth is uniform within a
@@ -358,9 +361,11 @@ def _col(df: pd.DataFrame, name: str, default):
 def _tier_map(weights: dict) -> dict:
     a = weights['tier_A_mult']
     b = weights['tier_B_mult']
+    c = weights.get('tier_C_mult', weights['tier_default_mult'])
     return {
         'A: Long': a, 'A: Short': a,
         'B: Long': b, 'B: Short': b,
+        'C: Long': c, 'C: Short': c,
     }
 
 
@@ -393,7 +398,10 @@ def compute_priority(df: pd.DataFrame, weights=None) -> pd.DataFrame:
     F3   = conv / 20.0
     F4   = _col(df, 'Pulse', 0.0).astype(float)
     F5   = _col(df, 'HMM_Bull', 0.33).astype(float) - _col(df, 'HMM_Bear', 0.33).astype(float)
-    F7   = _col(df, 'LO', 0.0).astype(float) / 100.0   # liquidity range-extension (reversion)
+    # F7 — oscillator extremeness (reversion pressure). Replaces the removed LO liquidity
+    # range-extension: DLO_SMA is bounded ±1, deep+ = overbought (mean-revert down), deep− =
+    # oversold (mean-revert up). Same directional role F7 played, now from the DLO engine.
+    F7   = _col(df, 'DLO_SMA', 0.0).astype(float)
     # F8 = sector-relative breadth (Path C). Sector_Rel_Breadth ≈ [-0.2, +0.2];
     # scaled ×F8_BREADTH_SCALE to ~[-1, +1] so its weight is comparable to the
     # other factors. 0 when no sector map (non-India / thin group) → inert.
@@ -519,14 +527,15 @@ def compute_priority(df: pd.DataFrame, weights=None) -> pd.DataFrame:
 # Non-fired rows (Zone labels / '-') get NaN — they are not signals.
 # ──────────────────────────────────────────────────────────────────────
 _SIG_DIR = {
-    'A: Long': 1,  'B: Long': 1,
-    'A: Short': -1, 'B: Short': -1,
+    'A: Long': 1,  'B: Long': 1,  'C: Long': 1,
+    'A: Short': -1, 'B: Short': -1, 'C: Short': -1,
 }
 
 # Map SignalType → set letter, for per-set calibrated models (Layer 2).
 _SIG_SET = {
     'A: Long': 'A', 'A: Short': 'A',
     'B: Long': 'B', 'B: Short': 'B',
+    'C: Long': 'C', 'C: Short': 'C',
 }
 
 # Directional feature names for the signal-confidence logistic (Layer 2).
@@ -540,11 +549,13 @@ CONF_FEATURES = [
     'reversion',    # directional reversion-exhaustion risk [0,1]
     'div_contra',   # 1.0 when an opposite-side divergence contradicts the signal
     'mom_align',    # dir·F1_PriceMom
-    'conv_align',   # dir·Conviction/50
-    'pulse_align',  # dir·Pulse
-    'liq_support',  # dir·Liquidity_Osc/100 — microstructure liquidity backing the move
-    'liq_exhaust',  # LO range-extension against the signal [0,1] — liquidity exhaustion risk
+    'conv_align',   # dir·Conviction/50 (DLO oscillator level, ±100)
+    'pulse_align',  # dir·Pulse (DLO oscillator velocity)
+    'osc_support',  # dir·DLO_Strength — the oscillator itself backing the signal's side
+    'cycle_align',  # dir·sign(DLO_Cycle slope) — smoothed cycle turning with the signal [−1,1]
     'breadth_align',# dir·(Universe_Breadth − 0.45) — market breadth backing the signal (Path B)
+    'vp_confluence',# volume-profile location confluence, signed by direction (auction-theory edge)
+    'vol_burst',    # 1.0 when the bar's volume cleared the VWCB "bold bar" threshold (real participation)
 ]
 
 
@@ -596,14 +607,16 @@ def signal_conf_features(df: pd.DataFrame):
     conv_align = d * conv / 50.0
     pulse_align = d * pulse
 
-    # ── Liquidity (LO) — two faces ──
-    # Support: signed microstructure liquidity in the signal's direction (+ = backed).
-    liq_osc = _col(df, 'Liquidity_Osc', 0.0).astype(float).fillna(0.0).to_numpy()
-    liq_support = d * liq_osc / 100.0
-    # Exhaustion: how far the LO range-stochastic is stretched into the signal's
-    # direction (a fresh long into an already-topped LO = chasing). [0,1].
-    lo = _col(df, 'LO', 0.0).astype(float).fillna(0.0).to_numpy()
-    liq_exhaust = np.clip(d * lo / 100.0, 0.0, 1.0)
+    # ── DLO oscillator support (replaces the removed liquidity faces) ──
+    # osc_support: the bounded oscillator itself, signed by direction. A long fired
+    # while DLO_Strength is positive (bulls in control) scores positive backing.
+    osc_strength = _col(df, 'DLO_Strength', 0.0).astype(float).fillna(0.0).to_numpy()
+    osc_support = d * osc_strength
+    # cycle_align: is the smoothed cycle slope turning WITH the signal? sign of the
+    # 1-bar cycle change, signed by direction → +1 aligned, −1 fighting the cycle.
+    cycle = _col(df, 'DLO_Cycle', 0.0).astype(float).fillna(0.0).to_numpy()
+    cycle_slope = np.sign(np.diff(cycle, prepend=cycle[:1] if len(cycle) else 0.0))
+    cycle_align = d * cycle_slope
 
     # ── Breadth (Path B) — market-wide tape support, signed by direction ──
     # dir·(Universe_Breadth − 0.45): a long fired while the broad market is
@@ -613,10 +626,35 @@ def signal_conf_features(df: pd.DataFrame):
     breadth = _col(df, 'Universe_Breadth', 0.45).astype(float).fillna(0.45).to_numpy()
     breadth_align = d * (breadth - 0.45)
 
+    # ── Volume-profile confluence (auction-market location) — per signal archetype ──
+    # The DLO is location-blind; VP says WHERE price sits vs high-volume nodes. The
+    # "right" location differs by set, so the feature is computed per set letter:
+    #   A·Ignition — momentum: wants ACCEPTANCE past fair value in the trade direction.
+    #     dir·distance-to-POC (long above POC = bulls accepted).
+    #   C·Flow (Klinger) — ALSO momentum (volume confirmation), so same acceptance
+    #     logic as A: volume pushing price through value scores positive.
+    #   B·Regime — a turn at the value-area edge: -dir·VP_Pos (long at/below VAL, short
+    #     at/above VAH), amplified when actually at the edge.
+    vp_pos     = _col(df, 'VP_Pos', 0.0).astype(float).fillna(0.0).to_numpy()
+    vp_dist    = np.clip(_col(df, 'VP_Dist_POC', 0.0).astype(float).fillna(0.0).to_numpy() / 2.0, -1.5, 1.5)
+    at_val     = _col(df, 'VP_At_VAL', False).astype(bool).to_numpy().astype(float)
+    at_vah     = _col(df, 'VP_At_VAH', False).astype(bool).to_numpy().astype(float)
+    edge_bonus = np.where(d > 0, at_val, np.where(d < 0, at_vah, 0.0))   # at the right edge for the side
+    vp_edge    = -d * vp_pos + 0.5 * edge_bonus                          # turn-style confluence (B)
+    vp_accept  =  d * vp_dist                                            # momentum acceptance (A, C)
+    sl = set_letter
+    vp_confluence = np.where(sl == 'A', vp_accept,
+                    np.where(sl == 'B', vp_edge,
+                    np.where(sl == 'C', vp_accept, 0.0))).astype(float)
+    vp_confluence = np.nan_to_num(vp_confluence, nan=0.0)
+
+    vol_burst = _col(df, 'VP_Vol_Burst', False).astype(bool).to_numpy().astype(float)
+
     X = np.column_stack([
         hmm_align, vr_w, regime_conf, change_point,
         reversion, div_contra, mom_align, conv_align, pulse_align,
-        liq_support, liq_exhaust, breadth_align,
+        osc_support, cycle_align, breadth_align,
+        vp_confluence, vol_burst,
     ])
     return X, dir_sign, set_letter, fired
 
@@ -723,9 +761,11 @@ def compute_signal_confidence(df: pd.DataFrame, weights=None, conf_model='__acti
     factor_lean = d_sign * (0.5 * f1 + 0.5 * conv / 50.0)
     local01 = 0.5 * (np.tanh(factor_lean) + 1.0)
 
-    # ── Evidence 3: liquidity support — is the microstructure backing the move? ──
-    liq_osc = _col(df, 'Liquidity_Osc', 0.0).astype(float).fillna(0.0).to_numpy()
-    liq01 = 0.5 * (np.tanh(d_sign * liq_osc / 50.0) + 1.0)   # [0,1], 0.5 = neutral
+    # ── Evidence 3: oscillator support — is the DLO backing the move? ──
+    # Replaces the removed microstructure-liquidity evidence: the bounded DLO_Strength
+    # (±1) signed by direction → [0,1], 0.5 = neutral.
+    osc_strength = _col(df, 'DLO_Strength', 0.0).astype(float).fillna(0.0).to_numpy()
+    liq01 = 0.5 * (np.tanh(d_sign * osc_strength * 2.0) + 1.0)   # [0,1], 0.5 = neutral
 
     evidence = 0.40 * align01 + 0.35 * local01 + 0.25 * liq01
 
@@ -760,13 +800,28 @@ def compute_signal_confidence(df: pd.DataFrame, weights=None, conf_model='__acti
                  np.where(is_short, bull_div & (conv < -30), False)).astype(float)
     div_mult   = 1.0 - 0.5 * div_contra
 
-    # ── Trust 6: liquidity exhaustion — LO stretched into the signal's direction ──
-    lo = _col(df, 'LO', 0.0).astype(float).fillna(0.0)
+    # ── Trust 6: oscillator exhaustion — DLO stretched into the signal's direction ──
+    # Replaces LO range-extension: a fresh long while DLO_SMA is already deep positive
+    # (overbought) = chasing. d·DLO_SMA clipped to [0,1].
+    dlo_sma = _col(df, 'DLO_SMA', 0.0).astype(float).fillna(0.0)
     d_arr = np.where(is_long, 1.0, np.where(is_short, -1.0, 0.0))
-    liq_exhaust = np.clip(d_arr * lo.to_numpy() / 100.0, 0.0, 1.0)
+    liq_exhaust = np.clip(d_arr * dlo_sma.to_numpy(), 0.0, 1.0)
     liq_mult = 1.0 - 0.4 * liq_exhaust
 
-    trust = vq * cf * cp_mult * rev_mult * div_mult * liq_mult
+    # ── Trust 7: volume-profile location (auction-market confluence) ──
+    # Soft multiplier in [0.8, 1.2]: a signal at the right volume-structure location
+    # for its archetype (A/C momentum accepted past POC, B turn at VA edge) is trusted
+    # more; one fighting structure (e.g. a long chasing under VAH into supply) less.
+    # Mild by design — VP levels are probabilistic S/R, so the optimizer's calibrated
+    # vp_confluence feature does the heavy lifting; this just nudges the heuristic.
+    vp_pos_h  = _col(df, 'VP_Pos', 0.0).astype(float).fillna(0.0).to_numpy()
+    vp_dist_h = np.clip(_col(df, 'VP_Dist_POC', 0.0).astype(float).fillna(0.0).to_numpy() / 2.0, -1.0, 1.0)
+    sl_h = sig.map(_SIG_SET).to_numpy(dtype=object)
+    vp_conf_h = np.where((sl_h == 'A') | (sl_h == 'C'), d_arr * vp_dist_h,  # A/C momentum: accepted past POC
+                np.where(sl_h == 'B', -d_arr * vp_pos_h, 0.0))             # B turn: at edge
+    vp_mult = np.clip(1.0 + 0.2 * np.nan_to_num(vp_conf_h, nan=0.0), 0.8, 1.2)
+
+    trust = vq * cf * cp_mult * rev_mult * div_mult * liq_mult * vp_mult
     score = np.clip(evidence * trust, 0.0, 1.0)
 
     # Layer 2: where a calibrated model covers the signal's set, use its

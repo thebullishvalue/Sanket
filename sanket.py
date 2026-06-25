@@ -656,7 +656,7 @@ def _render_aging_reference():
     st.markdown(
         '<div style="font-family:var(--data); font-size:0.70rem; color:var(--ink-tertiary); '
         'padding:0.1rem 0 0.7rem 0; line-height:1.5;">'
-        'On the Momentum / Crossover tables, each aged signal (1d / 2d / … ago) carries '
+        'On the Ignition / Regime / Reversal tables, each aged signal (1d / 2d / … ago) carries '
         'two <b>orthogonal</b> reads, both scored <b>at the bar it fired</b>. '
         '<b style="color:var(--ink-secondary);">Context</b> asks whether the signal is still good; '
         '<b style="color:var(--ink-secondary);">Entry</b> asks whether the move has already run.</div>',
@@ -1758,92 +1758,17 @@ def calculate_trend_count(series, length):
 
 
 
-@_njit
-def _ehlers_hpf(src, n, window):
-    """2-pole high-pass IIR (Pine f_hpf). JIT, bit-identical to the Python loop."""
-    w  = 1.414 * np.pi / window
-    q  = np.exp(-w)
-    c1 = 2.0 * q * np.cos(w)
-    c2 = q * q
-    a0 = 0.25 * (1.0 + c1 + c2)
-    hp = np.zeros(n)
-    for t in range(4, n):
-        hp[t] = a0 * (src[t] - 2.0 * src[t-1] + src[t-2]) + c1 * hp[t-1] - c2 * hp[t-2]
-    return hp
-
-
-@_njit
-def _ehlers_bpf(src, dc, n, bw):
-    """2-pole band-pass IIR with per-bar centre period (Pine f_bpf). JIT, bit-identical."""
-    bp = np.zeros(n)
-    for t in range(3, n):
-        period = max(dc[t], 2.0)
-        w0  = 2.0 * np.pi / period
-        l1  = np.cos(w0)
-        g1  = np.cos(w0 * bw)
-        inv = 1.0 / g1
-        s1  = inv - np.sqrt(max(inv * inv - 1.0, 0.0))
-        bp[t] = 0.5 * (1.0 - s1) * (src[t] - src[t-2]) + l1 * (1.0 + s1) * bp[t-1] - s1 * bp[t-2]
-    return bp
-
-
-def compute_autotune(close: pd.Series, window: int = 20, bw: float = 0.25) -> pd.Series:
-    """Ehlers AutoTune band-pass filter (TASC 2026.05) — faithful port of wrci.pine §2.
-
-    A band-pass filter whose centre period auto-tracks the dominant cycle: the lag
-    with the lowest rolling autocorrelation of a 2-pole high-pass-filtered series.
-    Returns the tuned band-pass ("AT Filter"): > 0 cycle-positive, < 0 cycle-negative.
-
-    Mirrors f_hpf / f_autotune / f_bpf exactly:
-      • high-pass: 2-pole IIR, cutoff = window (constant coeffs).
-      • dominant cycle: argmin over lags 1..window of the Pearson autocorrelation of
-        the high-pass series across a rolling `window`, ×2, smoothed with a ±2/bar clamp.
-      • band-pass: 2-pole IIR whose centre period = the dominant cycle (per bar).
-    """
-    src = close.astype(float).to_numpy()
-    n = src.size
-    if n == 0:
-        return pd.Series(dtype=float, index=close.index)
-
-    # ── 2-pole high-pass (constant coeffs, cutoff = window) — Pine f_hpf ──
-    hp = _ehlers_hpf(src, n, float(window))
-    hp_s = pd.Series(hp)
-
-    # ── Rolling autocorrelation → dominant cycle (vectorised over lags) ──
-    sx     = hp_s.rolling(window).sum().to_numpy()
-    sxx    = (hp_s * hp_s).rolling(window).sum().to_numpy()
-    vx     = window * sxx - sx * sx                       # window·Σx² − (Σx)²
-    corr   = np.full((n, window), 1.0)
-    for i in range(window):
-        lag = i + 1
-        sxy = (hp_s * hp_s.shift(lag)).rolling(window).sum().to_numpy()   # Σ x_t·x_{t-lag}
-        sy  = np.roll(sx,  lag); sy[:lag]  = np.nan        # Σx as of `lag` bars ago
-        syy = np.roll(sxx, lag); syy[:lag] = np.nan
-        cov   = window * sxy - sx * sy
-        vy    = window * syy - sy * sy
-        denom = vx * vy
-        with np.errstate(invalid='ignore', divide='ignore'):
-            c = np.where(denom > 0, cov / np.sqrt(denom), 1.0)
-        corr[:, i] = np.nan_to_num(c, nan=1.0)
-
-    dc_raw = (np.argmin(corr, axis=1) + 1) * 2             # dominant cycle (≥ 2)
-    # ±2/bar smoothing clamp — Pine: dc := clamp(dc, dc[1]-2, dc[1]+2), first bar = raw.
-    dc = np.empty(n)
-    prev = float(dc_raw[0])
-    for t in range(n):
-        d = min(max(float(dc_raw[t]), prev - 2.0), prev + 2.0)
-        dc[t] = d
-        prev = d
-
-    # ── 2-pole band-pass, per-bar centre period = dc — Pine f_bpf ──
-    bp = _ehlers_bpf(src, dc, n, float(bw))
-
-    return pd.Series(bp, index=close.index)
-
 
 def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40,
                       wt2_len=20, wt2_type="ALMA",
                       hci_thres=0.25, hci_look=102, hci_sig_len=53, hci_sig_type="SMA", hci_roc_len=15):
+    """Primary per-instrument analysis. The legacy WRCI / HCI / AT-Filter stack has been
+    REMOVED — the Directional Logistic Oscillator (run_dlo_analysis) is now the sole
+    engine. Legacy column names (Unified_Osc / WT1 / Signal_Line / Conviction / Pulse /
+    Norm_Trend …) are retained as a thin compatibility surface so the screener, scoring
+    and UI keep working; they are now backed by DLO-derived values, not the old engines.
+    Extra keyword args (n1/n2/wt2_*/hci_*) are accepted for call-site compatibility and
+    ignored. The oscillator is scaled ×100 onto the historical ±100 display range."""
     reg_len = max(reg_len, 2)
     # Auto-correct inverted OB levels (obLevel1 must be the stronger/higher bound)
     if obLevel1 < obLevel2:
@@ -1852,262 +1777,443 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     if osLevel1 > osLevel2:
         osLevel1, osLevel2 = osLevel2, osLevel1
 
-    hlc3 = (df['High'] + df['Low'] + df['Close']) / 3.0
     vol = df['Volume']
-    
-    # Institutional Volume Fallback: Historically used for VWMA-based indicators on indexes; 
-    # maintained for volume-trend calculations even after transition to EMA core.
-    if vol.sum() == 0:
-        vol = pd.Series(1.0, index=df.index)
-    
-    hma_p = calculate_hma(hlc3, 15)
-    hma_v = calculate_hma(vol, 15)
 
-    trend = calculate_trend_count(hma_p, reg_len)
-    voltrend_raw = calculate_trend_count(hma_v, reg_len)
+    # ── DIRECTIONAL LOGISTIC OSCILLATOR (the engine) ──────────────────────────
+    df = run_dlo_analysis(df)
+    osc      = df['DLO_Strength']          # bounded ≈ -1..+1
+    osc_sma  = df['DLO_SMA']
+    osc_ema  = df['DLO_EMA']
+    osc_100  = (osc * 100.0).clip(-100, 100)   # legacy ±100 display surface
 
-    coeff = 10.0 / reg_len
-    norm_trend = (trend * coeff) * 10.0
-    voltrend = voltrend_raw * coeff
+    # ── Legacy column compatibility surface (DLO-backed) ──────────────────────
+    # WT1 / Unified_Osc / Signal_Line — the oscillator and its smoothed line, ±100.
+    df['WT1']          = osc_100
+    df['Unified_Osc']  = osc_100
+    df['Signal_Line']  = (osc_ema * 100.0).clip(-100, 100)
+    # Norm_Trend — directional bias from the oscillator (kept on its old ~±100 scale).
+    df['Norm_Trend']   = osc_100
+    # Conviction — structural conviction proxy = oscillator × ADX-probability strength,
+    # rescaled to ±100. ADX is implicit in DLO_Strength already, so this tracks it.
+    df['Conviction']       = (osc * 100.0).clip(-100, 100)
+    df['Conviction_Delta'] = df['Conviction'].diff().fillna(0)
+    # Pulse — momentum of the oscillator (cycle velocity), on a compact ±6-ish scale.
+    df['Pulse']        = (osc.diff() * 50.0).clip(-6, 6).fillna(0)
+    df['Pulse_Delta']  = df['Pulse'].diff().fillna(0)
+    df['ZScore']       = df['DLO_NetDir'].fillna(0)
+    df['VolTrend']     = 0.0
+    # AT_Filter — removed as an engine; the display column now shows the DLO cycle line
+    # (its sign is the cycle phase, the same display role the old AT band-pass served).
+    df['AT_Filter']    = (df['DLO_Cycle'] * 100.0).fillna(0)
+    # HCI_* — Hemrek Count removed; retained as zeroed columns for display compatibility.
+    df['HCI_Index']    = 0.0
+    df['HCI_Signal']   = 0.0
+    # Liquidity_Osc / Liq_Vel / LO — liquidity engine removed; zeroed compat columns.
+    df['Liquidity_Osc'] = 0.0
+    df['Liq_Vel']       = 0.0
+    df['LO']            = 0.0
+    df['Recent_Travel'] = (osc_100 - osc_100.shift(5)).fillna(0)
+    df['WT1_5ago']      = osc_100.shift(5)
 
-    ap = hlc3
-    esa = calculate_ema(ap, n1)
-    d = calculate_ema((ap - esa).abs(), n1)
-    ci = (ap - esa) / np.maximum(0.015 * d, 1e-6)
-    tci = calculate_ema(ci, n2)
-
-    wt1 = tci
-    # WT2 signal line — configurable smoothing, ALMA(20) by default (parity with wrci.pine).
-    wt2 = f_smooth(wt1, wt2_len, wt2_type, volume=vol)
-
-    # ── LIQUIDITY SCORE ENGINE (parity with wrci.pine §3B) ───────────────────
-    # Microstructure blend → clipped z-score → sigmoid → ±100 oscillator, plus its
-    # velocity. Feeds the priority engine (F7 / liq_support); no longer gates signals.
-    liq_length, impact_window, zscore_clip = 20, 3, 3.0
-    liq_spread  = (df['High'] + df['Low']) / 2.0 - df['Open']
-    liq_vol_ma  = vol.rolling(liq_length).mean().replace(0, np.nan)
-    vwap_spread = (liq_spread * vol / liq_vol_ma).rolling(liq_length).mean()
-    price_impact = ((df['Close'] - df['Close'].shift(impact_window)) * vol / liq_vol_ma).rolling(liq_length).mean()
-    microstructure_raw = vwap_spread - price_impact
-    # f_zscore_clipped: standardize over liq_length, clip to ±zscore_clip
-    ms_mean = microstructure_raw.rolling(liq_length).mean()
-    ms_std  = microstructure_raw.rolling(liq_length).std(ddof=0).replace(0, np.nan)
-    ms_z    = ((microstructure_raw - ms_mean) / ms_std).clip(-zscore_clip, zscore_clip).fillna(0)
-    # f_sigmoid (scale 1.5) → [-1, 1], then ×100
-    microstructure_norm = 2.0 / (1.0 + np.exp(-ms_z / 1.5)) - 1.0
-    liquidity_oscillator = (microstructure_norm * 100.0).fillna(0)
-    liq_vel   = liquidity_oscillator.diff().fillna(0)
-    df['Liquidity_Osc'] = liquidity_oscillator
-    df['Liq_Vel']       = liq_vel
-
-    # LO — liquidity-adjusted stochastic (parity with wrci.pine §3B; feeds priority F7).
-    # (close + microstructure_raw) range-normalized to ±100. microstructure_raw == liquidity_score.
-    lo_src   = df['Close'] + microstructure_raw
-    lo_lo    = lo_src.rolling(liq_length).min()
-    lo_hi    = lo_src.rolling(liq_length).max()
-    df['LO'] = (200.0 * (lo_src - lo_lo) / (lo_hi - lo_lo).replace(0, np.nan) - 100.0).fillna(0)
-
-    # ── AT FILTER (Ehlers AutoTune · TASC 2026.05) — display metric, parity with wrci.pine §2/§3 ──
-    # Tuned band-pass over Close (gates no signals; shown in the screener tables). > 0 / < 0 = cycle phase.
-    df['AT_Filter'] = compute_autotune(df['Close'], window=20, bw=0.25)
-
-    # ── CONVICTION V3 ENGINE ────────────────────────────────────────────────
-    # Component 1: Trend Strength (structural, slow, magnitude-aware)
-    # Slope per bar = linreg endpoint(today) − linreg endpoint shifted back 1 bar on the same line.
-    # Mirrors Pine's `ta.linreg(src, len, 0) - ta.linreg(src, len, 1)`.
-    hma_close = calculate_hma(df['Close'], reg_len)
-    slope     = calculate_linreg(hma_close, reg_len, offset=0) \
-              - calculate_linreg(hma_close, reg_len, offset=1)
-    avg_price = df['Close'].rolling(reg_len).mean().replace(0, np.nan)
-    slope_pct = slope / avg_price
-    
+    # F1 · price momentum (5-bar log return, ATR-normalized) — orthogonal, kept for scoring.
     tr = calculate_true_range(df)
-    atr = tr.rolling(reg_len).mean()
-    atr_pct = (atr / avg_price).replace(0, np.nan)
-    
-    trend_str = (slope_pct / atr_pct).clip(-3, 3) / 3.0  # bounded [-1, +1]
-
-    # Component 2: Momentum Quality (tactical, medium)
-    wt_sep = wt1 - wt2
-    wt_sep_p = wt_sep / wt_sep.rolling(60).std(ddof=0).clip(lower=1e-6)
-    wt_sep_n = np.tanh(wt_sep_p / 2.0)  # bounded [-1, +1]
-
-    # Component 3: Participation (volume + RSI confluence)
-    vol_z = (df['Volume'] - df['Volume'].rolling(20).mean()) / df['Volume'].rolling(20).std(ddof=0).clip(lower=1e-6)
-    vol_n = np.tanh(vol_z / 2.0)
-    price_dir = np.sign(df['Close'] - df['Close'].shift(5))
-    participation = price_dir * vol_n.abs()  # [-1, +1]
-    
-    rsi_14 = compute_rsi(df['Close'], 14)
-    rsi_norm = (rsi_14 - 50) / 50.0  # [-1, +1]
-    flow = 0.7 * participation + 0.3 * rsi_norm
-
-    # Composite Conviction [−100, +100]
-    conviction = (100 * (0.50 * trend_str + 0.30 * wt_sep_n + 0.20 * flow)).fillna(0)
-
-    # ── PULSE V3 ENGINE ─────────────────────────────────────────────────────
-    # Use 3-bar velocity and 30-bar baseline (no overlap)
-    # Pine's nz(conviction[3], conviction) — substitute current value when shifted is NaN.
-    conv_lag3 = conviction.shift(3).fillna(conviction)
-    conv_vel_3 = conviction - conv_lag3
-    baseline_30 = conv_lag3.rolling(27).mean()
-    baseline_std = conv_lag3.rolling(27).std(ddof=0)
-
-    NOISE_FLOOR = 1.5
-    denom = np.maximum(baseline_std, NOISE_FLOOR)
-    conv_z_3 = ((conviction - baseline_30) / denom).clip(-5, 5)
-
-    vel_baseline = conv_vel_3.rolling(60).mean()
-    vel_std = conv_vel_3.rolling(60).std(ddof=0)
-    vel_z = ((conv_vel_3 - vel_baseline) / np.maximum(vel_std, NOISE_FLOOR)).clip(-5, 5)
-    
-    # Volume Factor [0.7, 1.0]
-    vol_align = np.tanh(vol_z / 2.0) * np.sign(conv_vel_3)
-    vol_factor = 0.85 + 0.15 * vol_align
-    
-    # Price-Action Factor [0.7, 1.0]
-    close_lag3 = df['Close'].shift(3).fillna(df['Close'])
-    ret_3 = (df['Close'] - close_lag3) / close_lag3.clip(lower=0.001)
-    atr_14 = tr.rolling(14).mean()
-    atr_pct_14 = atr_14 / df['Close'].clip(lower=0.001)
-    ret_z = (ret_3 / atr_pct_14).clip(-5, 5)
-    price_align = np.tanh(ret_z * np.sign(conv_vel_3) / 2.0)
-    price_factor = 0.85 + 0.15 * price_align
-    
-    # Roll-over Correction (Amplify sign misalignment)
-    sign_misalign = (np.sign(conviction) != np.sign(conv_vel_3)).astype(float)
-    turn_amplifier = 1.0 + 0.30 * sign_misalign * np.tanh(np.abs(conv_vel_3) / 8.0)
-    
-    # Composite Pulse [−6, +6]
-    pulse_core = np.sign(conv_vel_3) * np.sqrt((vel_z * conv_z_3).abs())
-    pulse = (pulse_core * vol_factor * price_factor * turn_amplifier).clip(-6, 6).fillna(0)
-
-    # ── F1 · PRICE MOMENTUM (orthogonal to oscillator) ─────────────────────────
-    # 5-bar log return, ATR-normalized. Direct measure of "is it moving?"
     close_lag5 = df['Close'].shift(5).fillna(df['Close'])
     log_ret_5  = np.log(df['Close'] / close_lag5)
-    atr_14_v4  = tr.rolling(14).mean()
-    atr_pct_v4 = atr_14_v4 / df['Close']
-    F1_PriceMom = (log_ret_5 / atr_pct_v4.clip(lower=1e-6)).clip(-5, 5).fillna(0)
+    atr_pct_v4 = (tr.rolling(14).mean() / df['Close']).replace(0, np.nan)
+    df['F1_PriceMom'] = (log_ret_5 / atr_pct_v4.clip(lower=1e-6)).clip(-5, 5).fillna(0)
+    # F2 · volume quality (signed vol z-score) — kept for scoring breadth.
+    vol_mean = df['Volume'].rolling(20).mean()
+    vol_std  = df['Volume'].rolling(20).std(ddof=0).clip(lower=1e-6)
+    vol_z_raw = (df['Volume'] - vol_mean) / vol_std
+    price_dir_5 = np.sign(df['Close'] - close_lag5)
+    df['F2_VolQual'] = (vol_z_raw * price_dir_5).rolling(5).mean().clip(-5, 5).fillna(0)
 
-    # ── F2 · VOLUME QUALITY (signed, smoothed) ─────────────────────────────────
-    # Volume z-score signed by price direction. Positive = real flow with the move.
-    vol_mean   = df['Volume'].rolling(20).mean()
-    vol_std    = df['Volume'].rolling(20).std(ddof=0).clip(lower=1e-6)
-    vol_z_raw  = (df['Volume'] - vol_mean) / vol_std
-    price_dir_5  = np.sign(df['Close'] - close_lag5)
-    F2_VolQual  = (vol_z_raw * price_dir_5).rolling(5).mean().clip(-5, 5).fillna(0)
+    # ── KLINGER VOLUME OSCILLATOR (port of klinger.pine) ──────────────────────
+    # Volume signed by HLC3 direction, then KVO = EMA(34) − EMA(55), signal = EMA(13).
+    # A volume-FLOW momentum read — orthogonal to the DLO (price) — used as the new
+    # Set C trigger (KVO/signal crossover) after the old DLO reversal-short underperformed.
+    hlc3 = (df['High'] + df['Low'] + df['Close']) / 3.0
+    sv   = np.where(hlc3.diff() >= 0, df['Volume'], -df['Volume'])
+    sv   = pd.Series(sv, index=df.index)
+    kvo  = calculate_ema(sv, 34) - calculate_ema(sv, 55)
+    kvo_sig = calculate_ema(kvo, 13)
+    df['KVO']        = kvo.fillna(0)
+    df['KVO_Signal'] = kvo_sig.fillna(0)
+    df['KVO_Hist']   = (kvo - kvo_sig).fillna(0)   # histogram (KVO above/below its signal)
 
-    # ── UPDATE DATAFRAME ────────────────────────────────────────────────────
-    df['F1_PriceMom']      = F1_PriceMom
-    df['F2_VolQual']       = F2_VolQual
-    df['Unified_Osc']      = wt1
-    df['Signal_Line']      = wt2
-    df['WT1']              = wt1
-    df['Norm_Trend']       = norm_trend
-    df['Conviction']       = conviction
-    df['Pulse']            = pulse
-    df['VolTrend']         = voltrend
-    df['WT1_5ago']         = wt1.shift(5)
-    df['Recent_Travel']    = wt1 - wt1.shift(5)
-    df['Conviction_Delta'] = conviction.diff().fillna(0)
-    df['Pulse_Delta']      = pulse.diff().fillna(0)
-    df['ZScore']           = conv_z_3.fillna(0)
-
-    # ── MA ALIGNMENT ────────────────────────────────────────────────────────
-    # Calculate alignment of 5 major EMAs (8, 21, 50, 100, 200)
+    # MA alignment (8/21/50/100/200) — independent of the old engine, retained.
     ma_counts = pd.Series(0, index=df.index)
     for ma in [8, 21, 50, 100, 200]:
         ema = df['Close'].ewm(span=ma, adjust=False).mean()
         ma_counts += (df['Close'] > ema).astype(int)
     df['MA_Alignment'] = ma_counts
 
-    # ── Step 3: Zone Depth Factor ─────────────────────────────────────────────
-    # Rewards depth of oscillator position (composite_line is WRCI WT1)
-    osc_val = wt1
-    
-    # Zone boundaries (consistent with WRCI script)
-    obLevel1, obLevel2 = 80, 40
+    # Zone-depth factors off the DLO oscillator (percentile-aware via ±0.5 reference).
+    df['Bull_Zone_Depth'] = ((-osc - 0.5) / 0.5).clip(0, 1).fillna(0)
+    df['Bear_Zone_Depth'] = (( osc - 0.5) / 0.5).clip(0, 1).fillna(0)
 
-    # Bullish zone depth: how deep into oversold are we? (OS = negative WT1)
-    bull_zone_depth = ((-osc_val - obLevel2) / (obLevel1 - obLevel2)).clip(0, 1).fillna(0)
-    # Bearish zone depth: how deep into overbought are we?
-    bear_zone_depth = ((osc_val - obLevel2) / (obLevel1 - obLevel2)).clip(0, 1).fillna(0)
+    # Zone label (off the DLO oscillator percentile zones — set inside compute_zone_condition).
+    df = compute_zone_condition(df)
 
-    df['Bull_Zone_Depth'] = bull_zone_depth
-    df['Bear_Zone_Depth'] = bear_zone_depth
+    # Volume-structure context (POC/VAH/VAL + location features). Orthogonal to the
+    # DLO — answers "WHERE is price vs high-volume nodes", which the oscillator can't.
+    df = run_volume_profile(df)
+    return df
 
-    # ── HEMREK COUNT ENGINE (HCI) — parity with wrci.pine §3E ──────────────────
-    # Signed run-length of directional momentum on Close: +1 step when the bar's %
-    # return clears +threshold, −1 when it clears −threshold, else hold. The streak is
-    # the cumulative sum of those ±1/0 steps (Pine's recursive count), detrended by its
-    # own SMA baseline into a zero-centred Count Index, then a configurable signal line.
-    # The screener uses the Close/% path — the Pine source selector's WRCI-internal
-    # options are chart-only sugar (the SMA-detrend cancels any history-length offset,
-    # so HCI_Index/Signal match Pine regardless of bar count). Drives Set A (Index/Signal
-    # cross) and Set B (ROC(3) of Signal zero-cross) — parity with count.pine §3.
-    close_prev = df['Close'].shift(1)
-    hci_step   = (df['Close'] - close_prev) / close_prev * 100.0
-    step_dir   = np.where(hci_step > hci_thres, 1.0, np.where(hci_step < -hci_thres, -1.0, 0.0))
-    hci_count  = pd.Series(np.cumsum(np.nan_to_num(step_dir, nan=0.0)), index=df.index)
-    hci_index  = hci_count - hci_count.rolling(hci_look).mean()
-    hci_signal = f_smooth(hci_index, hci_sig_len, hci_sig_type, volume=vol)
-    df['HCI_Index']  = hci_index.fillna(0)
-    df['HCI_Signal'] = hci_signal.fillna(0)
 
-    df = compute_signal_sets(df, wt1, wt2, obLevel1, obLevel2, osLevel1, osLevel2,
-                             hci_roc_len=hci_roc_len)
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  DIRECTIONAL LOGISTIC OSCILLATOR (DLO) ENGINE
+#  1:1 Python port of directional_logistic_oscillator.pine. This REPLACES the old
+#  WRCI/HCI/AT-filter stack as the sole signal engine. Pipeline:
+#     DMI(+DI/-DI/ADX) → per-component logistic probability (z-scored vs long mean)
+#     → net_dir·prob_adx·scale → tanh-bound → EMA → SMA/EMA/cycle smoothing
+#     → percentile extreme zones.
+#  Three orthogonal signals come straight off this oscillator (see compute_signal_sets).
+# ══════════════════════════════════════════════════════════════════════════════
+
+# DLO parameter defaults (mirror the Pine inputs; single source of truth).
+DLO_DI_LEN      = 14     # DMI length
+DLO_MEAN_LB     = 360    # long-term mean / percentile lookback
+DLO_SLOPE       = 0.18   # logistic steepness
+DLO_SMOOTH_LEN  = 3      # probability + strength EMA smoothing
+DLO_OSC_SCALE   = 2.5    # pre-tanh net-direction scale
+DLO_OSC_SMOOTH  = 7      # SMA/EMA smoothing of the oscillator
+
+
+def calculate_dmi(df: pd.DataFrame, di_len: int = 14):
+    """+DI, -DI, ADX via Wilder's method — matches Pine's ta.dmi(di_len, di_len).
+    +DM/-DM are RMA-smoothed, normalized by RMA(TrueRange); ADX = RMA of the DX."""
+    high, low = df['High'], df['Low']
+    up_move   = high.diff()
+    down_move = -low.diff()
+    plus_dm   = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm  = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    plus_dm   = pd.Series(plus_dm,  index=df.index)
+    minus_dm  = pd.Series(minus_dm, index=df.index)
+
+    tr      = calculate_true_range(df)
+    tr_rma  = calculate_rma(tr, di_len).replace(0, np.nan)
+    plus_di  = 100.0 * calculate_rma(plus_dm,  di_len) / tr_rma
+    minus_di = 100.0 * calculate_rma(minus_dm, di_len) / tr_rma
+
+    di_sum = (plus_di + minus_di).replace(0, np.nan)
+    dx     = 100.0 * (plus_di - minus_di).abs() / di_sum
+    adx    = calculate_rma(dx, di_len)
+    return plus_di.fillna(0), minus_di.fillna(0), adx.fillna(0)
+
+
+def _dlo_logistic_prob(series: pd.Series, mean_lb: int, slope: float, smooth_len: int) -> pd.Series:
+    """logistic_prob() port: z-score vs SMA mean, sigmoid, EMA-smooth → [0,1]."""
+    mean = calculate_sma(series, mean_lb)
+    z    = (series - mean) * slope
+    # Clamp the exponent to avoid math overflow on extreme z (Pine tolerates inf; we guard).
+    prob_raw = 1.0 / (1.0 + np.exp(-z.clip(-50, 50)))
+    return calculate_ema(prob_raw, smooth_len)
+
+
+def run_dlo_analysis(df: pd.DataFrame,
+                     di_len: int = DLO_DI_LEN, mean_lb: int = DLO_MEAN_LB,
+                     slope: float = DLO_SLOPE, smooth_len: int = DLO_SMOOTH_LEN,
+                     osc_scale: float = DLO_OSC_SCALE, osc_smooth_len: int = DLO_OSC_SMOOTH) -> pd.DataFrame:
+    """Compute the full Directional Logistic Oscillator surface and write the columns
+    the rest of the pipeline reads. Non-repainting by construction: every value is a
+    function of closed-bar data only (no lookahead).
+
+    Output columns:
+      DLO_Strength   — the bounded oscillator (≈ -1..+1), the primary 'Signal' surface
+      DLO_SMA/_EMA   — smoothed oscillator lines
+      DLO_Cycle      — double-smoothed line for turning-point detection
+      DLO_PlusDI/_MinusDI/_ADX, DLO_NetDir  — engine internals (feed scoring features)
+      DLO_Lo/Hi_SMA, DLO_Lo/Hi_EMA          — percentile extreme-zone thresholds
+    """
+    plus_di, minus_di, adx = calculate_dmi(df, di_len)
+
+    prob_plus  = _dlo_logistic_prob(plus_di,  mean_lb, slope, smooth_len)
+    prob_minus = _dlo_logistic_prob(minus_di, mean_lb, slope, smooth_len)
+    prob_adx   = _dlo_logistic_prob(adx,      mean_lb, slope, smooth_len)
+
+    net_dir        = prob_plus - prob_minus
+    strength_raw   = net_dir * prob_adx * osc_scale
+    strength_bound = np.tanh(strength_raw)                       # tanh() port
+    strength       = calculate_ema(strength_bound, smooth_len)
+
+    s_sma       = calculate_sma(strength, osc_smooth_len)
+    s_ema       = calculate_ema(strength, osc_smooth_len)
+    s_sma_cycle = calculate_ema(s_sma, int(np.ceil(osc_smooth_len / 2)))
+
+    # Percentile extreme-zone thresholds (rolling, min_periods relaxed so early bars
+    # still populate). 10/90 on the SMA line, 5/95 on the EMA line — same as Pine.
+    def _pct(series, q):
+        return series.rolling(mean_lb, min_periods=max(2, osc_smooth_len)).quantile(q / 100.0)
+
+    df['DLO_PlusDI']  = plus_di
+    df['DLO_MinusDI'] = minus_di
+    df['DLO_ADX']     = adx
+    df['DLO_NetDir']  = net_dir.fillna(0)
+    df['DLO_Strength'] = strength.fillna(0)
+    df['DLO_SMA']      = s_sma.fillna(0)
+    df['DLO_EMA']      = s_ema.fillna(0)
+    df['DLO_Cycle']    = s_sma_cycle.fillna(0)
+    df['DLO_Lo_SMA']   = _pct(s_sma, 10)
+    df['DLO_Hi_SMA']   = _pct(s_sma, 90)
+    df['DLO_Lo_EMA']   = _pct(s_ema, 5)
+    df['DLO_Hi_EMA']   = _pct(s_ema, 95)
+    return df
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  VOLUME PROFILE ENGINE  (Python port of volume_profile.pine — dgtrd)
+#  The Pine indicator only DRAWS boxes; here we port the math so the screener can
+#  use volume-structure LOCATION as signal context. For each bar we build a
+#  developing profile over a trailing window: bin volume into price buckets, find
+#  the POC (max-volume bucket), then expand a value area outward from the POC until
+#  it captures VA_PCT of total volume → VAH / VAL. These are the orthogonal piece
+#  the DLO is blind to (the DLO is pure directional momentum; it has no idea WHERE
+#  price sits relative to high-volume acceptance nodes).
+#  Used as SOFT confidence features (not hard gates) — auction-market levels are
+#  probabilistic S/R, so the optimizer learns their per-set worth from data.
+# ══════════════════════════════════════════════════════════════════════════════
+
+VP_WINDOW   = 60     # trailing bars in the developing profile (~ pivot-anchored span)
+VP_LEVELS   = 25     # price buckets (parity with volume_profile.pine profileLevels)
+VP_VA_PCT   = 0.68   # value-area volume fraction (parity with isValueArea default)
+VP_VOL_BURST = 1.618 # "bold bar": volume > this × its SMA (parity with VWCB upThesh)
+VP_VOL_MA    = 89    # volume SMA length for the burst flag (parity with vSMA)
+
+
+@_njit
+def _vp_levels_core(high, low, vol, n, window, levels, va_pct):
+    """Per-bar developing volume profile. Returns POC/VAH/VAL arrays.
+    For bar t, profiles bars (t-window+1 .. t): distributes each bar's volume across
+    the price buckets it spans (proportional overlap, matching the Pine box logic),
+    finds the max-volume bucket (POC), then grows the value area out from the POC,
+    always taking the heavier adjacent side, until va_pct of volume is enclosed."""
+    poc = np.full(n, np.nan)
+    vah = np.full(n, np.nan)
+    val = np.full(n, np.nan)
+    bins = np.zeros(levels)
+    for t in range(n):
+        start = t - window + 1
+        if start < 0:
+            continue
+        # window price range
+        hi = -1e30
+        lo = 1e30
+        for k in range(start, t + 1):
+            if high[k] > hi:
+                hi = high[k]
+            if low[k] < lo:
+                lo = low[k]
+        step = (hi - lo) / levels
+        if step <= 0:
+            continue
+        for b in range(levels):
+            bins[b] = 0.0
+        # distribute each bar's volume across the buckets its range overlaps
+        for k in range(start, t + 1):
+            bh = high[k]
+            bl = low[k]
+            v  = vol[k]
+            rng = bh - bl
+            for b in range(levels):
+                p_lo = lo + b * step
+                p_hi = p_lo + step
+                if bh >= p_lo and bl < p_hi:
+                    w = 1.0 if rng == 0.0 else step / rng
+                    bins[b] += v * w
+        # POC bucket
+        poc_b = 0
+        bmax = bins[0]
+        total = bins[0]
+        for b in range(1, levels):
+            total += bins[b]
+            if bins[b] > bmax:
+                bmax = bins[b]
+                poc_b = b
+        # grow value area outward from POC
+        target = total * va_pct
+        acc = bins[poc_b]
+        above = poc_b
+        below = poc_b
+        while acc < target:
+            if below == 0 and above == levels - 1:
+                break
+            v_above = bins[above + 1] if above < levels - 1 else 0.0
+            v_below = bins[below - 1] if below > 0 else 0.0
+            if v_above == 0.0 and v_below == 0.0:
+                break
+            if v_above >= v_below:
+                acc += v_above
+                above += 1
+            else:
+                acc += v_below
+                below -= 1
+        poc[t] = lo + (poc_b + 0.5) * step
+        vah[t] = lo + (above + 1.0) * step
+        val[t] = lo + below * step
+    return poc, vah, val
+
+
+def run_volume_profile(df: pd.DataFrame, window: int = VP_WINDOW,
+                       levels: int = VP_LEVELS, va_pct: float = VP_VA_PCT) -> pd.DataFrame:
+    """Compute developing POC/VAH/VAL + derived location features. Non-repainting:
+    bar t only profiles bars ≤ t. Writes:
+      VP_POC / VP_VAH / VP_VAL          — the volume-structure levels
+      VP_Pos        — where Close sits in the value area: -1 = at/below VAL,
+                       +1 = at/above VAH, 0 = at POC (linear, clipped ±1.5)
+      VP_Dist_POC   — signed distance Close→POC in ATR units (+ = above fair value)
+      VP_At_VAL / VP_At_VAH — bool: Close within ~0.25·VA-width of the edge
+      VP_Vol_Burst  — bool: bar volume > VP_VOL_BURST × its SMA (real participation)
+    """
+    n = len(df)
+    high = df['High'].to_numpy(dtype=np.float64)
+    low  = df['Low'].to_numpy(dtype=np.float64)
+    close = df['Close'].to_numpy(dtype=np.float64)
+    vol  = np.nan_to_num(df['Volume'].to_numpy(dtype=np.float64), nan=0.0)
+
+    poc, vah, val = _vp_levels_core(high, low, vol, n, int(window), int(levels), float(va_pct))
+    poc = pd.Series(poc, index=df.index)
+    vah = pd.Series(vah, index=df.index)
+    val = pd.Series(val, index=df.index)
+
+    df['VP_POC'] = poc
+    df['VP_VAH'] = vah
+    df['VP_VAL'] = val
+
+    va_width = (vah - val).replace(0, np.nan)
+    c = df['Close']
+    # Position within value area: -1 at VAL, +1 at VAH, 0 at the VA midpoint.
+    df['VP_Pos'] = (2.0 * (c - val) / va_width - 1.0).clip(-1.5, 1.5).fillna(0)
+    # Distance to POC in ATR units (orthogonal scale, asset-agnostic).
+    tr = calculate_true_range(df)
+    atr = tr.rolling(14).mean().replace(0, np.nan)
+    df['VP_Dist_POC'] = ((c - poc) / atr).clip(-5, 5).fillna(0)
+    # At-edge flags (within 25% of VA-width of the respective boundary).
+    edge = 0.25 * va_width
+    df['VP_At_VAL'] = ((c <= val + edge) & (c >= val - edge)).fillna(False)
+    df['VP_At_VAH'] = ((c >= vah - edge) & (c <= vah + edge)).fillna(False)
+    # Volume burst (VWCB "bold bar" rule).
+    vsma = df['Volume'].rolling(VP_VOL_MA).mean().replace(0, np.nan)
+    df['VP_Vol_Burst'] = (df['Volume'] > vsma * VP_VOL_BURST).fillna(False)
+    return df
+
+
+# ── Signal-set trigger thresholds (single source of truth, mirrored in the Pine layer) ──
+# The three sets are the three native DLO signals. These constants define the only
+# tunable knobs that aren't the DLO params themselves; the optimizer does NOT search
+# them (they define what a signal *is*, not how it's weighted).
+SIG_ZERO_EPS = 0.0     # Set A: oscillator zero-line cross threshold (strict 0-cross)
+
+
+def compute_zone_condition(df: pd.DataFrame, *_ignored, **__ignored) -> pd.DataFrame:
+    """Zone label off the DLO oscillator. The oscillator is bounded ≈ -1..+1, so the
+    extreme zones are defined by its percentile thresholds (DLO_Hi/Lo_SMA) with the
+    ±0.5 reference lines marking 'Extreme'. Predicate order is load-bearing — the
+    stricter (Extreme) bound precedes the looser one; np.select returns the first match.
+
+    Signature keeps *args/**kwargs so legacy callers passing (wt1, obLevel1, ...) still
+    work — those positional args are ignored now that zones read DLO columns directly."""
+    osc = (df['DLO_SMA'].astype(float) if 'DLO_SMA' in df.columns
+           else pd.Series(0.0, index=df.index))
+    hi  = (df['DLO_Hi_SMA'].astype(float) if 'DLO_Hi_SMA' in df.columns
+           else pd.Series(np.inf, index=df.index)).fillna(np.inf)
+    lo  = (df['DLO_Lo_SMA'].astype(float) if 'DLO_Lo_SMA' in df.columns
+           else pd.Series(-np.inf, index=df.index)).fillna(-np.inf)
+    df['Condition'] = np.select(
+        [osc > 0.5, osc > hi, osc < -0.5, osc < lo],
+        ['OB Extreme', 'OB', 'OS Extreme', 'OS'],
+        default='Neutral'
+    )
     return df
 
 
 def compute_signal_sets(df: pd.DataFrame,
-                        wt1: pd.Series, wt2: pd.Series,
-                        obLevel1: float, obLevel2: float,
-                        osLevel1: float, osLevel2: float,
-                        hci_roc_len: int = 15) -> pd.DataFrame:
-    """Compute the two signal sets and the zone Condition (parity with count.pine §3).
+                        obLevel1: float = 80, obLevel2: float = 40,
+                        osLevel1: float = -80, osLevel2: float = -40) -> pd.DataFrame:
+    """The three signal sets are the three native Directional Logistic Oscillator
+    signals. They are orthogonal by construction — each reads a DIFFERENT facet of the
+    same oscillator (level cross vs cycle slope vs extreme-zone exit), so co-firing is
+    genuine confluence. MUST run AFTER run_dlo_analysis (needs the DLO_* columns).
 
-    Both sets trigger directly off the Hemrek Count Index (HCI) engine — they are the
-    raw count.pine crosses with no confirmation gates (no Δ-polarity, liquidity, or
-    HCI trend gate):
+      Set A · IGNITION (zero-line cross) — momentum/trend regime shift.
+         Long: DLO_Strength crosses ABOVE 0. Short: crosses BELOW 0.
 
-    Set A (Momentum):  Count Index crossing its Count Signal line — UP = long,
-                       DOWN = short (count.pine setA_buy / setA_sell).
-    Set B (Crossover): ROC(3) of the Count Signal crossing zero — crossing DOWN
-                       through zero = long, crossing UP = short (count.pine
-                       setB_buy = ta.crossunder(roc, 0), setB_sell = ta.crossover(roc, 0)).
+      Set B · REGIME (cycle reversion) — the smoothed oscillator cycle turning.
+         Long: DLO bar color transitions dn_strong → dn_weak (deep-bearish strength
+               rising back above its own EMA = downside exhausting) AND Klinger
+               KVO > signal (volume flow turning up).
+         Short: mirror — up_strong → up_weak (bullish strength fading below its EMA)
+               AND Klinger KVO < signal (flow turning down).
 
-    Writes long_cond/short_cond (A), *_comp (B), and Condition.
+      Set C · FLOW (volume momentum) — Klinger KVO crosses its signal, gated by strength.
+         Long: KVO (EMA34−EMA55 of HLC3-signed volume) crosses UP through EMA13 signal.
+         Short: KVO crosses DOWN through its signal. BOTH gated by DLO Market Strength
+         FALLING (prev > current) on the trigger bar. Reads volume flow, not price.
+
+    Writes long_cond/short_cond (A), *_comp (B = "comp" legacy alias), long_cond_c/
+    short_cond_c (C), and the zone Condition. Non-repainting: every trigger is a
+    closed-bar crossover of closed-bar series.
     """
-    hci_index  = df['HCI_Index']
-    hci_signal = df['HCI_Signal']
+    F = lambda name, d=0.0: (df[name].astype(float) if name in df.columns
+                             else pd.Series(d, index=df.index))
 
-    # Set A: Momentum — Count Index crossing its Count Signal line (count.pine setA).
-    # cross_up → long, cross_down → short.
-    momentum_long  = (hci_index > hci_signal) & (hci_index.shift(1) <= hci_signal.shift(1))
-    momentum_short = (hci_index < hci_signal) & (hci_index.shift(1) >= hci_signal.shift(1))
+    strength = F('DLO_Strength')
+    s_ema    = F('DLO_EMA')
+    cycle    = F('DLO_Cycle')
+    kvo      = F('KVO')
+    kvo_sig  = F('KVO_Signal')
 
-    # Set B: Crossover — ROC(hci_roc_len) of the Count Signal crossing zero (count.pine setB).
-    # ta.roc(src, n) = 100*(src − src[n]) / src[n]. Buy when ROC crosses BELOW zero
-    # (crossunder), sell when it crosses ABOVE zero (crossover).
-    prev3      = hci_signal.shift(hci_roc_len)
-    roc_signal = (hci_signal - prev3) / prev3.replace(0, np.nan) * 100.0
-    crossover_long  = (roc_signal < 0.0) & (roc_signal.shift(1) >= 0.0)
-    crossover_short = (roc_signal > 0.0) & (roc_signal.shift(1) <= 0.0)
+    def _cross_up(a, b):
+        return (a > b) & (a.shift(1) <= b.shift(1))
 
-    df['long_cond']       = momentum_long.fillna(False)
-    df['short_cond']      = momentum_short.fillna(False)
-    df['long_cond_comp']  = crossover_long.fillna(False)
-    df['short_cond_comp'] = crossover_short.fillna(False)
+    def _cross_dn(a, b):
+        return (a < b) & (a.shift(1) >= b.shift(1))
 
-    # Zone label. Predicate order is load-bearing: stricter (Extreme) bound
-    # must precede looser bound — np.select returns the first match.
-    df['Condition'] = np.select(
-        [wt1 > obLevel1, wt1 > obLevel2, wt1 < osLevel1, wt1 < osLevel2],
-        ['OB Extreme', 'OB', 'OS Extreme', 'OS'],
-        default='Neutral'
-    )
+    # DLO bar-color buckets (parity with directional_logistic_oscillator.pine strength_col):
+    #   dn_strong = strength < 0 AND strength <  s_ema  (deep bearish, falling below its EMA)
+    #   dn_weak   = strength < 0 AND strength >= s_ema  (bearish but recovering above its EMA)
+    #   up_strong = strength > 0 AND strength >  s_ema  (deep bullish)
+    #   up_weak   = strength > 0 AND strength <= s_ema  (bullish but fading below its EMA)
+    dn_strong = (strength < 0) & (strength <  s_ema)
+    dn_weak   = (strength < 0) & (strength >= s_ema)
+    up_strong = (strength > 0) & (strength >  s_ema)
+    up_weak   = (strength > 0) & (strength <= s_ema)
+
+    kvo_above = kvo > kvo_sig      # Klinger flow bullish
+    kvo_below = kvo < kvo_sig      # Klinger flow bearish
+
+    # ── SET A · IGNITION — zero-line cross ────────────────────────────────────
+    z = pd.Series(SIG_ZERO_EPS, index=df.index)
+    a_long  = _cross_up(strength, z)
+    a_short = _cross_dn(strength, z)
+
+    # ── SET B · REGIME — DLO bar-color regime flip, confirmed by Klinger flow ──
+    # Long:  bar transitions dn_strong → dn_weak (deep-bearish strength rising back
+    #        above its EMA = downside exhausting) AND Klinger KVO > signal (flow up).
+    # Short: mirror — up_strong → up_weak (bullish strength fading below its EMA)
+    #        AND Klinger KVO < signal (flow down).
+    b_long  = dn_strong.shift(1).fillna(False) & dn_weak & kvo_above
+    b_short = up_strong.shift(1).fillna(False) & up_weak & kvo_below
+
+    # ── SET C · FLOW — Klinger crossover, gated by DLO strength rolling over ──
+    # Klinger KVO/signal cross (volume-flow momentum), with an added gate: the DLO
+    # Market Strength must be FALLING (previous > current) on the trigger bar — for
+    # BOTH directions, per spec. Filters crosses that fire while strength is still
+    # pushing the other way.
+    strength_falling = strength.shift(1) > strength
+    c_long  = _cross_up(kvo, kvo_sig) & strength_falling
+    c_short = _cross_dn(kvo, kvo_sig) & strength_falling
+
+    df['long_cond']        = a_long.fillna(False)
+    df['short_cond']       = a_short.fillna(False)
+    df['long_cond_comp']   = b_long.fillna(False)
+    df['short_cond_comp']  = b_short.fillna(False)
+    df['long_cond_c']      = c_long.fillna(False)
+    df['short_cond_c']     = c_short.fillna(False)
+
+    if 'Condition' not in df.columns:
+        df = compute_zone_condition(df)
 
     return df
 
@@ -2376,13 +2482,15 @@ def run_regime_analysis(df):
 def _classify_signal_type(row) -> str:
     """Return priority-ordered signal type for a single bar row (pandas Series).
 
-    Priority: B (crossover) > A (momentum) > Zone.
+    Priority: B (Regime) > A (Ignition) > C (Reversal) > Zone.
     Matches the vectorised np.select used in the timeseries harvest path.
     """
     if row.get('long_cond_comp'):  return "B: Long"
     if row.get('short_cond_comp'): return "B: Short"
     if row.get('long_cond'):       return "A: Long"
     if row.get('short_cond'):      return "A: Short"
+    if row.get('long_cond_c'):     return "C: Long"
+    if row.get('short_cond_c'):    return "C: Short"
     cond = row.get('Condition', 'Neutral')
     return cond if cond != 'Neutral' else '-'
 
@@ -2489,10 +2597,10 @@ def render_landing_page():
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
                 SIGNAL STRUCTURE
             </h3>
-            <p>Hierarchical signal generation (Sets A-B) contextualized by Pulse and structural trend regime alignment.</p>
+            <p>Hierarchical signal generation (Sets A-B-C) from the Directional Logistic Oscillator, ranked by calibrated Intelligence priority.</p>
             <div class='spec'>
-                <span>Sets:</span> Momentum / Crossover<br>
-                <span>Ranking:</span> Sorted by Abnormal Acceleration<br>
+                <span>Sets:</span> Ignition / Regime / Flow<br>
+                <span>Ranking:</span> Sorted by Directional Priority<br>
                 <span>Long/Short:</span> Dual-sided directional logic<br>
                 <span>Timing:</span> Age-weighted signal aging
             </div>
@@ -2941,6 +3049,11 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 df = run_regime_analysis(df)        # adds HMM_Bull/Bear, Vol_Regime, Change_Point, Regime_Confidence
                 df = calculate_divergences(df, timeframe=timeframe)      # adds Bullish_Div, Bearish_Div
 
+            # A/B/C signal triggers — consume Conviction/Pulse (full_analysis) + HMM
+            # (regime) + divergence, so they run here, after all three engines (and on
+            # cache hits too, since the cached frame predates this step).
+            df = compute_signal_sets(df, obLevel1, obLevel2, osLevel1, osLevel2)
+
             # Breadth columns (Universe_Breadth / Breadth_Momentum / Sector_Rel_Breadth).
             # Re-attached on cache hits too so the columns track this run's panel.
             df = _breadth_panel.attach(df, ticker)
@@ -2978,7 +3091,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             _win_cols = ['HMM_Bull', 'HMM_Bear', 'Vol_Regime', 'Regime_Confidence',
                          'Change_Point', 'Bullish_Div', 'Bearish_Div', 'WT1',
                          'WT1_5ago', 'Conviction', 'F1_PriceMom', 'Pulse', 'Close',
-                         'Liquidity_Osc', 'LO', 'Universe_Breadth']
+                         'DLO_Strength', 'DLO_Cycle', 'DLO_SMA', 'Universe_Breadth',
+                         'VP_Pos', 'VP_Dist_POC', 'VP_At_VAL', 'VP_At_VAH', 'VP_Vol_Burst']
             _win = df.iloc[max(0, idx_pos - 4): idx_pos + 1]
             intel_windows[ticker] = _win[[c for c in _win_cols if c in _win.columns]].copy()
             # Recent daily-return volatility — the asset-agnostic scale for the
@@ -3084,6 +3198,18 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "SB_2d": "●" if sample_range.iloc[-3]['short_cond_comp'] else "—",
                 "SB_3d": "●" if sample_range.iloc[-4]['short_cond_comp'] else "—",
                 "SB_5d": "●" if sample_range.tail(5)['short_cond_comp'].any() else "—",
+                # Set C: Reversal — Historical Long Signals
+                "LC_Today": "●" if sample_range.iloc[-1]['long_cond_c'] else "—",
+                "LC_1d": "●" if sample_range.iloc[-2]['long_cond_c'] else "—",
+                "LC_2d": "●" if sample_range.iloc[-3]['long_cond_c'] else "—",
+                "LC_3d": "●" if sample_range.iloc[-4]['long_cond_c'] else "—",
+                "LC_5d": "●" if sample_range.tail(5)['long_cond_c'].any() else "—",
+                # Set C: Reversal — Historical Short Signals
+                "SC_Today": "●" if sample_range.iloc[-1]['short_cond_c'] else "—",
+                "SC_1d": "●" if sample_range.iloc[-2]['short_cond_c'] else "—",
+                "SC_2d": "●" if sample_range.iloc[-3]['short_cond_c'] else "—",
+                "SC_3d": "●" if sample_range.iloc[-4]['short_cond_c'] else "—",
+                "SC_5d": "●" if sample_range.tail(5)['short_cond_c'].any() else "—",
                 # Additional fields for detail cards
                 "Osc_Value": round(last_row.get('Unified_Osc', 0), 2),
                 "MA_Alignment": int(last_row.get('MA_Alignment', 0)),
@@ -3153,6 +3279,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             "L_Today", "L_1d", "L_2d", "L_3d", "L_5d", "S_Today", "S_1d", "S_2d", "S_3d", "S_5d",
             "LA_Today", "LA_1d", "LA_2d", "LA_3d", "LA_5d", "SA_Today", "SA_1d", "SA_2d", "SA_3d", "SA_5d",
             "LB_Today", "LB_1d", "LB_2d", "LB_3d", "LB_5d", "SB_Today", "SB_1d", "SB_2d", "SB_3d", "SB_5d",
+            "LC_Today", "LC_1d", "LC_2d", "LC_3d", "LC_5d", "SC_Today", "SC_1d", "SC_2d", "SC_3d", "SC_5d",
             "Osc_Value", "MA_Alignment", "ZScore_Value",
         ]
         return pd.DataFrame(columns=expected_cols)
@@ -3270,6 +3397,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                                    wt2_len=wt2_len, wt2_type=wt2_type)
             df = run_regime_analysis(df)
             df = calculate_divergences(df, timeframe=timeframe)
+            df = compute_signal_sets(df, *levels)    # A/B/C triggers (need regime + divergence)
             df = _breadth_panel.attach(df, ticker)   # breadth columns (Paths A/B/C)
             # Cache the analyzed frame so run_screener_analysis can reuse it instead
             # of recomputing. Stored by reference — the harvest-only columns appended
@@ -3280,16 +3408,18 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
             for h in pe.HOLD_HORIZONS:
                 df[f'Ret_{h}b'] = df['Close'].shift(-h) / df['Close'] - 1
 
-            # Vectorized SignalType per bar (priority order: B > A > Zone)
+            # Vectorized SignalType per bar (priority order: B > A > C > Zone)
             df['SignalType'] = np.select(
                 [
                     df['long_cond_comp'], df['short_cond_comp'],
                     df['long_cond'],      df['short_cond'],
+                    df['long_cond_c'],    df['short_cond_c'],
                     df['Condition'] != 'Neutral',
                 ],
                 [
                     'B: Long', 'B: Short',
                     'A: Long', 'A: Short',
+                    'C: Long', 'C: Short',
                     df['Condition'],
                 ],
                 default='-',
@@ -4835,7 +4965,7 @@ def _fire_bar_metrics(window, side: str, condition_set: str, offset: int, row) -
     conf, src = np.nan, ''
     ctx = ('—', '#4B5563', '')
     confs = np.array([])
-    if window is not None and len(window) and condition_set in ('A', 'B'):
+    if window is not None and len(window) and condition_set in ('A', 'B', 'C'):
         confs, srcs = _cached_conf_series(row.get('Symbol'), window, side, condition_set)
         fidx = len(confs) - 1 - offset
         if 0 <= fidx < len(confs):
@@ -4853,13 +4983,15 @@ def _fire_bar_metrics(window, side: str, condition_set: str, offset: int, row) -
 def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'A', timeframe: str = 'Daily') -> dict:
     """Bucket signals by age (Today, 1d, 2d, 3d, 5d) with stats for timeline display.
 
-    condition_set: 'A' = Momentum (LA_/SA_), 'B' = Crossover (LB_/SB_)
+    condition_set: 'A' = Ignition (LA_/SA_), 'B' = Regime (LB_/SB_), 'C' = Reversal (LC_/SC_)
     timeframe: 'Daily' or 'Weekly' — determines age label names
     """
     if condition_set == 'A':
         prefix = 'LA' if side == 'long' else 'SA'
     elif condition_set == 'B':
         prefix = 'LB' if side == 'long' else 'SB'
+    elif condition_set == 'C':
+        prefix = 'LC' if side == 'long' else 'SC'
     else:
         prefix = 'L' if side == 'long' else 'S'
     target_indicator = "●"
@@ -5151,7 +5283,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                     <th class="numeric">Δ Conv</th>
                     <th class="numeric">Pulse</th>
                     <th class="numeric">Δ Pulse</th>
-                    <th class="numeric">AT Filter</th>
+                    <th class="numeric">DLO Cycle</th>
                     <th class="numeric">Intel</th>
                     <th class="numeric" title="Layer-3 Meta Intelligence · rank × confidence">Meta</th>
                     <th class="numeric">Context</th>
@@ -5293,7 +5425,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
                     <th class="numeric">Δ Conv</th>
                     <th class="numeric">Pulse</th>
                     <th class="numeric">Δ Pulse</th>
-                    <th class="numeric">AT Filter</th>
+                    <th class="numeric">DLO Cycle</th>
                     <th class="numeric">Intel</th>
                     <th class="numeric" title="Layer-3 Meta Intelligence · rank × confidence">Meta</th>
                 </tr>
@@ -5481,7 +5613,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                     <th class="numeric">Pulse</th>
                     <th class="numeric">Regime</th>
                     <th class="numeric">Vol</th>
-                    <th class="numeric">AT Filter</th>
+                    <th class="numeric">DLO Cycle</th>
                     <th class="numeric">Intel</th>
                     <th class="numeric" title="Layer-3 Meta Intelligence · rank × confidence">Meta</th>
                 </tr>
@@ -5500,12 +5632,15 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
 
 
 _SIGNAL_TYPE_REFERENCE = [
-    ("Set A · Momentum",  "amber",
-     "The Hemrek Count Index crosses its Count Signal line (count.pine) — crossing up = long, "
-     "crossing down = short. Rides the momentum-streak turning."),
-    ("Set B · Crossover", "violet",
-     "The 3-bar rate of change of the Count Signal crosses zero (count.pine) — crossing down "
-     "through zero = long, crossing up = short. Flags the smoothed streak rolling over."),
+    ("Set A · Ignition",  "amber",
+     "The Directional Logistic Oscillator crosses the zero line — crossing up = long, "
+     "crossing down = short. A momentum/trend regime shift."),
+    ("Set B · Regime",    "violet",
+     "The DLO bar color flips (deep-bearish → recovering, confirmed by Klinger flow up = long; "
+     "bullish → fading with Klinger flow down = short). Catches the strength regime turning."),
+    ("Set C · Flow",  "cyan",
+     "The Klinger Volume Oscillator crosses its signal line (up = long, down = short), gated by "
+     "DLO Market Strength falling on the bar. Volume-flow momentum, filtered by waning strength."),
 ]
 
 
@@ -5694,8 +5829,9 @@ def _build_active_weights_table_html(active_weights: dict) -> str:
         ("γ · Divergence",  "gamma_divergence_long",   "gamma_divergence_short"),
     ]
     tier_pairs = [
-        ("Set A · Momentum",  "tier_A_mult"),
-        ("Set B · Crossover", "tier_B_mult"),
+        ("Set A · Ignition",  "tier_A_mult"),
+        ("Set B · Regime",    "tier_B_mult"),
+        ("Set C · Flow",      "tier_C_mult"),
         ("Default",           "tier_default_mult"),
     ]
 
@@ -5717,7 +5853,10 @@ def _build_active_weights_table_html(active_weights: dict) -> str:
 
     tier_rows = []
     for label, key in tier_pairs:
-        v = float(active_weights.get(key, 1.0))
+        # tier_C_mult falls back to tier_default_mult when unsearched — mirror the
+        # engine (priority_engine._tier_map) so the display shows the value actually applied.
+        _fallback = active_weights.get('tier_default_mult', 1.0) if key == 'tier_C_mult' else 1.0
+        v = float(active_weights.get(key, _fallback))
         v_color = "#34D399" if v > 1.05 else "#FB7185" if v < 0.95 else "#94A3B8"
         tier_rows.append(f"""
             <tr>
@@ -6134,7 +6273,7 @@ def main():
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
                         f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
-                        "Momentum (A) · Crossover (B)",
+                        "Ignition (A) · Regime (B) · Flow (C)",
                         icon="zap",
                         accent="amber"
                     )
@@ -6174,26 +6313,30 @@ def main():
                     longs_a_df = results_df[(results_df['LA_5d'] != "—") & ~has_bearish_crossover].copy().sort_values('Priority_Long', ascending=False)
                     shorts_a_df = results_df[(results_df['SA_5d'] != "—") & ~has_bullish_crossover].copy().sort_values('Priority_Short', ascending=False)
 
-                    # Set B: Crossover
+                    # Set B: Regime
                     longs_b_df = results_df[results_df['LB_5d'] != "—"].copy().sort_values('Priority_Long', ascending=False)
                     shorts_b_df = results_df[results_df['SB_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False)
+
+                    # Set C: Reversal
+                    longs_c_df = results_df[results_df['LC_5d'] != "—"].copy().sort_values('Priority_Long', ascending=False)
+                    shorts_c_df = results_df[results_df['SC_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False)
 
                     if timeframe == 'Weekly':
                         _age_order = ["This Week", "1 Week Ago", "2 Weeks Ago", "3 Weeks Ago", "Within 5 Weeks"]
                     else:
                         _age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
 
-                    has_signals = any(not df_.empty for df_ in [longs_a_df, shorts_a_df, longs_b_df, shorts_b_df])
+                    has_signals = any(not df_.empty for df_ in [longs_a_df, shorts_a_df, longs_b_df, shorts_b_df, longs_c_df, shorts_c_df])
 
                     if has_signals:
-                        total_longs  = len(longs_a_df) + len(longs_b_df)
-                        total_shorts = len(shorts_a_df) + len(shorts_b_df)
-                        all_longs  = pd.concat([longs_a_df, longs_b_df]).drop_duplicates('Symbol').sort_values('Priority_Long', ascending=False)
-                        all_shorts = pd.concat([shorts_a_df, shorts_b_df]).drop_duplicates('Symbol').sort_values('Priority_Short', ascending=False)
+                        total_longs  = len(longs_a_df) + len(longs_b_df) + len(longs_c_df)
+                        total_shorts = len(shorts_a_df) + len(shorts_b_df) + len(shorts_c_df)
+                        all_longs  = pd.concat([longs_a_df, longs_b_df, longs_c_df]).drop_duplicates('Symbol').sort_values('Priority_Long', ascending=False)
+                        all_shorts = pd.concat([shorts_a_df, shorts_b_df, shorts_c_df]).drop_duplicates('Symbol').sort_values('Priority_Short', ascending=False)
 
                         mc1, mc2, mc3, mc4 = st.columns(4)
-                        with mc1: ui.render_metric_card("Long Signals", str(total_longs), f"A:{len(longs_a_df)} B:{len(longs_b_df)}", "success")
-                        with mc2: ui.render_metric_card("Short Signals", str(total_shorts), f"A:{len(shorts_a_df)} B:{len(shorts_b_df)}", "danger")
+                        with mc1: ui.render_metric_card("Long Signals", str(total_longs), f"A:{len(longs_a_df)} B:{len(longs_b_df)} C:{len(longs_c_df)}", "success")
+                        with mc2: ui.render_metric_card("Short Signals", str(total_shorts), f"A:{len(shorts_a_df)} B:{len(shorts_b_df)} C:{len(shorts_c_df)}", "danger")
                         with mc3:
                             strongest_long = all_longs.iloc[0] if not all_longs.empty else None
                             ui.render_metric_card("Strongest Long", strongest_long['SimpleName'] if strongest_long is not None else "—", f"Signal: {strongest_long['Signal']:.1f}" if strongest_long is not None else "No signals", "info")
@@ -6204,7 +6347,7 @@ def main():
                         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                         bull_tab, bear_tab = st.tabs(["Bullish Signals by Timing", "Bearish Signals by Timing"])
                         with bull_tab:
-                            mom_bull_tab, cross_bull_tab, prio_bull_tab = st.tabs(["Momentum", "Crossover", "Priority Rank"])
+                            mom_bull_tab, cross_bull_tab, rev_bull_tab, prio_bull_tab = st.tabs(["Ignition", "Regime", "Flow", "Priority Rank"])
                             with mom_bull_tab:
                                 _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A', timeframe=timeframe)
                                 la_html = _build_signal_table_html(la_stats, side='long', timeframe=timeframe)
@@ -6217,6 +6360,12 @@ def main():
                                 _g = sum(1 for a in _age_order if lb_stats[a]['count'] > 0)
                                 _r = sum(lb_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(lb_html, height=max(70 + _g * 46 + _r * 44, 110))
+                            with rev_bull_tab:
+                                _, lc_stats, _, _ = _bucket_signals_by_age(longs_c_df, side='long', condition_set='C', timeframe=timeframe)
+                                lc_html = _build_signal_table_html(lc_stats, side='long', timeframe=timeframe)
+                                _g = sum(1 for a in _age_order if lc_stats[a]['count'] > 0)
+                                _r = sum(lc_stats[a]['count'] for a in _age_order)
+                                st.components.v1.html(lc_html, height=max(70 + _g * 46 + _r * 44, 110))
                             with prio_bull_tab:
                                 # Entire universe ranked by the self-tuned LONG priority score —
                                 # not gated by any signal set; this is the Intelligence ranking.
@@ -6230,7 +6379,7 @@ def main():
                                 st.components.v1.html(_build_signal_strength_table_html(_all_long, side='long'),
                                                       height=min(150 + len(_all_long) * 55, 900), scrolling=True)
                         with bear_tab:
-                            mom_bear_tab, cross_bear_tab, prio_bear_tab = st.tabs(["Momentum", "Crossover", "Priority Rank"])
+                            mom_bear_tab, cross_bear_tab, rev_bear_tab, prio_bear_tab = st.tabs(["Ignition", "Regime", "Flow", "Priority Rank"])
                             with mom_bear_tab:
                                 _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A', timeframe=timeframe)
                                 sa_html = _build_signal_table_html(sa_stats, side='short', timeframe=timeframe)
@@ -6243,6 +6392,12 @@ def main():
                                 _g = sum(1 for a in _age_order if sb_stats[a]['count'] > 0)
                                 _r = sum(sb_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(sb_html, height=max(70 + _g * 46 + _r * 44, 110))
+                            with rev_bear_tab:
+                                _, sc_stats, _, _ = _bucket_signals_by_age(shorts_c_df, side='short', condition_set='C', timeframe=timeframe)
+                                sc_html = _build_signal_table_html(sc_stats, side='short', timeframe=timeframe)
+                                _g = sum(1 for a in _age_order if sc_stats[a]['count'] > 0)
+                                _r = sum(sc_stats[a]['count'] for a in _age_order)
+                                st.components.v1.html(sc_html, height=max(70 + _g * 46 + _r * 44, 110))
                             with prio_bear_tab:
                                 # Entire universe ranked by the self-tuned SHORT priority score.
                                 _all_short = results_df.sort_values('Priority_Short', ascending=False)
@@ -6279,8 +6434,8 @@ def main():
                 # ════ Action Dashboard · TAB 2: SIGNAL STRENGTH ═══════════════════════
                 with tab_strength:
                     ui.render_section_header(
-                        "Abnormal Acceleration (Pulse)",
-                        "Top signals ranked by Pulse — Momentum (A) · Crossover (B)",
+                        "Oscillator Velocity (Pulse)",
+                        "Top signals ranked by DLO velocity — Ignition (A) · Regime (B) · Reversal (C)",
                         icon="zap",
                         accent="amber"
                     )
@@ -6288,11 +6443,12 @@ def main():
                     # Strength metrics
                     avg_pulse = results_df['Pulse'].abs().mean()
                     avg_conv = results_df['Conviction'].abs().mean()
-                    strong_pulse_count = len(results_df[results_df['Pulse'].abs() > 10])
+                    # Pulse is the DLO oscillator velocity, clipped to ±6 — "strong" ≈ |Pulse| > 3.
+                    strong_pulse_count = len(results_df[results_df['Pulse'].abs() > 3])
                     strong_trend_count = len(results_df[results_df['Trend'].abs() > 30])
 
                     col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-                    with col_s1: ui.render_metric_card("Avg Pulse", f"{avg_pulse:.1f}", "Abnormal Acceleration", "neutral")
+                    with col_s1: ui.render_metric_card("Avg Pulse", f"{avg_pulse:.1f}", "DLO oscillator velocity", "neutral")
                     with col_s2: ui.render_metric_card("Avg Conviction", f"{avg_conv:.1f}", "Blended confluence", "neutral")
                     with col_s3: ui.render_metric_card("Strong Pulse", str(strong_pulse_count), f"{strong_pulse_count/len(results_df)*100:.0f}% of universe", "info")
                     with col_s4: ui.render_metric_card("Strong Trends", str(strong_trend_count), f"{strong_trend_count/len(results_df)*100:.0f}% of universe", "info")

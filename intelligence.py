@@ -28,6 +28,7 @@ _VR_W = {'LOW': 1.20, 'NORMAL': 1.00, 'HIGH': 0.85, 'EXTREME': 0.55}
 _TIER_IDX = {
     'A: Long': 0, 'A: Short': 0,
     'B: Long': 1, 'B: Short': 1,
+    'C: Long': 3, 'C: Short': 3,
 }
 _TIER_DEFAULT_IDX = 2
 
@@ -134,7 +135,7 @@ class _PrecomputedDataset:
         f3   = conv / 20.0
         f4   = self._col_f(df, 'Pulse', 0.0)
         f5   = self._col_f(df, 'HMM_Bull', 0.33) - self._col_f(df, 'HMM_Bear', 0.33)
-        f7   = self._col_f(df, 'LO', 0.0) / 100.0   # liquidity range-extension (reversion)
+        f7   = self._col_f(df, 'DLO_SMA', 0.0)      # DLO oscillator extremeness (reversion) — mirrors compute_priority F7
         # F8 = sector-relative breadth (Path C) — same ×scale as compute_priority
         # so a calibrated weight transfers 1:1 from train to the live ranker.
         f8   = self._col_f(df, 'Sector_Rel_Breadth', 0.0) * pe.F8_BREADTH_SCALE
@@ -252,6 +253,7 @@ def _evaluate_ic(precomp: _PrecomputedDataset, weights: dict, min_xsect: int = 5
         weights['tier_A_mult'],
         weights['tier_B_mult'],
         weights['tier_default_mult'],
+        weights.get('tier_C_mult', weights['tier_default_mult']),
     ], dtype=np.float64)
 
     Mb_long  = precomp.M @ w_beta_long
@@ -304,14 +306,13 @@ class PriorityTuner:
                  min_xsect: int = 5,
                  enable_f7: bool = False,
                  enable_f8: bool = True):
-        # enable_f7: whether the LO range-extension factor (F7) participates in the
-        # ranking search. OFF by default — F7 is collinear with the existing
-        # WaveTrend reversion penalty + F3, so on thin data the optimizer can hand it
-        # large, unstable, partly-cancelling weights that move live rankings without
-        # adding real out-of-sample edge. Kept dormant (pinned to 0) until validated:
-        # the factor, its math, and the Set-B liquidity confidence features all remain;
-        # only its *ranking weight* is gated. Flip on to A/B-test F7's fANOVA
-        # importance + val IR against a no-F7 baseline before trusting it.
+        # enable_f7: whether the DLO oscillator-extremeness factor (F7) participates in
+        # the ranking search. OFF by default — F7 (DLO_SMA reversion) is collinear with
+        # the existing oscillator reversion penalty + F3, so on thin data the optimizer
+        # can hand it large, unstable, partly-cancelling weights that move live rankings
+        # without adding real out-of-sample edge. Kept dormant (pinned to 0) until
+        # validated: the factor and its math remain; only its *ranking weight* is gated.
+        # Flip on to A/B-test F7's fANOVA importance + val IR against a no-F7 baseline.
         self.hold_periods = list(hold_periods) if hold_periods is not None else list(pe.HOLD_HORIZONS)
         self.train_frac   = train_frac
         self.l2_alpha     = l2_alpha
@@ -389,6 +390,7 @@ class PriorityTuner:
                 # Shared tier multipliers
                 'tier_A_mult':       trial.suggest_float('tier_A_mult',       0.5, 2.0),
                 'tier_B_mult':       trial.suggest_float('tier_B_mult',       0.5, 2.0),
+                'tier_C_mult':       trial.suggest_float('tier_C_mult',       0.5, 2.0),
                 'tier_default_mult': trial.suggest_float('tier_default_mult', 0.5, 2.0),
             }
 
@@ -598,7 +600,7 @@ def calibrate_signal_confidence(ts_df: pd.DataFrame,
         return None
     sets_out['_pooled'] = pooled
 
-    for s in ('A', 'B'):
+    for s in ('A', 'B', 'C'):
         m = _fit_subset(tr & (set_arr == s))
         if m is not None:
             sets_out[s] = m
