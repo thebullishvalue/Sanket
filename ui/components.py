@@ -1,5 +1,5 @@
 """
-Pragyam v3.4.0 — Reusable UI components: metric cards, signal badges, headers, section headers.
+Pragyam v4.0.0 — Reusable UI components: metric cards, signal badges, headers, section headers.
 
 UI — Obsidian Quant Terminal design language.
 """
@@ -489,10 +489,11 @@ def render_interpretation_card(
 
 
 def render_signal_guide() -> None:
-    """Render the Signal Interpretation Guide with three signal types.
+    """Render the Signal Interpretation Guide for the cross-sectional reversion ranker.
 
-    Displays Ignition (A), Regime (B), and Reversal (C) explanations — the three
-    native Directional Logistic Oscillator signals — in a glassmorphic card.
+    Describes the two sides the engine surfaces (Long / Short reversion candidates) and
+    the alpha-health monitor, in a glassmorphic card matching the terminal. Structure and
+    CSS classes are unchanged — only the copy reflects the reversion engine.
     """
     st.markdown(
         '''
@@ -507,28 +508,23 @@ def render_signal_guide() -> None:
 
             <div class="signal-guide-grid">
                 <div class="signal-type momentum">
-                    <div class="signal-type-label">Set A: Ignition</div>
-                    <div class="signal-type-desc">DLO oscillator crosses the zero line • Up = long, down = short • Momentum / trend regime shift</div>
+                    <div class="signal-type-label">Long · Mean-Reversion</div>
+                    <div class="signal-type-desc">Names that have sold off most relative to their own volatility (oversold tail of the cross-section) tend to out-perform peers over the next 1–5 days. The engine ranks the universe and surfaces the strongest oversold candidates as Longs. Validated IC ≈ +0.031 (t ≈ +8).</div>
                 </div>
 
                 <div class="signal-type crossover">
-                    <div class="signal-type-label">Set B: Regime</div>
-                    <div class="signal-type-desc">DLO bar-color flip (deep-bearish→recovering = long, bullish→fading = short) confirmed by Klinger flow • Strength regime turn • Highest tier weight (1.30×)</div>
-                </div>
-
-                <div class="signal-type threshold">
-                    <div class="signal-type-label">Set C: Flow</div>
-                    <div class="signal-type-desc">Klinger Volume Oscillator crosses its signal line (up = long, down = short), gated by DLO strength falling • Volume-flow momentum, orthogonal to the price-based A/B</div>
+                    <div class="signal-type-label">Short · Mean-Reversion</div>
+                    <div class="signal-type-desc">Symmetric: names that have run up most relative to their volatility (overbought tail) tend to under-perform peers. The strongest overbought candidates are surfaced as Shorts. Conviction auto-scales by the live alpha-health monitor — when the edge is dormant the screen intentionally goes low-conviction.</div>
                 </div>
             </div>
 
             <div class="signal-guide-metrics">
                 <div class="signal-guide-metrics-title">Key Metrics</div>
                 <div class="signal-guide-metrics-grid">
-                    <div class="metric-item"><span class="metric-label">DLO Strength</span> · Bounded directional oscillator (≈ −1…+1)</div>
-                    <div class="metric-item"><span class="metric-label">Pulse</span> · DLO oscillator velocity (±6)</div>
-                    <div class="metric-item"><span class="metric-label">DLO Cycle</span> · Double-smoothed line for turning-point detection</div>
-                    <div class="metric-item"><span class="metric-label">Conviction</span> · Oscillator level rescaled to ±100</div>
+                    <div class="metric-item"><span class="metric-label">Rev Score</span> · Cross-sectional reversion score (+ = long-attractive)</div>
+                    <div class="metric-item"><span class="metric-label">Rank %ile</span> · Standing within today's universe</div>
+                    <div class="metric-item"><span class="metric-label">Conviction</span> · Tail strength × alpha-health × regime [0–1]</div>
+                    <div class="metric-item"><span class="metric-label">Alpha-Health</span> · Is the reversion edge working right now?</div>
                 </div>
             </div>
         </div>
