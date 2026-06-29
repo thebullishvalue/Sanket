@@ -1,9 +1,75 @@
 # CHANGELOG
-### Sanket — Wave-Regime Composite Index Terminal
+### Sanket — Cross-Sectional Reversion Ranker
 
 All notable changes to the **Sanket** platform are documented here. Sanket is part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/thebullishvalue).
 
 Format: `[version] · date — release title`
+
+---
+
+## [v4.0.0] · 2026-06-29
+### The Honest Rebuild — Cross-Sectional Reversion, Evidence-First
+
+**"Trade what the data says, not what the indicator says"**
+
+A **complete replacement of the scoring engine**. Every prior ranking subsystem (the WRCI
+oscillator, Conviction/Pulse, the HCI count, the AutoTune filter, the order-flow signal sets,
+the asymmetric Priority Engine, and the 3-layer self-tuning Intelligence stack) was validated
+on real NSE F&O data — and **removed**, because it did not predict forward returns. The system
+was rebuilt around the one edge that *did* survive walk-forward, cost-aware testing:
+**short-horizon cross-sectional mean-reversion.** The full thesis, validation, and design
+rationale live in the new `ARCHITECTURE.md`.
+
+#### Why (the evidence)
+- On daily NSE F&O (147 names, 5y, ~170k symbol-days), the old momentum factor stack had a
+  **negative** cross-sectional rank-IC (naked Priority IC ≈ −0.023, t ≈ −3.9). The Optuna
+  calibrator **could not fix it** — its factor-weight bounds are non-negative, so against
+  anti-predictive factors the best it can do is shrink to noise. The 3 Intelligence layers
+  added no out-of-sample edge over naked Priority and were fragile.
+- A simple **reversion** composite scores **IC ≈ +0.031 (t ≈ +8.5)**, positive every year
+  2021–2025, strongest in HIGH-vol regimes. The factors carried real information all along —
+  the old engine was simply pointed the wrong way.
+- After realistic costs the raw signal only survives at multi-day holding, so the product is
+  honestly framed as a **decision-support ranker**, not a costless high-turnover strategy.
+
+#### New engine (`engine.py`)
+- **Cross-sectional reversion score**: an equal blend of within-date robustly-z-scored
+  (median/MAD), sign-flipped reversion features — ATR-normalized 2/5-bar returns, distance
+  from the 5/10-bar MA, and 10-bar range position. Equal-weighted on purpose (a fitted weight
+  vector did not beat it out of sample and invites overfit).
+- **Live alpha-health monitor**: the system measures its *own* realized edge — the trailing
+  cross-sectional IC of its score vs forward returns — and scales a global Conviction
+  multiplier in `[0.35, 1]`. When reversion is dormant (as it was in 2026) the screen
+  **stands down**: it still ranks, but at honestly low conviction. This is surfaced, not hidden.
+- **Conviction** = tail-strength × alpha-health × vol-regime suitability; **Side** is the
+  cross-sectional tail (oversold → Long, overbought → Short), so the shortlist is never empty.
+- Emits the prior UI column contract (`Priority_*`, `Intel_Confidence`, `Meta_*`) under new
+  reversion semantics, so every table and card renders unchanged.
+
+#### Removed
+- **Deleted modules**: `priority_engine.py`, `intelligence.py` (Optuna calibration, per-set
+  logistic, Meta fusion, asymmetric factor scoring, profile persistence). Removed the entire
+  WRCI math library from `sanket.py` (EMA/HMA/WMA/VWMA/ALMA/RMA, `f_smooth`, linreg, RSI, the
+  Ehlers AutoTune band-pass + its Numba JIT shim) and the WRCI-oscillator divergence detector.
+- **Deleted indicators**: `wrci.pine`, `count.pine`, `Order Flow.pine` — they implemented the
+  removed architecture and have no parity with the new (inherently cross-sectional) engine.
+- **Dropped deps**: `optuna`, `numba`, `filelock` (all served calibration / JIT / profiles).
+
+#### Retained
+- The **regime engine** (HMM / GARCH / CUSUM) and **breadth engine** as order-flow-agnostic
+  risk/regime context that conditions conviction.
+- **Order-flow** (inferred delta / CVD / POC / value-area / absorption) as **descriptive UI
+  context only** — validated to add zero cross-sectional ranking IC, so it informs the trader
+  but never the rank.
+
+#### UI / UX (identity preserved, copy made honest)
+- "Intelligence Center" tab → **Alpha-Health Monitor** (trailing IC, edge state, conviction
+  scaling). "Model Passport" sidebar → **Engine Status**. Signal guide, landing cards, table
+  tooltips, terminal phases (`REVERSION RANKING`, `EDGE MEASUREMENT`), and progress labels all
+  updated to reversion semantics. Layout, CSS, color system, and information hierarchy unchanged.
+
+#### Documentation
+- New `ARCHITECTURE.md` (thesis + validation + honest limits). README fully rewritten.
 
 ---
 

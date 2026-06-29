@@ -7,11 +7,6 @@ pandas>=2.1.0
 numpy>=1.24.0
 plotly>=5.18.0
 
-# ── Self-Tuning Intelligence ──────────────────────────────────
-optuna>=3.5.0
-filelock>=3.12.0   # cross-process lock for shared profiles.json (multi-user safety)
-numba>=0.59.0      # optional JIT for recursive math loops (EMA, Ehlers filters); app falls back to pure Python if absent
-
 # ── Data Sources ──────────────────────────────────────────────
 yfinance>=0.2.31
 nsepython

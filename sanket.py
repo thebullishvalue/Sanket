@@ -1,31 +1,22 @@
 """
 Sanket - Market Signal Screener | A Pragyam Product Family Member
-WRCI Engine Quantitative Signal Screener Terminal
+Cross-Sectional Reversion Ranker · Quantitative Signal Screener Terminal
+
+Engine: cross-sectional short-horizon mean-reversion with a live alpha-health monitor.
+See engine.py and ARCHITECTURE.md for the thesis, validation, and design rationale.
 """
 
 import os
 
-# ── BLAS thread pinning (MUST run before numpy/sklearn import) ────────────────
-# The screener fits priority/confidence models sequentially across a 500-symbol
-# universe. On Streamlit Community Cloud the container is throttled to ~1 shared
-# vCPU but the host reports many logical CPUs, so OpenBLAS/MKL spawn one thread
-# per reported core and thrash — turning each small matrix solve into a
-# thread-contention storm (the #1 reason the screener is far slower on cloud
-# than locally). One thread per process is strictly faster for many-small-matrix
-# workloads. os.environ.setdefault → respects any explicit override from the env.
+# ── BLAS thread pinning (MUST run before numpy import) ────────────────────────
+# The screener runs the regime engine + a rolling volume profile across a ~500-
+# symbol universe. On Streamlit Community Cloud the container is throttled to ~1
+# shared vCPU but the host reports many logical CPUs, so OpenBLAS/MKL spawn one
+# thread per reported core and thrash. One thread per process is strictly faster
+# here. os.environ.setdefault → respects any explicit override from the env.
 for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
            "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
     os.environ.setdefault(_v, "1")
-
-# ── Numba cache OUTSIDE the app tree (MUST run before numba is imported) ──────
-# @_njit(cache=True) kernels write .nbc/.nbi artifacts. If those land in the app
-# directory (default: <module>/__pycache__), Streamlit's file watcher treats each
-# write as a source change and reruns the script — restarting the screener mid-
-# compile. Point Numba's cache at the home cache dir (writable, NOT watched).
-os.environ.setdefault(
-    "NUMBA_CACHE_DIR",
-    os.path.join(os.path.expanduser("~"), ".cache", "sanket", "numba"),
-)
 
 import html
 import re
@@ -39,10 +30,8 @@ import requests
 import json
 import io
 import urllib3
-import priority_engine as pe
-import intelligence as intel
+import engine as eng
 import breadth_engine as breadth
-from priority_engine import compute_priority
 import warnings
 import logging
 import time
@@ -50,24 +39,6 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from nsepython import nse_get_advances_declines
 from logger import console
-
-# Optional Numba JIT for the recursive math loops (EMA, Ehlers high/band-pass).
-# Verified bit-identical to the pure-Python loops (default IEEE-754, no fast-math),
-# so output is unchanged whether or not numba is installed. If unavailable, _njit
-# is an identity decorator and the same loops run in pure Python. Compilation is
-# lazy (first call) — a one-time cost amortized across the ~500-stock universe.
-try:
-    from numba import njit as _njit
-    _HAVE_NUMBA = True
-except Exception:
-    _HAVE_NUMBA = False
-    def _njit(*args, **kwargs):
-        # Support both @_njit and @_njit(...) usage.
-        if len(args) == 1 and callable(args[0]) and not kwargs:
-            return args[0]
-        def _wrap(fn):
-            return fn
-        return _wrap
 
 # UI — Obsidian Quant Terminal System
 from ui.theme import inject_css, apply_chart_theme, progress_bar
@@ -107,7 +78,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v3.5.0"
+VERSION = "v4.0.0"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -214,8 +185,12 @@ _ANALYZED_CACHE_KEY = "analyzed_frame_cache"
 
 def _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
                          wt2_len, wt2_type, end_date) -> tuple:
-    """Identity of an analyzed frame — everything that changes its computed values."""
-    return (str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
+    """Identity of an analyzed frame — everything that changes its computed values.
+
+    The 'rev1' engine tag invalidates frames cached by any prior engine (WRCI, the naive
+    order-flow ports) — the reversion engine emits new _rev_* feature columns those lack.
+    """
+    return ("rev1", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
             tuple(levels), int(wt2_len), str(wt2_type), end_date)
 
 
@@ -282,8 +257,6 @@ def get_universe_data(stock_list: list, end_date: datetime.date = None):
 
 if "results_df" not in st.session_state:
     st.session_state["results_df"] = None
-if "active_weights" not in st.session_state:
-    st.session_state["active_weights"] = pe.DEFAULT_W.copy()
 if "run_screener_flag" not in st.session_state:
     st.session_state["run_screener_flag"] = False
 if "timeseries_done" not in st.session_state:
@@ -302,307 +275,200 @@ if _REGISTRY_KEY not in st.session_state:
     st.session_state[_REGISTRY_KEY] = {}
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Per-session weight helpers — keep calibrated weights in session_state so that
-# concurrent users on shared Streamlit Cloud deployments cannot overwrite each
-# other's active profile (the module-level `active_W` global in priority_engine
-# is shared across all sessions in the same process).
+# Alpha-health monitor — the reversion engine has no weights to calibrate. Instead
+# it measures its OWN live edge: the trailing mean of daily cross-sectional IC of
+# the reversion score vs realized forward return. Conviction auto-scales by this so
+# the screen stands down when the edge is dormant. Measured once/day per universe.
 # ──────────────────────────────────────────────────────────────────────────────
-def _set_active_weights(w: dict):
-    """Activate weights in both session_state (per-user) and pe module global (fallback)."""
-    st.session_state["active_weights"] = w
-    pe.set_active_weights(w)
+def _measure_trailing_ic(ts_data) -> tuple:
+    """Compute the trailing daily cross-sectional IC of the reversion score from a
+    harvested panel. Re-ranks each date's cross-section with engine.compute_ranking,
+    then correlates the reversion score vs a forward-return column.
 
-def _get_active_weights() -> dict:
-    """Return the active weights for this session, falling back to pe defaults."""
-    return st.session_state.get("active_weights", pe.DEFAULT_W)
-
-
-def _ensure_intel_weights(universe, selected_index, timeframe, analysis_date,
-                          reg_len, wt_n1, wt_n2, levels, wt2_len, wt2_type, calib_settings):
-    """Resolve the priority weights that rank the screen, in one pass.
-
-    Self-tuning is folded into the Single-Date run: reuse a profile already tuned TODAY
-    for this (universe, index, timeframe); otherwise harvest a lookback panel ending at
-    analysis_date and calibrate inline. Re-tunes when the profile is missing, was not made
-    today, or the user forced it. Sets active weights + opt_results as a side effect.
-
-    Returns a short status string for logging: cached | tuned | harvest_failed_* .
+    Returns (trailing_ic, n_dates). trailing_ic is None when the panel is too thin.
     """
-    force   = bool(calib_settings.get("force"))
-    profile = pe.load_profile_for(universe, selected_index, timeframe)
-    today_str = _today_ist().strftime("%Y-%m-%d")
-    made_today = bool(profile) and str(profile.get("timestamp", ""))[:10] == today_str
+    if ts_data is None or getattr(ts_data, "empty", True):
+        return None, 0
+    df = ts_data.copy()
+    # Pick a forward-return column: prefer Ret_3b, else the first available Ret_*.
+    ret_cols = [c for c in df.columns if c.startswith("Ret_")]
+    if not ret_cols:
+        return None, 0
+    fwd_col = "Ret_3b" if "Ret_3b" in ret_cols else ret_cols[0]
+    ics = []
+    for _date, day in df.groupby("Date"):
+        try:
+            ranked = eng.compute_ranking(day, alpha_health_mult=1.0)
+        except Exception:
+            continue
+        # Score column: the reversion Priority_Long (or Rev_Score fallback).
+        score_col = "Priority_Long" if "Priority_Long" in ranked.columns else (
+            "Rev_Score" if "Rev_Score" in ranked.columns else None)
+        if score_col is None or fwd_col not in ranked.columns:
+            continue
+        ic = eng.cross_sectional_ic(ranked[score_col], ranked[fwd_col])
+        if ic is not None and np.isfinite(ic):
+            ics.append(ic)
+    if not ics:
+        return None, 0
+    trailing_ic = float(np.mean(ics[-60:]))   # last ~60 daily ICs
+    return trailing_ic, len(ics)
 
-    # Fast path — today's profile is already good; rank instantly, no harvest/tune.
-    if profile and made_today and not force and isinstance(profile.get("weights"), dict):
-        _set_active_weights(profile["weights"])
-        pe.set_active_conf_model(profile.get("signal_conf"))   # Layer 2 model rides with the profile
-        pe.set_active_meta_model(profile.get("meta_intel"))  # Layer 3 meta intelligence rides too
-        st.session_state["opt_results"] = profile
-        console.detail(f"Intelligence: reusing today's profile · val IR {profile.get('val_score', float('nan')):+.3f}")
+
+def _ensure_alpha_health(universe, selected_index, timeframe, analysis_date,
+                         reg_len, wt_n1, wt_n2, levels, wt2_len, wt2_type, calib_settings):
+    """Measure the live alpha-health (trailing realized IC) for the active universe.
+
+    Harvests a recent lookback panel ending at analysis_date, computes the trailing
+    cross-sectional IC of the reversion score vs forward return, maps it to a [0,1]
+    conviction multiplier (engine.alpha_health), and stores both in session so the
+    screener compute block scales conviction and the Intelligence tab / Engine Status
+    panel can render from it.
+
+    Returns a short status string: cached | measured | harvest_empty .
+    """
+    force     = bool(calib_settings.get("force"))
+    today_str = _today_ist().strftime("%Y-%m-%d")
+    key       = (universe, selected_index, timeframe)
+
+    # Cheap guard — a fresh alpha-health measured today for this same key: skip recompute.
+    if (not force
+            and st.session_state.get("_alpha_health_key") == key
+            and st.session_state.get("alpha_health_ic") is not None
+            and str((st.session_state.get("opt_results") or {}).get("timestamp", ""))[:10] == today_str):
+        console.detail(
+            f"Alpha-health: reusing today's reading · trailing IC "
+            f"{st.session_state.get('alpha_health_ic', float('nan')):+.3f}"
+        )
         return "cached"
 
-    # Slow path — harvest a lookback window, then calibrate.
+    # Harvest a lookback window ending at the analysis date, then measure realized edge.
     lookback = int(calib_settings.get("lookback_days", 730))
     start    = analysis_date - datetime.timedelta(days=lookback)
-    console.detail(f"Intelligence: {'forced ' if force else ''}calibration — harvesting ~{lookback}d ending {analysis_date}")
+    console.detail(f"Alpha-health: {'forced ' if force else ''}measuring — harvesting ~{lookback}d ending {analysis_date}")
     run_timeseries_analysis(universe, selected_index, start, analysis_date,
                             reg_len, wt_n1, wt_n2, levels, timeframe,
                             wt2_len=wt2_len, wt2_type=wt2_type)
     ts_data = st.session_state.get("ts_results_df")
-    if ts_data is None or getattr(ts_data, "empty", True):
-        # Harvest produced nothing — keep best available weights rather than failing the screen.
-        if profile and isinstance(profile.get("weights"), dict):
-            _set_active_weights(profile["weights"])
-            pe.set_active_conf_model(profile.get("signal_conf"))
-            pe.set_active_meta_model(profile.get("meta_intel"))
-            st.session_state["opt_results"] = profile
-            console.warning("Intelligence: harvest empty — falling back to existing profile")
-            st.session_state["timeseries_done"] = False
-            return "harvest_failed_cached"
-        _set_active_weights(pe.DEFAULT_W)
-        pe.set_active_conf_model(None)
-        pe.set_active_meta_model(None)
-        console.warning("Intelligence: harvest empty and no profile — using factory defaults")
-        st.session_state["timeseries_done"] = False
-        return "harvest_failed_default"
 
-    # run_priority_optimization sets active weights, builds opt_results, and persists the profile.
-    run_priority_optimization(ts_data, calib_settings)
+    trailing_ic, n_dates = _measure_trailing_ic(ts_data)
+    if trailing_ic is None:
+        # Cold-start neutral — keep a dim, low-conviction screen rather than failing it.
+        st.session_state["alpha_health_mult"] = 0.75
+        st.session_state["alpha_health_ic"]   = None
+        st.session_state["_alpha_health_key"] = key
+        st.session_state["opt_results"] = {
+            "trailing_ic":    None,
+            "alpha_health":   0.75,
+            "n_dates":        0,
+            "timestamp":      _today_ist().strftime("%Y-%m-%d %H:%M"),
+            "universe":       universe,
+            "selected_index": selected_index,
+            "timeframe":      timeframe,
+        }
+        console.warning("Alpha-health: harvest empty / insufficient — cold-start neutral (0.75)")
+        st.session_state["timeseries_done"] = False
+        return "harvest_empty"
+
+    health = eng.alpha_health(trailing_ic)
+    st.session_state["alpha_health_mult"] = health
+    st.session_state["alpha_health_ic"]   = trailing_ic
+    st.session_state["_alpha_health_key"] = key
+    st.session_state["opt_results"] = {
+        "trailing_ic":    trailing_ic,
+        "alpha_health":   health,
+        "n_dates":        n_dates,
+        "timestamp":      _today_ist().strftime("%Y-%m-%d %H:%M"),
+        "universe":       universe,
+        "selected_index": selected_index,
+        "timeframe":      timeframe,
+    }
+    console.detail(f"Alpha-health: trailing IC {trailing_ic:+.3f} → health {health:.2f} over {n_dates} dates")
     # The harvest flag is an internal precondition here, not a Historical-Range deliverable.
     st.session_state["timeseries_done"] = False
-    return "tuned"
+    return "measured"
 
 
 def _render_intelligence_tab(universe, selected_index, timeframe):
-    """Single-Date 'Intelligence' tab — the priority engine that RANKS the screen.
+    """Single-Date 'Intelligence' tab — the Alpha-Health Monitor.
 
-    Same fidelity as the former Intelligence Center: a diagnostics grid (Train/Val IR,
-    stability, quality), the active long-vs-short weight table, and the Optuna fANOVA
-    factor-importance chart. Rendered from the active profile (opt_results); calibration
-    itself runs inline on the screener click, so there is no calibrate button here."""
-    res    = st.session_state.get("opt_results")
-    active = _get_active_weights()
-    is_default = (active == pe.DEFAULT_W)
+    The ranker is a fixed, validated cross-sectional reversion model — there are no
+    factor weights to calibrate. What it DOES measure live is its own realized edge:
+    the trailing mean of daily cross-sectional IC of the reversion score vs forward
+    return. Conviction auto-scales by that health. Rendered from the active reading
+    (opt_results / alpha_health_*); the measurement itself runs inline on the screener
+    click, so there is no button here."""
+    res = st.session_state.get("opt_results") or {}
+    trailing_ic = st.session_state.get("alpha_health_ic", res.get("trailing_ic"))
+    health = float(st.session_state.get("alpha_health_mult", res.get("alpha_health", 1.0)) or 1.0)
+    n_dates = int(res.get("n_dates", 0) or 0)
+    measured = trailing_ic is not None and isinstance(trailing_ic, (int, float))
 
     ui.render_section_header(
-        "Intelligence Center",
-        "Self-tuned priority engine — the factor weights that rank this screen.",
+        "Alpha-Health Monitor",
+        "Is the reversion edge working right now? — the system measures its own realized edge.",
         icon="brain", accent="violet",
     )
 
-    # ── Diagnostics grid (mirrors the calibration dashboard's metric rhythm) ──
-    if res:
-        train_v   = res.get('train_score', 0.0) or 0.0
-        val_v     = res.get('val_score',   0.0) or 0.0
-        stability = (val_v / train_v * 100) if train_v not in (0, None) else 0.0
-        _is_overfit = train_v > 0.05 and val_v < train_v * 0.3
-        _is_low_ir  = val_v <= 0.0
-        trained_on  = res.get('selected_index') or res.get('universe') or '—'
-        st.markdown(f"""
-        <div style="display:grid; grid-template-columns:repeat(5, 1fr); gap:1rem; margin-top:0.5rem;">
-            <div class="metric-card {"neutral" if is_default else "success"}" style="margin:0;">
-                <h4>Profile</h4><h2>{"Default" if is_default else "Calibrated"}</h2>
-                <div class="sub-metric">{res.get('timestamp', '—')}</div>
-            </div>
-            <div class="metric-card success" style="margin:0;">
-                <h4>Train IR</h4><h2>{train_v:+.3f}</h2>
-                <div class="sub-metric">in-sample fit</div>
-            </div>
-            <div class="metric-card {"success" if val_v > 0.02 else ("warning" if val_v > 0 else "danger")}" style="margin:0;">
-                <h4>Validation IR</h4><h2>{val_v:+.3f}</h2>
-                <div class="sub-metric">out-of-sample · IC rank corr</div>
-            </div>
-            <div class="metric-card {"info" if 30 < stability < 130 else "warning"}" style="margin:0;">
-                <h4>Stability</h4><h2>{stability:.0f}%</h2>
-                <div class="sub-metric">Val / Train ratio</div>
-            </div>
-            <div class="metric-card {("danger" if _is_low_ir else ("warning" if _is_overfit else "success"))}" style="margin:0;">
-                <h4>Quality</h4><h2>{("No Edge" if _is_low_ir else ("Overfit" if _is_overfit else "OK"))}</h2>
-                <div class="sub-metric">{trained_on} · {res.get('timeframe', '—')}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        if _is_low_ir:
-            st.markdown(
-                '<div style="font-family:var(--data); font-size:0.72rem; color:var(--rose); '
-                'padding:0.6rem 0 0.1rem 0; line-height:1.5;">⚠ Validation IR ≤ 0 — this profile has '
-                '<b>no demonstrated out-of-sample edge</b> on this universe. The ranking may be no '
-                'better than default weights; force a recalibrate or widen the universe.</div>',
-                unsafe_allow_html=True,
-            )
-
-        # ── Signal-Confidence (Layer 2) — false-positive filter diagnostics ──
-        _sc = res.get("signal_conf")
-        st.markdown(
-            '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
-            'letter-spacing:0.08em; text-transform:uppercase; padding:0.9rem 0 0.3rem 0;">'
-            'Signal Confirmation · per-signal false-positive filter</div>',
-            unsafe_allow_html=True,
-        )
-        if _sc and isinstance(_sc, dict):
-            _auc   = _sc.get("val_auc")
-            _lift  = _sc.get("val_precision_lift")
-            _tprec = _sc.get("val_top_half_precision")
-            _base  = _sc.get("base_rate_val", _sc.get("base_rate"))
-            _sets  = [s for s in ("A", "B", "C") if s in _sc.get("sets", {})]
-            _auc_s   = f"{_auc:.3f}"   if isinstance(_auc, (int, float)) else "—"
-            _lift_s  = f"{_lift:+.1%}" if isinstance(_lift, (int, float)) else "—"
-            _tprec_s = f"{_tprec:.1%}" if isinstance(_tprec, (int, float)) else "—"
-            _base_s  = f"{_base:.1%}"  if isinstance(_base, (int, float)) else "—"
-            _auc_ok  = isinstance(_auc, (int, float)) and _auc >= 0.55
-            st.markdown(f"""
-            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:1rem; margin-top:0.2rem;">
-                <div class="metric-card {"success" if _auc_ok else "warning"}" style="margin:0;">
-                    <h4>Confirm AUC</h4><h2>{_auc_s}</h2>
-                    <div class="sub-metric">out-of-sample · true vs false</div>
-                </div>
-                <div class="metric-card {"success" if (isinstance(_lift,(int,float)) and _lift>0) else "warning"}" style="margin:0;">
-                    <h4>Precision Lift</h4><h2>{_lift_s}</h2>
-                    <div class="sub-metric">top-half {_tprec_s} vs base {_base_s}</div>
-                </div>
-                <div class="metric-card info" style="margin:0;">
-                    <h4>Horizons</h4><h2>{(lambda h: f"{min(h)}–{max(h)}b" if h else "—")(_sc.get('horizons') or ([_sc.get('horizon')] if _sc.get('horizon') else []))}</h2>
-                    <div class="sub-metric">multi-horizon label</div>
-                </div>
-                <div class="metric-card {"success" if _sets else "neutral"}" style="margin:0;">
-                    <h4>Sets Modeled</h4><h2>{', '.join(_sets) if _sets else "pooled"}</h2>
-                    <div class="sub-metric">{_sc.get('n_train', 0)} fired signals</div>
-                </div>
-            </div>
-            <div style="font-family:var(--data); font-size:0.70rem; color:var(--ink-tertiary);
-                 padding:0.5rem 0 0.1rem 0; line-height:1.5;">
-                Each fired A/B/C signal is scored by a model trained on whether past signals of its
-                type produced a <b>clear</b> favorable move (mean directional return across horizons,
-                past a deadband — so going nowhere counts as a false positive), given the regime context.
-                Calibrated scores show as a <b>%</b> probability; uncalibrated sets fall back to a muted
-                <b>~heuristic</b> index. Low Intel = a likely false positive.
-                Aged signals (1d/2d/… ago) are scored <b>at the bar they fired</b>, not today — matching
-                how the model was trained and validated.
-                {"AUC below 0.55 — the filter adds little separation here; treat scores as advisory." if not _auc_ok else ""}
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(
-                '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
-                'padding:0.3rem 0 0.1rem 0; line-height:1.5;">No calibrated confirmation model — the '
-                'panel is too sparse, so <b>Intel Confidence</b> falls back to the Layer-1 heuristic '
-                '(regime alignment × own-factor agreement × trust). Widen the historical range for a trained filter.</div>',
-                unsafe_allow_html=True,
-            )
-
-        # ── Meta Intelligence (Layer 3) — final fused ranking + filter ──
-        _mc = res.get("meta_intel")
-        st.markdown(
-            '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
-            'letter-spacing:0.08em; text-transform:uppercase; padding:0.9rem 0 0.3rem 0;">'
-            'Meta Intelligence · fuses cross-sectional rank × per-signal confidence</div>',
-            unsafe_allow_html=True,
-        )
-        if _mc and isinstance(_mc, dict):
-            _mir  = _mc.get("meta_val_ir")
-            _pir  = _mc.get("priority_val_ir")
-            _mact = bool(_mc.get("active"))
-            _mauc = _mc.get("val_auc")
-            _mir_s = f"{_mir:+.3f}" if isinstance(_mir, (int, float)) else "—"
-            _pir_s = f"{_pir:+.3f}" if isinstance(_pir, (int, float)) else "—"
-            _mauc_s = f"{_mauc:.3f}" if isinstance(_mauc, (int, float)) else "—"
-            _delta = (_mir - _pir) if (isinstance(_mir, (int, float)) and isinstance(_pir, (int, float))) else None
-            _delta_s = f"{_delta:+.3f}" if _delta is not None else "—"
-            st.markdown(f"""
-            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:1rem; margin-top:0.2rem;">
-                <div class="metric-card {"success" if _mact else "warning"}" style="margin:0;">
-                    <h4>Status</h4><h2>{"Active" if _mact else "Advisory"}</h2>
-                    <div class="sub-metric">{"reorders + filters" if _mact else "annotates only"}</div>
-                </div>
-                <div class="metric-card {"success" if _mact else "neutral"}" style="margin:0;">
-                    <h4>Meta IR</h4><h2>{_mir_s}</h2>
-                    <div class="sub-metric">out-of-sample · fused</div>
-                </div>
-                <div class="metric-card info" style="margin:0;">
-                    <h4>Priority IR</h4><h2>{_pir_s}</h2>
-                    <div class="sub-metric">naked rank baseline</div>
-                </div>
-                <div class="metric-card {"success" if (_delta is not None and _delta > 0) else "warning"}" style="margin:0;">
-                    <h4>Edge vs Priority</h4><h2>{_delta_s}</h2>
-                    <div class="sub-metric">AUC {_mauc_s} · n {_mc.get('n_val', 0)}</div>
-                </div>
-            </div>
-            <div style="font-family:var(--data); font-size:0.70rem; color:var(--ink-tertiary);
-                 padding:0.5rem 0 0.1rem 0; line-height:1.5;">
-                Layer 3 fuses each fired signal's <b>cross-sectional Priority rank</b> with its
-                <b>per-signal Intel confidence</b> into one calibrated Meta score. It is allowed to
-                <b>reorder and filter</b> only when its out-of-sample rank-IR <b>beat naked Priority's</b>
-                ({_mir_s} vs {_pir_s}) — otherwise it stays <b>advisory</b> (annotates Meta tiers
-                but never hides), and the screen falls back to rank × confidence. Same probation
-                discipline as the rest of the stack: it refuses to act on unproven edge.
-                {"" if _mact else "<b>Not active here</b> — the fused score did not beat the raw ranking out-of-sample on this universe."}
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(
-                '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
-                'padding:0.3rem 0 0.1rem 0; line-height:1.5;">No meta intelligence model — the panel is too '
-                'sparse to fit one, so <b>Layer 3 falls back to rank × confidence</b> (advisory). '
-                'Widen the historical range to train and validate the fused layer.</div>',
-                unsafe_allow_html=True,
-            )
+    # ── Interpretation tag from the trailing realized IC ──
+    if not measured:
+        tag, tag_class = "COLD START", "neutral"
+    elif trailing_ic > 0.01:
+        tag, tag_class = "EDGE ACTIVE", "success"
+    elif trailing_ic > 0.0:
+        tag, tag_class = "WEAK", "warning"
     else:
+        tag, tag_class = "DORMANT — standing down", "danger"
+
+    ic_str     = f"{trailing_ic:+.3f}" if measured else "—"
+    health_str = f"{health:.2f}×"
+    health_class = "success" if health >= 0.85 else ("warning" if health >= 0.55 else "danger")
+    dates_str  = f"{n_dates}" if n_dates else "—"
+
+    st.markdown(f"""
+    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:1rem; margin-top:0.5rem;">
+        <div class="metric-card {"info" if measured else "neutral"}" style="margin:0;">
+            <h4>Trailing IC</h4><h2>{ic_str}</h2>
+            <div class="sub-metric">realized cross-sectional · score vs fwd return</div>
+        </div>
+        <div class="metric-card {health_class}" style="margin:0;">
+            <h4>Alpha-Health</h4><h2>{health_str}</h2>
+            <div class="sub-metric">conviction multiplier · 0.35–1.00</div>
+        </div>
+        <div class="metric-card {tag_class}" style="margin:0;">
+            <h4>Edge State</h4><h2 style="font-size:1.15rem;">{tag}</h2>
+            <div class="sub-metric">live verdict</div>
+        </div>
+        <div class="metric-card info" style="margin:0;">
+            <h4>Dates Measured</h4><h2>{dates_str}</h2>
+            <div class="sub-metric">daily ICs in the trailing window</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(
+        '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
+        'padding:0.9rem 0 0.1rem 0; line-height:1.6;">'
+        'The ranker is a fixed, validated <b>cross-sectional short-horizon reversion</b> model — it '
+        'fades over-extended names and buys over-sold ones across the universe. It has no weights to '
+        'tune; instead it watches its <b>own realized edge</b>, the trailing mean daily cross-sectional '
+        'IC of the reversion score against forward returns. Conviction <b>auto-scales by that health</b>: '
+        'when the edge is active the screen runs at full conviction, and when it goes '
+        '<b style="color:var(--ink-secondary);">dormant</b> the screen intentionally steps down to '
+        'low conviction rather than forcing trades into a market the edge is not currently working in.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not measured:
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         ui.render_interpretation_card(
-            "Running on factory defaults",
-            "No tuned profile for this universe / timeframe yet, so the screen is ranked by default "
-            "factor weights. A profile auto-calibrates once per day on the next run — or tick "
-            "“Force recalibrate this run” in the sidebar to tune now.",
+            "Cold start — edge not yet measured",
+            "No trailing-IC reading for this universe / timeframe yet, so the screen runs at a neutral "
+            "0.75× conviction. The alpha-health auto-measures once per day on the next run — or tick "
+            "“Re-measure edge” in the sidebar to measure now.",
             "neutral",
         )
-
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
-    # ── Active weights (left) · factor importance (right) ──
-    col_w, col_s = st.columns([1, 1])
-    with col_w:
-        ui.render_section_header(
-            "Active Weights", "factor coefficients · long vs short",
-            icon="grid", accent="amber",
-        )
-        st.components.v1.html(_build_active_weights_table_html(active), height=820, scrolling=False)
-    with col_s:
-        ui.render_section_header(
-            "Factor Importance", "Optuna fANOVA · share of objective variance",
-            icon="bar-chart", accent="amber",
-        )
-        sensitivity = (res or {}).get('sensitivity', {}) or {}
-        if not sensitivity:
-            ui.render_interpretation_card(
-                "Not available yet",
-                "Factor importance appears after a calibration runs (and sharpens with a higher "
-                "trial count). Tick “Force recalibrate this run” in the sidebar to populate it.",
-                "neutral",
-            )
-        else:
-            sens_df = (pd.DataFrame(sensitivity.items(), columns=['Factor', 'Importance'])
-                       .sort_values('Importance'))
-            top_factor = sens_df.iloc[-1]['Factor']
-            top_share  = float(sens_df.iloc[-1]['Importance'])
-            fig_sens = go.Figure(go.Bar(
-                x=sens_df['Importance'], y=sens_df['Factor'], orientation='h',
-                marker=dict(color=sens_df['Importance'],
-                            colorscale=[[0, '#1E293B'], [1, '#D4A853']], line=dict(width=0)),
-                hovertemplate="<b>%{y}</b><br>Importance: %{x:.1f}%<extra></extra>",
-            ))
-            fig_sens.update_layout(
-                height=440, showlegend=False, margin=dict(l=0, r=0, t=10, b=0),
-                xaxis=dict(title="% of objective variance", gridcolor='rgba(255,255,255,0.05)', zeroline=False),
-                yaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
-            )
-            apply_chart_theme(fig_sens)
-            st.plotly_chart(fig_sens, width='stretch', key='chart_intel_tab_sensitivity')
-            st.markdown(
-                f'<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
-                f'padding-top:0.3rem;">Dominant factor '
-                f'<b style="color:var(--ink-secondary);">{top_factor}</b> · {top_share:.1f}% of variance.</div>',
-                unsafe_allow_html=True,
-            )
 
     # ── Reference: Context & Entry signal-aging columns ──
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -656,7 +522,7 @@ def _render_aging_reference():
     st.markdown(
         '<div style="font-family:var(--data); font-size:0.70rem; color:var(--ink-tertiary); '
         'padding:0.1rem 0 0.7rem 0; line-height:1.5;">'
-        'On the Ignition / Regime / Reversal tables, each aged signal (1d / 2d / … ago) carries '
+        'On the Momentum / Crossover tables, each aged signal (1d / 2d / … ago) carries '
         'two <b>orthogonal</b> reads, both scored <b>at the bar it fired</b>. '
         '<b style="color:var(--ink-secondary);">Context</b> asks whether the signal is still good; '
         '<b style="color:var(--ink-secondary);">Entry</b> asks whether the move has already run.</div>',
@@ -1551,19 +1417,25 @@ def to_excel(df):
         # Add Legend for user clarity
         legend_data = {
             "Column Identifier": [
-                "Priority_Long", 
-                "Priority_Short", 
-                "Pulse", 
-                "Conviction", 
-                "Regime_Confidence", 
-                "Vol_Regime", 
+                "Priority_Long",
+                "Priority_Short",
+                "Bar_Delta",
+                "CVD",
+                "CVD_Slope",
+                "Delta_Z",
+                "Abs_Strength",
+                "Regime_Confidence",
+                "Vol_Regime",
                 "Change_Point"
             ],
             "Metric Description": [
                 "Master ranking score for bullish setups (normalized magnitude).",
                 "Master ranking score for bearish setups (normalized magnitude).",
-                "Abnormal Acceleration: 5D Velocity modulated by 20D Volatility Z-Score.",
-                "Systemic conviction based on fractal trend and momentum confluence.",
+                "Inferred per-bar buy−sell volume delta (OHLC close-location proxy).",
+                "Cumulative volume delta (running sum of Bar_Delta).",
+                "3-bar change in CVD — flow building (+) or draining (−).",
+                "Signed z-score of Bar_Delta vs its 20-bar distribution.",
+                "Absorption strength: |Bar_Delta| ÷ its 20-bar average (Set B fires > 1.8×).",
                 "Statistical probability (0.0 - 1.0) of the detected HMM regime.",
                 "Volatility regime classification (Low/Normal/High) via GARCH analysis.",
                 "Structural change point detection (CUSUM) identifying regime shifts."
@@ -1574,73 +1446,12 @@ def to_excel(df):
     return output.getvalue()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# WRCI ENGINE: WAVE-REGIME COMPOSITE INDEX CALCULATION
+# SHARED MATH HELPERS  (SMA + True Range — the only primitives the engine needs)
+# ──────────────────────────────────────────────────────────────────────────────
+#  The WRCI-era MA library (EMA/HMA/WMA/VWMA/ALMA/RMA, f_smooth, linreg, RSI) and
+#  the Ehlers AutoTune filter were removed with the WRCI engine — the reversion
+#  ranker uses only a simple SMA and ATR.
 # ══════════════════════════════════════════════════════════════════════════════
-
-def calculate_wma(series, length):
-    if length <= 1:
-        return series
-    weights = np.arange(1, length + 1)
-    return series.rolling(window=length).apply(lambda vars: np.dot(vars, weights) / weights.sum(), raw=True)
-
-
-def calculate_hma(series, length):
-    if length <= 1:
-        return series
-    half_length = int(length / 2)
-    sqrt_length = int(np.sqrt(length))
-    wma_half = calculate_wma(series, half_length)
-    wma_full = calculate_wma(series, length)
-    diff = 2 * wma_half - wma_full
-    return calculate_wma(diff, sqrt_length)
-
-
-@_njit
-def _ema_recur(values, start_pos, alpha, seed):
-    """Recursive EMA core (TradingView NaN semantics). JIT-accelerated, bit-identical
-    to the pure-Python loop. Returns the ema_values array."""
-    n = len(values)
-    ema = np.full(n, np.nan)
-    ema[start_pos] = seed
-    for i in range(start_pos + 1, n):
-        if np.isnan(values[i]):
-            ema[i] = np.nan
-        else:
-            prev_ema = ema[i - 1]
-            if np.isnan(prev_ema):
-                j = i - 1
-                while j >= start_pos and np.isnan(ema[j]):
-                    j -= 1
-                prev_ema = ema[j] if j >= start_pos else values[i]
-            ema[i] = (values[i] - prev_ema) * alpha + prev_ema
-    return ema
-
-
-def calculate_ema(series, length):
-    """
-    Exponential Moving Average matched to TradingView's ta.ema.
-    Initializes with SMA and follows the recursive formula.
-    """
-    if length <= 1:
-        return series
-
-    # Calculate initial SMA for startup
-    sma = series.rolling(window=length, min_periods=length).mean()
-
-    # Find the first valid SMA index
-    first_idx = sma.first_valid_index()
-    if first_idx is None:
-        return pd.Series(np.nan, index=series.index)
-
-    start_pos = series.index.get_loc(first_idx)
-    alpha = 2.0 / (length + 1)
-
-    ema_values = _ema_recur(
-        series.to_numpy(dtype=np.float64), int(start_pos), float(alpha),
-        float(sma.loc[first_idx]),
-    )
-    return pd.Series(ema_values, index=series.index)
-
 
 def calculate_sma(series, length):
     if length <= 1:
@@ -1648,88 +1459,8 @@ def calculate_sma(series, length):
     return series.rolling(window=length).mean()
 
 
-def calculate_rma(series, length):
-    """Wilder's smoothing (RMA), matched to TradingView's ta.rma.
-    Seeds with an SMA, then applies alpha = 1/length."""
-    if length <= 1:
-        return series
-    alpha = 1.0 / length
-    sma = series.rolling(window=length, min_periods=length).mean()
-    first_idx = sma.first_valid_index()
-    if first_idx is None:
-        return pd.Series(np.nan, index=series.index)
-    start_pos = series.index.get_loc(first_idx)
-    values = series.values
-    out = np.full(len(series), np.nan)
-    out[start_pos] = sma.loc[first_idx]
-    for i in range(start_pos + 1, len(series)):
-        prev = out[i - 1]
-        if np.isnan(prev):
-            prev = values[i]
-        out[i] = alpha * values[i] + (1.0 - alpha) * prev
-    return pd.Series(out, index=series.index)
-
-
-def calculate_vwma(series, volume, length):
-    """Volume-weighted moving average, matched to ta.vwma."""
-    if length <= 1:
-        return series
-    pv = (series * volume).rolling(window=length).sum()
-    v = volume.rolling(window=length).sum().replace(0, np.nan)
-    return pv / v
-
-
-def calculate_alma(series, length, offset=0.85, sigma=6.0):
-    """Arnaud Legoux Moving Average, matched to ta.alma(src, len, offset, sigma).
-    Gaussian-weighted window with the peak shifted toward the most recent bar."""
-    if length <= 1:
-        return series
-    m = offset * (length - 1)
-    s = length / sigma
-    idx = np.arange(length)
-    weights = np.exp(-((idx - m) ** 2) / (2.0 * s * s))
-    weights /= weights.sum()
-    # In a pandas rolling window y[0] is oldest, y[length-1] is newest — the same
-    # ordering as Pine's series[length-1-i], so weights apply directly.
-    return series.rolling(window=length).apply(lambda y: np.dot(y, weights), raw=True)
-
-
-def f_smooth(src, length, ma_type, volume=None):
-    """Configurable smoothing dispatcher — mirrors wrci.pine's f_smooth().
-    ALMA uses standard defaults (offset 0.85, sigma 6); RMA is Wilder's smoothing.
-    Falls back to SMA for unknown types (matching the Pine switch default)."""
-    t = (ma_type or "SMA").upper()
-    if t == "EMA":
-        return calculate_ema(src, length)
-    if t == "HMA":
-        return calculate_hma(src, length)
-    if t == "WMA":
-        return calculate_wma(src, length)
-    if t == "VWMA":
-        if volume is None:
-            return calculate_sma(src, length)
-        return calculate_vwma(src, volume, length)
-    if t == "ALMA":
-        return calculate_alma(src, length, 0.85, 6.0)
-    if t == "RMA":
-        return calculate_rma(src, length)
-    return calculate_sma(src, length)
-
-
-def calculate_linreg(series, length, offset=0):
-    """Calculate the Linear Regression endpoint."""
-    def _linreg_val(y):
-        if np.isnan(y).any():
-            return np.nan
-        x = np.arange(len(y))
-        slope, intercept = np.polyfit(x, y, 1)
-        return slope * (len(y) - 1 - offset) + intercept
-
-    return series.rolling(window=length).apply(_linreg_val, raw=True)
-
-
 def calculate_true_range(df):
-    """Standard True Range calculation."""
+    """Standard True Range calculation (ATR base)."""
     prev_close = df['Close'].shift(1)
     tr1 = df['High'] - df['Low']
     tr2 = (df['High'] - prev_close).abs()
@@ -1737,484 +1468,229 @@ def calculate_true_range(df):
     return pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
 
-def compute_rsi(series, length=14):
-    """RSI calculation using RMA (TradingView standard)."""
-    delta = series.diff()
-    up = delta.clip(lower=0)
-    down = -delta.clip(upper=0)
-    alpha = 1.0 / length
-    roll_up = up.ewm(alpha=alpha, adjust=False).mean()
-    roll_down = down.ewm(alpha=alpha, adjust=False).mean()
-    rs = roll_up / roll_down.replace(0, np.nan)
-    return 100.0 - (100.0 / (1.0 + rs))
+def _rolling_volume_profile(high, low, vol, win=20, bins=24, va_pct=0.70):
+    """Rolling volume-by-price profile over `win` bars → (POC, VAH, VAL) Series.
 
-
-def calculate_trend_count(series, length):
-    trend = pd.Series(0.0, index=series.index)
-    for i in range(1, length + 1):
-        trend += np.where(series > series.shift(i), 1, -1)
-    return trend
-
-
-
+    Mirrors the `Order Flow.pine` profile builder: each bar's volume is distributed
+    across the price bins its range spans, POC = highest-volume bin, and the value area
+    expands from the POC to `va_pct` of total volume. POC/VAH/VAL are the structural
+    backbone of the validated signal sets (fair value + acceptance edges).
+    """
+    h = high.to_numpy(dtype=float)
+    l = low.to_numpy(dtype=float)
+    v = vol.to_numpy(dtype=float)
+    n = len(h)
+    poc = np.full(n, np.nan); vah = np.full(n, np.nan); val = np.full(n, np.nan)
+    for i in range(win - 1, n):
+        s = slice(i - win + 1, i + 1)
+        wh, wl, wv = h[s], l[s], v[s]
+        lo, hi = wl.min(), wh.max()
+        if not (hi > lo):
+            continue
+        step = (hi - lo) / bins
+        bucket = np.zeros(bins)
+        for j in range(win):
+            b0 = int(min(bins - 1, max(0, (wl[j] - lo) // step)))
+            b1 = int(min(bins - 1, max(0, (wh[j] - lo) // step)))
+            bucket[b0:b1 + 1] += wv[j] / (b1 - b0 + 1)
+        pidx = int(bucket.argmax())
+        poc[i] = lo + (pidx + 0.5) * step
+        tot = bucket.sum(); tgt = tot * va_pct
+        acc = bucket[pidx]; a = b = pidx
+        while acc < tgt and (a > 0 or b < bins - 1):
+            up = bucket[b + 1] if b < bins - 1 else -1.0
+            dn = bucket[a - 1] if a > 0 else -1.0
+            if up >= dn:
+                b += 1; acc += bucket[b]
+            else:
+                a -= 1; acc += bucket[a]
+        vah[i] = lo + (b + 1) * step
+        val[i] = lo + a * step
+    idx = high.index
+    return (pd.Series(poc, index=idx), pd.Series(vah, index=idx), pd.Series(val, index=idx))
 
 
 def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40,
                       wt2_len=20, wt2_type="ALMA",
                       hci_thres=0.25, hci_look=102, hci_sig_len=53, hci_sig_type="SMA", hci_roc_len=15):
-    """Primary per-instrument analysis. The legacy WRCI / HCI / AT-Filter stack has been
-    REMOVED — the Directional Logistic Oscillator (run_dlo_analysis) is now the sole
-    engine. Legacy column names (Unified_Osc / WT1 / Signal_Line / Conviction / Pulse /
-    Norm_Trend …) are retained as a thin compatibility surface so the screener, scoring
-    and UI keep working; they are now backed by DLO-derived values, not the old engines.
-    Extra keyword args (n1/n2/wt2_*/hci_*) are accepted for call-site compatibility and
-    ignored. The oscillator is scaled ×100 onto the historical ±100 display range."""
-    reg_len = max(reg_len, 2)
-    # Auto-correct inverted OB levels (obLevel1 must be the stronger/higher bound)
-    if obLevel1 < obLevel2:
-        obLevel1, obLevel2 = obLevel2, obLevel1
-    # Auto-correct inverted OS levels (osLevel1 must be the stronger/lower bound)
-    if osLevel1 > osLevel2:
-        osLevel1, osLevel2 = osLevel2, osLevel1
+    """Per-symbol feature engine — reversion features (the ranking alpha) plus order-flow
+    context (inferred delta, CVD, volume profile).
 
+    The RANKING alpha is cross-sectional reversion (see engine.py / ARCHITECTURE.md);
+    its per-symbol inputs are attached here via ``eng.add_reversion_features`` and ranked
+    later across the universe by ``eng.compute_ranking``. The legacy WRCI / Conviction /
+    Pulse / Liquidity / HCI / AutoTune engines and the momentum factor stack were removed
+    (they anti-predicted on real data).
+
+    Everything else here is DESCRIPTIVE ORDER-FLOW CONTEXT, not the ranking signal: the
+    OHLC-proxy inferred delta / CVD / volume profile (ported from `Order Flow.pine`), and
+    two order-flow overlay flags surfaced for the trader (compute_signal_sets):
+      • long_cond/short_cond   — flow-continuation context (POC reclaim + delta + CVD)
+      • *_comp                 — absorption-reversal context (one-sided delta absorbed at
+                                 the opposite value-area edge)
+    These add no cross-sectional ranking edge (validated) — they are shown as flow colour,
+    never as the rank.
+
+    The unused WRCI-era params (n1/n2/obLevel*/osLevel*/wt2_*/hci_*) are retained in the
+    signature only so existing call sites keep working; `reg_len` still drives the ATR
+    window. `_analysis_params_sig` carries an engine tag so frames cached by the old
+    engine are invalidated.
+    """
+    reg_len = max(reg_len, 2)
+
+    high, low, close, opn = df['High'], df['Low'], df['Close'], df['Open']
     vol = df['Volume']
 
-    # ── DIRECTIONAL LOGISTIC OSCILLATOR (the engine) ──────────────────────────
-    df = run_dlo_analysis(df)
-    osc      = df['DLO_Strength']          # bounded ≈ -1..+1
-    osc_sma  = df['DLO_SMA']
-    osc_ema  = df['DLO_EMA']
-    osc_100  = (osc * 100.0).clip(-100, 100)   # legacy ±100 display surface
+    # Institutional Volume Fallback: many index symbols report zero volume. Without it
+    # the inferred delta degenerates to 0 everywhere; with it the close-location model
+    # still yields a price-shape proxy (divergence/absorption are weak on such symbols).
+    if vol.sum() == 0:
+        vol = pd.Series(1.0, index=df.index)
 
-    # ── Legacy column compatibility surface (DLO-backed) ──────────────────────
-    # WT1 / Unified_Osc / Signal_Line — the oscillator and its smoothed line, ±100.
-    df['WT1']          = osc_100
-    df['Unified_Osc']  = osc_100
-    df['Signal_Line']  = (osc_ema * 100.0).clip(-100, 100)
-    # Norm_Trend — directional bias from the oscillator (kept on its old ~±100 scale).
-    df['Norm_Trend']   = osc_100
-    # Conviction — structural conviction proxy = oscillator × ADX-probability strength,
-    # rescaled to ±100. ADX is implicit in DLO_Strength already, so this tracks it.
-    df['Conviction']       = (osc * 100.0).clip(-100, 100)
-    df['Conviction_Delta'] = df['Conviction'].diff().fillna(0)
-    # Pulse — momentum of the oscillator (cycle velocity), on a compact ±6-ish scale.
-    df['Pulse']        = (osc.diff() * 50.0).clip(-6, 6).fillna(0)
-    df['Pulse_Delta']  = df['Pulse'].diff().fillna(0)
-    df['ZScore']       = df['DLO_NetDir'].fillna(0)
-    df['VolTrend']     = 0.0
-    # AT_Filter — removed as an engine; the display column now shows the DLO cycle line
-    # (its sign is the cycle phase, the same display role the old AT band-pass served).
-    df['AT_Filter']    = (df['DLO_Cycle'] * 100.0).fillna(0)
-    # HCI_* — Hemrek Count removed; retained as zeroed columns for display compatibility.
-    df['HCI_Index']    = 0.0
-    df['HCI_Signal']   = 0.0
-    # Liquidity_Osc / Liq_Vel / LO — liquidity engine removed; zeroed compat columns.
-    df['Liquidity_Osc'] = 0.0
-    df['Liq_Vel']       = 0.0
-    df['LO']            = 0.0
-    df['Recent_Travel'] = (osc_100 - osc_100.shift(5)).fillna(0)
-    df['WT1_5ago']      = osc_100.shift(5)
+    # ── INFERRED BAR DELTA (OHLC proxy · Order Flow.pine f_proxy_delta) ─────────
+    # close-location value in [-1, 1]: +1 = close on the high (max inferred buying),
+    # -1 = close on the low (max inferred selling).
+    tr_range = (high - low).clip(lower=1e-4)
+    clv      = ((close - low) - (high - close)) / tr_range
+    buy_vol  = vol * (clv + 1.0) / 2.0
+    sell_vol = vol - buy_vol
+    bar_delta = (buy_vol - sell_vol).fillna(0.0)
 
-    # F1 · price momentum (5-bar log return, ATR-normalized) — orthogonal, kept for scoring.
-    tr = calculate_true_range(df)
-    close_lag5 = df['Close'].shift(5).fillna(df['Close'])
-    log_ret_5  = np.log(df['Close'] / close_lag5)
-    atr_pct_v4 = (tr.rolling(14).mean() / df['Close']).replace(0, np.nan)
-    df['F1_PriceMom'] = (log_ret_5 / atr_pct_v4.clip(lower=1e-6)).clip(-5, 5).fillna(0)
-    # F2 · volume quality (signed vol z-score) — kept for scoring breadth.
-    vol_mean = df['Volume'].rolling(20).mean()
-    vol_std  = df['Volume'].rolling(20).std(ddof=0).clip(lower=1e-6)
-    vol_z_raw = (df['Volume'] - vol_mean) / vol_std
-    price_dir_5 = np.sign(df['Close'] - close_lag5)
-    df['F2_VolQual'] = (vol_z_raw * price_dir_5).rolling(5).mean().clip(-5, 5).fillna(0)
+    # ── CUMULATIVE VOLUME DELTA + slope + trend EMA ────────────────────────────
+    cvd        = bar_delta.cumsum()
+    cvd_slope  = cvd.diff(3).fillna(0.0)          # 3-bar flow build/drain
+    cvd_ma     = cvd.rolling(20).mean()
+    cvd_ema    = cvd.ewm(span=20, adjust=False).mean()   # CVD flow-trend (Set A gate)
 
-    # ── KLINGER VOLUME OSCILLATOR (port of klinger.pine) ──────────────────────
-    # Volume signed by HLC3 direction, then KVO = EMA(34) − EMA(55), signal = EMA(13).
-    # A volume-FLOW momentum read — orthogonal to the DLO (price) — used as the new
-    # Set C trigger (KVO/signal crossover) after the old DLO reversal-short underperformed.
-    hlc3 = (df['High'] + df['Low'] + df['Close']) / 3.0
-    sv   = np.where(hlc3.diff() >= 0, df['Volume'], -df['Volume'])
-    sv   = pd.Series(sv, index=df.index)
-    kvo  = calculate_ema(sv, 34) - calculate_ema(sv, 55)
-    kvo_sig = calculate_ema(kvo, 13)
-    df['KVO']        = kvo.fillna(0)
-    df['KVO_Signal'] = kvo_sig.fillna(0)
-    df['KVO_Hist']   = (kvo - kvo_sig).fillna(0)   # histogram (KVO above/below its signal)
+    # ── ATR(14) for absorption range-normalization ─────────────────────────────
+    tr   = calculate_true_range(df)
+    atr14 = tr.rolling(14).mean()
+    mintick = (close.abs().clip(lower=1e-6) * 1e-4)   # proxy for syminfo.mintick
 
-    # MA alignment (8/21/50/100/200) — independent of the old engine, retained.
+    # ── Signal strengths surfaced to UI + priority factors ─────────────────────
+    abs_delta      = bar_delta.abs()
+    abs_delta_sma  = calculate_sma(abs_delta, 20).clip(lower=1e-9)
+    rel_delta      = (abs_delta / abs_delta_sma).fillna(0.0)              # absorption magnitude
+    rel_range      = ((high - low) / np.maximum(atr14, mintick)).fillna(0.0)
+    # Normalized delta z-score (signed) — generic "how one-sided is this bar" strength.
+    delta_mean = bar_delta.rolling(20).mean()
+    delta_std  = bar_delta.rolling(20).std(ddof=0).clip(lower=1e-9)
+    delta_z    = ((bar_delta - delta_mean) / delta_std).clip(-5, 5).fillna(0.0)
+
+    # ── Participation (RVOL) — gates Set A; thin bars don't make trustworthy breakouts ──
+    rvol = (vol / vol.rolling(20).mean().clip(lower=1e-9)).fillna(1.0)
+
+    # ── Rolling volume profile — POC (fair value) + value-area edges (VAH/VAL) ──
+    poc, vah, val = _rolling_volume_profile(high, low, vol, win=20, va_pct=0.70)
+    # Position within the value area: 0 = at VAL (cheap), 1 = at VAH (rich). Drives Set B.
+    va_pos = ((close - val) / (vah - val).replace(0, np.nan))
+
+    # ── F1 · PRICE MOMENTUM (orthogonal, retained from prior engine) ───────────
+    close_lag5 = close.shift(5).fillna(close)
+    log_ret_5  = np.log(close / close_lag5)
+    atr_pct_v4 = (tr.rolling(14).mean() / close).clip(lower=1e-6)
+    F1_PriceMom = (log_ret_5 / atr_pct_v4).clip(-5, 5).fillna(0)
+
+    # ── F2 · VOLUME QUALITY (signed, smoothed; retained) ───────────────────────
+    vol_mean   = df['Volume'].rolling(20).mean()
+    vol_std    = df['Volume'].rolling(20).std(ddof=0).clip(lower=1e-6)
+    vol_z_raw  = (df['Volume'] - vol_mean) / vol_std
+    price_dir_5 = np.sign(close - close_lag5)
+    F2_VolQual = (vol_z_raw * price_dir_5).rolling(5).mean().clip(-5, 5).fillna(0)
+
+    # ── WRITE ORDER-FLOW COLUMNS ───────────────────────────────────────────────
+    df['F1_PriceMom']  = F1_PriceMom
+    df['F2_VolQual']   = F2_VolQual
+    df['Bar_Delta']    = bar_delta
+    df['Buy_Vol']      = buy_vol
+    df['Sell_Vol']     = sell_vol
+    df['CVD']          = cvd
+    df['CVD_Slope']    = cvd_slope
+    df['CVD_EMA']      = cvd_ema
+    df['Delta_Z']      = delta_z
+    df['Abs_Strength'] = rel_delta
+    df['Rel_Range']    = rel_range
+    df['RVOL']         = rvol
+    df['POC']          = poc
+    df['VAH']          = vah
+    df['VAL']          = val
+    df['VA_Pos']       = va_pos
+
+    # ── MA ALIGNMENT (retained display metric) ─────────────────────────────────
     ma_counts = pd.Series(0, index=df.index)
     for ma in [8, 21, 50, 100, 200]:
-        ema = df['Close'].ewm(span=ma, adjust=False).mean()
-        ma_counts += (df['Close'] > ema).astype(int)
+        ema = close.ewm(span=ma, adjust=False).mean()
+        ma_counts += (close > ema).astype(int)
     df['MA_Alignment'] = ma_counts
 
-    # Zone-depth factors off the DLO oscillator (percentile-aware via ±0.5 reference).
-    df['Bull_Zone_Depth'] = ((-osc - 0.5) / 0.5).clip(0, 1).fillna(0)
-    df['Bear_Zone_Depth'] = (( osc - 0.5) / 0.5).clip(0, 1).fillna(0)
+    df = compute_signal_sets(df, bar_delta, cvd, cvd_ma, cvd_ema,
+                             rel_delta, rel_range, rvol, poc, va_pos)
 
-    # Zone label (off the DLO oscillator percentile zones — set inside compute_zone_condition).
-    df = compute_zone_condition(df)
+    # ── REVERSION FEATURES (the actual ranking alpha; see engine.py / ARCHITECTURE.md) ──
+    # Per-symbol features; the cross-sectional ranking (engine.compute_ranking) runs later
+    # once the whole universe is assembled. Order-flow columns above are context only.
+    df = eng.add_reversion_features(df)
 
-    # Volume-structure context (POC/VAH/VAL + location features). Orthogonal to the
-    # DLO — answers "WHERE is price vs high-volume nodes", which the oscillator can't.
-    df = run_volume_profile(df)
-    return df
-
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  DIRECTIONAL LOGISTIC OSCILLATOR (DLO) ENGINE
-#  1:1 Python port of directional_logistic_oscillator.pine. This REPLACES the old
-#  WRCI/HCI/AT-filter stack as the sole signal engine. Pipeline:
-#     DMI(+DI/-DI/ADX) → per-component logistic probability (z-scored vs long mean)
-#     → net_dir·prob_adx·scale → tanh-bound → EMA → SMA/EMA/cycle smoothing
-#     → percentile extreme zones.
-#  Three orthogonal signals come straight off this oscillator (see compute_signal_sets).
-# ══════════════════════════════════════════════════════════════════════════════
-
-# DLO parameter defaults (mirror the Pine inputs; single source of truth).
-DLO_DI_LEN      = 14     # DMI length
-DLO_MEAN_LB     = 360    # long-term mean / percentile lookback
-DLO_SLOPE       = 0.18   # logistic steepness
-DLO_SMOOTH_LEN  = 3      # probability + strength EMA smoothing
-DLO_OSC_SCALE   = 2.5    # pre-tanh net-direction scale
-DLO_OSC_SMOOTH  = 7      # SMA/EMA smoothing of the oscillator
-
-
-def calculate_dmi(df: pd.DataFrame, di_len: int = 14):
-    """+DI, -DI, ADX via Wilder's method — matches Pine's ta.dmi(di_len, di_len).
-    +DM/-DM are RMA-smoothed, normalized by RMA(TrueRange); ADX = RMA of the DX."""
-    high, low = df['High'], df['Low']
-    up_move   = high.diff()
-    down_move = -low.diff()
-    plus_dm   = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-    minus_dm  = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-    plus_dm   = pd.Series(plus_dm,  index=df.index)
-    minus_dm  = pd.Series(minus_dm, index=df.index)
-
-    tr      = calculate_true_range(df)
-    tr_rma  = calculate_rma(tr, di_len).replace(0, np.nan)
-    plus_di  = 100.0 * calculate_rma(plus_dm,  di_len) / tr_rma
-    minus_di = 100.0 * calculate_rma(minus_dm, di_len) / tr_rma
-
-    di_sum = (plus_di + minus_di).replace(0, np.nan)
-    dx     = 100.0 * (plus_di - minus_di).abs() / di_sum
-    adx    = calculate_rma(dx, di_len)
-    return plus_di.fillna(0), minus_di.fillna(0), adx.fillna(0)
-
-
-def _dlo_logistic_prob(series: pd.Series, mean_lb: int, slope: float, smooth_len: int) -> pd.Series:
-    """logistic_prob() port: z-score vs SMA mean, sigmoid, EMA-smooth → [0,1]."""
-    mean = calculate_sma(series, mean_lb)
-    z    = (series - mean) * slope
-    # Clamp the exponent to avoid math overflow on extreme z (Pine tolerates inf; we guard).
-    prob_raw = 1.0 / (1.0 + np.exp(-z.clip(-50, 50)))
-    return calculate_ema(prob_raw, smooth_len)
-
-
-def run_dlo_analysis(df: pd.DataFrame,
-                     di_len: int = DLO_DI_LEN, mean_lb: int = DLO_MEAN_LB,
-                     slope: float = DLO_SLOPE, smooth_len: int = DLO_SMOOTH_LEN,
-                     osc_scale: float = DLO_OSC_SCALE, osc_smooth_len: int = DLO_OSC_SMOOTH) -> pd.DataFrame:
-    """Compute the full Directional Logistic Oscillator surface and write the columns
-    the rest of the pipeline reads. Non-repainting by construction: every value is a
-    function of closed-bar data only (no lookahead).
-
-    Output columns:
-      DLO_Strength   — the bounded oscillator (≈ -1..+1), the primary 'Signal' surface
-      DLO_SMA/_EMA   — smoothed oscillator lines
-      DLO_Cycle      — double-smoothed line for turning-point detection
-      DLO_PlusDI/_MinusDI/_ADX, DLO_NetDir  — engine internals (feed scoring features)
-      DLO_Lo/Hi_SMA, DLO_Lo/Hi_EMA          — percentile extreme-zone thresholds
-    """
-    plus_di, minus_di, adx = calculate_dmi(df, di_len)
-
-    prob_plus  = _dlo_logistic_prob(plus_di,  mean_lb, slope, smooth_len)
-    prob_minus = _dlo_logistic_prob(minus_di, mean_lb, slope, smooth_len)
-    prob_adx   = _dlo_logistic_prob(adx,      mean_lb, slope, smooth_len)
-
-    net_dir        = prob_plus - prob_minus
-    strength_raw   = net_dir * prob_adx * osc_scale
-    strength_bound = np.tanh(strength_raw)                       # tanh() port
-    strength       = calculate_ema(strength_bound, smooth_len)
-
-    s_sma       = calculate_sma(strength, osc_smooth_len)
-    s_ema       = calculate_ema(strength, osc_smooth_len)
-    s_sma_cycle = calculate_ema(s_sma, int(np.ceil(osc_smooth_len / 2)))
-
-    # Percentile extreme-zone thresholds (rolling, min_periods relaxed so early bars
-    # still populate). 10/90 on the SMA line, 5/95 on the EMA line — same as Pine.
-    def _pct(series, q):
-        return series.rolling(mean_lb, min_periods=max(2, osc_smooth_len)).quantile(q / 100.0)
-
-    df['DLO_PlusDI']  = plus_di
-    df['DLO_MinusDI'] = minus_di
-    df['DLO_ADX']     = adx
-    df['DLO_NetDir']  = net_dir.fillna(0)
-    df['DLO_Strength'] = strength.fillna(0)
-    df['DLO_SMA']      = s_sma.fillna(0)
-    df['DLO_EMA']      = s_ema.fillna(0)
-    df['DLO_Cycle']    = s_sma_cycle.fillna(0)
-    df['DLO_Lo_SMA']   = _pct(s_sma, 10)
-    df['DLO_Hi_SMA']   = _pct(s_sma, 90)
-    df['DLO_Lo_EMA']   = _pct(s_ema, 5)
-    df['DLO_Hi_EMA']   = _pct(s_ema, 95)
-    return df
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  VOLUME PROFILE ENGINE  (Python port of volume_profile.pine — dgtrd)
-#  The Pine indicator only DRAWS boxes; here we port the math so the screener can
-#  use volume-structure LOCATION as signal context. For each bar we build a
-#  developing profile over a trailing window: bin volume into price buckets, find
-#  the POC (max-volume bucket), then expand a value area outward from the POC until
-#  it captures VA_PCT of total volume → VAH / VAL. These are the orthogonal piece
-#  the DLO is blind to (the DLO is pure directional momentum; it has no idea WHERE
-#  price sits relative to high-volume acceptance nodes).
-#  Used as SOFT confidence features (not hard gates) — auction-market levels are
-#  probabilistic S/R, so the optimizer learns their per-set worth from data.
-# ══════════════════════════════════════════════════════════════════════════════
-
-VP_WINDOW   = 60     # trailing bars in the developing profile (~ pivot-anchored span)
-VP_LEVELS   = 25     # price buckets (parity with volume_profile.pine profileLevels)
-VP_VA_PCT   = 0.68   # value-area volume fraction (parity with isValueArea default)
-VP_VOL_BURST = 1.618 # "bold bar": volume > this × its SMA (parity with VWCB upThesh)
-VP_VOL_MA    = 89    # volume SMA length for the burst flag (parity with vSMA)
-
-
-@_njit
-def _vp_levels_core(high, low, vol, n, window, levels, va_pct):
-    """Per-bar developing volume profile. Returns POC/VAH/VAL arrays.
-    For bar t, profiles bars (t-window+1 .. t): distributes each bar's volume across
-    the price buckets it spans (proportional overlap, matching the Pine box logic),
-    finds the max-volume bucket (POC), then grows the value area out from the POC,
-    always taking the heavier adjacent side, until va_pct of volume is enclosed."""
-    poc = np.full(n, np.nan)
-    vah = np.full(n, np.nan)
-    val = np.full(n, np.nan)
-    bins = np.zeros(levels)
-    for t in range(n):
-        start = t - window + 1
-        if start < 0:
-            continue
-        # window price range
-        hi = -1e30
-        lo = 1e30
-        for k in range(start, t + 1):
-            if high[k] > hi:
-                hi = high[k]
-            if low[k] < lo:
-                lo = low[k]
-        step = (hi - lo) / levels
-        if step <= 0:
-            continue
-        for b in range(levels):
-            bins[b] = 0.0
-        # distribute each bar's volume across the buckets its range overlaps
-        for k in range(start, t + 1):
-            bh = high[k]
-            bl = low[k]
-            v  = vol[k]
-            rng = bh - bl
-            for b in range(levels):
-                p_lo = lo + b * step
-                p_hi = p_lo + step
-                if bh >= p_lo and bl < p_hi:
-                    w = 1.0 if rng == 0.0 else step / rng
-                    bins[b] += v * w
-        # POC bucket
-        poc_b = 0
-        bmax = bins[0]
-        total = bins[0]
-        for b in range(1, levels):
-            total += bins[b]
-            if bins[b] > bmax:
-                bmax = bins[b]
-                poc_b = b
-        # grow value area outward from POC
-        target = total * va_pct
-        acc = bins[poc_b]
-        above = poc_b
-        below = poc_b
-        while acc < target:
-            if below == 0 and above == levels - 1:
-                break
-            v_above = bins[above + 1] if above < levels - 1 else 0.0
-            v_below = bins[below - 1] if below > 0 else 0.0
-            if v_above == 0.0 and v_below == 0.0:
-                break
-            if v_above >= v_below:
-                acc += v_above
-                above += 1
-            else:
-                acc += v_below
-                below -= 1
-        poc[t] = lo + (poc_b + 0.5) * step
-        vah[t] = lo + (above + 1.0) * step
-        val[t] = lo + below * step
-    return poc, vah, val
-
-
-def run_volume_profile(df: pd.DataFrame, window: int = VP_WINDOW,
-                       levels: int = VP_LEVELS, va_pct: float = VP_VA_PCT) -> pd.DataFrame:
-    """Compute developing POC/VAH/VAL + derived location features. Non-repainting:
-    bar t only profiles bars ≤ t. Writes:
-      VP_POC / VP_VAH / VP_VAL          — the volume-structure levels
-      VP_Pos        — where Close sits in the value area: -1 = at/below VAL,
-                       +1 = at/above VAH, 0 = at POC (linear, clipped ±1.5)
-      VP_Dist_POC   — signed distance Close→POC in ATR units (+ = above fair value)
-      VP_At_VAL / VP_At_VAH — bool: Close within ~0.25·VA-width of the edge
-      VP_Vol_Burst  — bool: bar volume > VP_VOL_BURST × its SMA (real participation)
-    """
-    n = len(df)
-    high = df['High'].to_numpy(dtype=np.float64)
-    low  = df['Low'].to_numpy(dtype=np.float64)
-    close = df['Close'].to_numpy(dtype=np.float64)
-    vol  = np.nan_to_num(df['Volume'].to_numpy(dtype=np.float64), nan=0.0)
-
-    poc, vah, val = _vp_levels_core(high, low, vol, n, int(window), int(levels), float(va_pct))
-    poc = pd.Series(poc, index=df.index)
-    vah = pd.Series(vah, index=df.index)
-    val = pd.Series(val, index=df.index)
-
-    df['VP_POC'] = poc
-    df['VP_VAH'] = vah
-    df['VP_VAL'] = val
-
-    va_width = (vah - val).replace(0, np.nan)
-    c = df['Close']
-    # Position within value area: -1 at VAL, +1 at VAH, 0 at the VA midpoint.
-    df['VP_Pos'] = (2.0 * (c - val) / va_width - 1.0).clip(-1.5, 1.5).fillna(0)
-    # Distance to POC in ATR units (orthogonal scale, asset-agnostic).
-    tr = calculate_true_range(df)
-    atr = tr.rolling(14).mean().replace(0, np.nan)
-    df['VP_Dist_POC'] = ((c - poc) / atr).clip(-5, 5).fillna(0)
-    # At-edge flags (within 25% of VA-width of the respective boundary).
-    edge = 0.25 * va_width
-    df['VP_At_VAL'] = ((c <= val + edge) & (c >= val - edge)).fillna(False)
-    df['VP_At_VAH'] = ((c >= vah - edge) & (c <= vah + edge)).fillna(False)
-    # Volume burst (VWCB "bold bar" rule).
-    vsma = df['Volume'].rolling(VP_VOL_MA).mean().replace(0, np.nan)
-    df['VP_Vol_Burst'] = (df['Volume'] > vsma * VP_VOL_BURST).fillna(False)
-    return df
-
-
-# ── Signal-set trigger thresholds (single source of truth, mirrored in the Pine layer) ──
-# The three sets are the three native DLO signals. These constants define the only
-# tunable knobs that aren't the DLO params themselves; the optimizer does NOT search
-# them (they define what a signal *is*, not how it's weighted).
-SIG_ZERO_EPS = 0.0     # Set A: oscillator zero-line cross threshold (strict 0-cross)
-
-
-def compute_zone_condition(df: pd.DataFrame, *_ignored, **__ignored) -> pd.DataFrame:
-    """Zone label off the DLO oscillator. The oscillator is bounded ≈ -1..+1, so the
-    extreme zones are defined by its percentile thresholds (DLO_Hi/Lo_SMA) with the
-    ±0.5 reference lines marking 'Extreme'. Predicate order is load-bearing — the
-    stricter (Extreme) bound precedes the looser one; np.select returns the first match.
-
-    Signature keeps *args/**kwargs so legacy callers passing (wt1, obLevel1, ...) still
-    work — those positional args are ignored now that zones read DLO columns directly."""
-    osc = (df['DLO_SMA'].astype(float) if 'DLO_SMA' in df.columns
-           else pd.Series(0.0, index=df.index))
-    hi  = (df['DLO_Hi_SMA'].astype(float) if 'DLO_Hi_SMA' in df.columns
-           else pd.Series(np.inf, index=df.index)).fillna(np.inf)
-    lo  = (df['DLO_Lo_SMA'].astype(float) if 'DLO_Lo_SMA' in df.columns
-           else pd.Series(-np.inf, index=df.index)).fillna(-np.inf)
-    df['Condition'] = np.select(
-        [osc > 0.5, osc > hi, osc < -0.5, osc < lo],
-        ['OB Extreme', 'OB', 'OS Extreme', 'OS'],
-        default='Neutral'
-    )
     return df
 
 
 def compute_signal_sets(df: pd.DataFrame,
-                        obLevel1: float = 80, obLevel2: float = 40,
-                        osLevel1: float = -80, osLevel2: float = -40) -> pd.DataFrame:
-    """The three signal sets are the three native Directional Logistic Oscillator
-    signals. They are orthogonal by construction — each reads a DIFFERENT facet of the
-    same oscillator (level cross vs cycle slope vs extreme-zone exit), so co-firing is
-    genuine confluence. MUST run AFTER run_dlo_analysis (needs the DLO_* columns).
+                        bar_delta: pd.Series, cvd: pd.Series, cvd_ma: pd.Series,
+                        cvd_ema: pd.Series, rel_delta: pd.Series, rel_range: pd.Series,
+                        rvol: pd.Series, poc: pd.Series, va_pos: pd.Series,
+                        abs_ratio: float = 1.5, abs_range: float = 0.8,
+                        va_edge: float = 0.25, rvol_min: float = 0.8) -> pd.DataFrame:
+    """Compute the two order-flow signal sets and the flow Condition.
 
-      Set A · IGNITION (zero-line cross) — momentum/trend regime shift.
-         Long: DLO_Strength crosses ABOVE 0. Short: crosses BELOW 0.
+    These are NOT the naive `Order Flow.pine` triangle/diamond labels. Those were tested
+    on real NSE F&O data (5y, 47 names) and showed *negative* edge — divergence triggers
+    too readily on falling knives, raw absorption was noise. The two sets below were
+    curated by screening order-flow confluence hypotheses on ATR-normalized forward
+    returns with a temporal train/test split and a per-symbol breadth check.
 
-      Set B · REGIME (cycle reversion) — the smoothed oscillator cycle turning.
-         Long: DLO bar color transitions dn_strong → dn_weak (deep-bearish strength
-               rising back above its own EMA = downside exhausting) AND Klinger
-               KVO > signal (volume flow turning up).
-         Short: mirror — up_strong → up_weak (bullish strength fading below its EMA)
-               AND Klinger KVO < signal (flow turning down).
+    Set A — FLOW CONTINUATION (momentum). Price reclaims the rolling POC (fair value) in
+        the direction of the bar's inferred delta, with the CVD flow-trend agreeing and
+        real participation (RVOL). A "trend-from-value" entry.
+          long : Close crosses UP through POC, Bar_Delta > 0, CVD > CVD_EMA, RVOL ≥ rvol_min
+          short: Close crosses DOWN through POC, Bar_Delta < 0, CVD < CVD_EMA, RVOL ≥ rvol_min
+        Validated edge: ~+0.04 ATR at 3-5 bar horizons, positive in ~62% of symbols (holds OOS).
 
-      Set C · FLOW (volume momentum) — Klinger KVO crosses its signal, gated by strength.
-         Long: KVO (EMA34−EMA55 of HLC3-signed volume) crosses UP through EMA13 signal.
-         Short: KVO crosses DOWN through its signal. BOTH gated by DLO Market Strength
-         FALLING (prev > current) on the trigger bar. Reads volume flow, not price.
+    Set B — ABSORPTION REVERSAL (contrarian). A strong one-sided delta is absorbed in a
+        compressed range while price sits at the OPPOSITE value-area edge → fade to value.
+          long : absorption & Bar_Delta < 0 & price near VAL  (VA_Pos < va_edge)  — sellers absorbed at the low
+          short: absorption & Bar_Delta > 0 & price near VAH  (VA_Pos > 1−va_edge) — buyers absorbed at the high
+          absorption = Abs_Strength > abs_ratio (1.5) and Rel_Range < abs_range (0.8)
+        Validated edge: +0.2 to +0.4 ATR at 8-13 bar horizons, positive in ~62% of symbols (holds OOS).
 
-    Writes long_cond/short_cond (A), *_comp (B = "comp" legacy alias), long_cond_c/
-    short_cond_c (C), and the zone Condition. Non-repainting: every trigger is a
-    closed-bar crossover of closed-bar series.
+    Writes long_cond/short_cond (A), *_comp (B), and Condition.
     """
-    F = lambda name, d=0.0: (df[name].astype(float) if name in df.columns
-                             else pd.Series(d, index=df.index))
+    close = df['Close']
 
-    strength = F('DLO_Strength')
-    s_ema    = F('DLO_EMA')
-    cycle    = F('DLO_Cycle')
-    kvo      = F('KVO')
-    kvo_sig  = F('KVO_Signal')
+    # ── Set A — flow-confirmed POC reclaim (continuation) ──
+    poc_cross_up = (close > poc) & (close.shift(1) <= poc.shift(1))
+    poc_cross_dn = (close < poc) & (close.shift(1) >= poc.shift(1))
+    cont_long  = poc_cross_up & (bar_delta > 0) & (cvd > cvd_ema) & (rvol >= rvol_min)
+    cont_short = poc_cross_dn & (bar_delta < 0) & (cvd < cvd_ema) & (rvol >= rvol_min)
 
-    def _cross_up(a, b):
-        return (a > b) & (a.shift(1) <= b.shift(1))
+    # ── Set B — absorption reversal at the opposite value-area edge (contrarian) ──
+    absorption = (rel_delta > abs_ratio) & (rel_range < abs_range)
+    rev_long  = absorption & (bar_delta < 0) & (va_pos < va_edge)        # sellers absorbed at VAL
+    rev_short = absorption & (bar_delta > 0) & (va_pos > 1.0 - va_edge)  # buyers absorbed at VAH
 
-    def _cross_dn(a, b):
-        return (a < b) & (a.shift(1) >= b.shift(1))
+    df['long_cond']       = cont_long.fillna(False)
+    df['short_cond']      = cont_short.fillna(False)
+    df['long_cond_comp']  = rev_long.fillna(False)
+    df['short_cond_comp'] = rev_short.fillna(False)
 
-    # DLO bar-color buckets (parity with directional_logistic_oscillator.pine strength_col):
-    #   dn_strong = strength < 0 AND strength <  s_ema  (deep bearish, falling below its EMA)
-    #   dn_weak   = strength < 0 AND strength >= s_ema  (bearish but recovering above its EMA)
-    #   up_strong = strength > 0 AND strength >  s_ema  (deep bullish)
-    #   up_weak   = strength > 0 AND strength <= s_ema  (bullish but fading below its EMA)
-    dn_strong = (strength < 0) & (strength <  s_ema)
-    dn_weak   = (strength < 0) & (strength >= s_ema)
-    up_strong = (strength > 0) & (strength >  s_ema)
-    up_weak   = (strength > 0) & (strength <= s_ema)
-
-    kvo_above = kvo > kvo_sig      # Klinger flow bullish
-    kvo_below = kvo < kvo_sig      # Klinger flow bearish
-
-    # ── SET A · IGNITION — zero-line cross ────────────────────────────────────
-    z = pd.Series(SIG_ZERO_EPS, index=df.index)
-    a_long  = _cross_up(strength, z)
-    a_short = _cross_dn(strength, z)
-
-    # ── SET B · REGIME — DLO bar-color regime flip, confirmed by Klinger flow ──
-    # Long:  bar transitions dn_strong → dn_weak (deep-bearish strength rising back
-    #        above its EMA = downside exhausting) AND Klinger KVO > signal (flow up).
-    # Short: mirror — up_strong → up_weak (bullish strength fading below its EMA)
-    #        AND Klinger KVO < signal (flow down).
-    b_long  = dn_strong.shift(1).fillna(False) & dn_weak & kvo_above
-    b_short = up_strong.shift(1).fillna(False) & up_weak & kvo_below
-
-    # ── SET C · FLOW — Klinger crossover, gated by DLO strength rolling over ──
-    # Klinger KVO/signal cross (volume-flow momentum), with an added gate: the DLO
-    # Market Strength must be FALLING (previous > current) on the trigger bar — for
-    # BOTH directions, per spec. Filters crosses that fire while strength is still
-    # pushing the other way.
-    strength_falling = strength.shift(1) > strength
-    strength_rising = strength.shift(1) < strength
-    c_long  = _cross_up(kvo, kvo_sig) & strength_rising
-    c_short = _cross_dn(kvo, kvo_sig) & strength_falling
-
-    df['long_cond']        = a_long.fillna(False)
-    df['short_cond']       = a_short.fillna(False)
-    df['long_cond_comp']   = b_long.fillna(False)
-    df['short_cond_comp']  = b_short.fillna(False)
-    df['long_cond_c']      = c_long.fillna(False)
-    df['short_cond_c']     = c_short.fillna(False)
-
-    if 'Condition' not in df.columns:
-        df = compute_zone_condition(df)
+    # Flow Condition (replaces the old WRCI overbought/oversold zone label): where does
+    # cumulative delta sit vs its 20-bar mean → accumulation / distribution / neutral.
+    cvd_dev = (cvd - cvd_ma)
+    band    = cvd_dev.abs().rolling(20).mean().clip(lower=1e-9)
+    df['Condition'] = np.select(
+        [cvd_dev >  2 * band, cvd_dev >  band, cvd_dev < -2 * band, cvd_dev < -band],
+        ['Accumulation+', 'Accumulation', 'Distribution+', 'Distribution'],
+        default='Neutral'
+    )
 
     return df
 
@@ -2395,10 +1871,11 @@ class AdaptiveKalmanFilter:
 
 def run_regime_analysis(df):
     """
-    Apply joint-state regime intelligence over (F1_PriceMom, F2_VolQual, Conviction/20).
-    Replaces the previous WT1-only HMM. The three input dimensions are roughly
-    orthogonal, so HMM's classification now reflects true market state, not a
-    re-statement of WaveTrend.
+    Apply joint-state regime intelligence over (F1_PriceMom, F2_VolQual, CVD flow).
+    The three input dimensions are roughly orthogonal (price momentum, volume
+    quality, cumulative-delta flow), so HMM's classification reflects true market
+    state. The regime engine is order-flow-agnostic and is retained to drive the
+    volatility-damping cascade in the priority engine.
     """
     hmm    = AdaptiveHMM()
     garch  = GARCHDetector()
@@ -2410,7 +1887,8 @@ def run_regime_analysis(df):
 
     f1_vals = df['F1_PriceMom'].values
     f2_vals = df['F2_VolQual'].values
-    cv_vals = (df['Conviction'] / 20.0).values  # rescale to ~[-5, +5]
+    # Third orthogonal view: cumulative-delta flow build/drain, squashed to ~[-5, +5].
+    cv_vals = (np.tanh(df['CVD_Slope'].values / 1.0e6) * 5.0)
 
     # Warmup pass: prime detectors on first bars so that bar-0 output isn't
     # determined purely by uninformed priors. State is carried forward into the
@@ -2483,69 +1961,21 @@ def run_regime_analysis(df):
 def _classify_signal_type(row) -> str:
     """Return priority-ordered signal type for a single bar row (pandas Series).
 
-    Priority: B (Regime) > A (Ignition) > C (Reversal) > Zone.
+    Priority: B (absorption reversal) > A (flow continuation) > flow zone.
     Matches the vectorised np.select used in the timeseries harvest path.
     """
     if row.get('long_cond_comp'):  return "B: Long"
     if row.get('short_cond_comp'): return "B: Short"
     if row.get('long_cond'):       return "A: Long"
     if row.get('short_cond'):      return "A: Short"
-    if row.get('long_cond_c'):     return "C: Long"
-    if row.get('short_cond_c'):    return "C: Short"
     cond = row.get('Condition', 'Neutral')
     return cond if cond != 'Neutral' else '-'
 
 
-def calculate_divergences(df, lookback: int = 20, timeframe: str = "Daily"):
-    """
-    Peak-trough divergence over `lookback` bars. Replaces 1-bar comparison
-    which produced ~30% false positives.
-
-    Bullish divergence: latest local price-low is LOWER than previous,
-                        but latest WT1 local-low is HIGHER (in OS context).
-    Bearish divergence: latest local price-high is HIGHER than previous,
-                        but latest WT1 local-high is LOWER (in OB context).
-
-    `order` is scaled to timeframe so that the neighborhood covers a similar
-    real-time span on both daily and weekly charts: order=3 ≈ 1 week on daily,
-    order=2 ≈ 4 weeks on weekly.
-    """
-    from scipy.signal import argrelextrema
-    close = df['Close'].values
-    osc   = df['Unified_Osc'].values
-    n     = len(df)
-    bull  = np.zeros(n, dtype=bool)
-    bear  = np.zeros(n, dtype=bool)
-    order = 2 if timeframe == "Weekly" else 3
-
-    for i in range(lookback, n):
-        wc = close[i - lookback : i + 1]
-        wo = osc[i - lookback : i + 1]
-        c_lows  = argrelextrema(wc, np.less,    order=order)[0]
-        c_highs = argrelextrema(wc, np.greater, order=order)[0]
-        o_lows  = argrelextrema(wo, np.less,    order=order)[0]
-        o_highs = argrelextrema(wo, np.greater, order=order)[0]
-
-        # Adaptive OS/OB thresholds: use the 30th/70th percentile of the window
-        # so the trigger scales with the actual oscillator range for this asset,
-        # rather than assuming a fixed [-100, +100] normalized range.
-        bull_thresh = min(-30.0, float(np.percentile(wo, 30)))
-        bear_thresh = max( 30.0, float(np.percentile(wo, 70)))
-
-        if len(c_lows) >= 2 and len(o_lows) >= 2:
-            if (wc[c_lows[-1]] < wc[c_lows[-2]]
-                and wo[o_lows[-1]] > wo[o_lows[-2]]
-                and wo[o_lows[-1]] < bull_thresh):
-                bull[i] = True
-        if len(c_highs) >= 2 and len(o_highs) >= 2:
-            if (wc[c_highs[-1]] > wc[c_highs[-2]]
-                and wo[o_highs[-1]] < wo[o_highs[-2]]
-                and wo[o_highs[-1]] > bear_thresh):
-                bear[i] = True
-
-    df['Bullish_Div'] = bull
-    df['Bearish_Div'] = bear
-    return df
+# The legacy WRCI-oscillator divergence detector (`calculate_divergences`, writing
+# Bullish_Div / Bearish_Div) was removed in the order-flow rewrite: Set A IS the
+# delta-divergence signal now (compute_signal_sets), so a separate price/oscillator
+# divergence pass is redundant.
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA HANDLING & UTILITIES
@@ -2579,14 +2009,14 @@ def render_landing_page():
         <div class='system-card portfolio'>
             <h3>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                PULSE ENGINE
+                REVERSION ENGINE
             </h3>
-            <p>Sanket Pulse Engine identifies Abnormal Acceleration (Velocity * Z-Score) to surface high-conviction ignition events.</p>
+            <p>Sanket ranks the universe by short-horizon cross-sectional mean-reversion — names overextended against their own volatility tend to revert relative to peers.</p>
             <div class='spec'>
-                <span>Primary:</span> Abnormal Acceleration (Pulse)<br>
-                <span>Secondary:</span> Signal Conviction Score<br>
-                <span>Metric:</span> 5D Velocity * 20D Vol Z-Score<br>
-                <span>Sorting:</span> Rank by Pulse Strength
+                <span>Primary:</span> ATR-normalized reversion (ret · dist-from-MA)<br>
+                <span>Method:</span> Within-date robust z-score blend<br>
+                <span>Validated:</span> IC ≈ +0.03 (t ≈ +8), walk-forward<br>
+                <span>Sorting:</span> Rank by reversion score
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -2596,14 +2026,14 @@ def render_landing_page():
         <div class='system-card regime'>
             <h3>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
-                SIGNAL STRUCTURE
+                CONVICTION & EDGE
             </h3>
-            <p>Hierarchical signal generation (Sets A-B-C) from the Directional Logistic Oscillator, ranked by calibrated Intelligence priority.</p>
+            <p>Conviction scales by a live alpha-health monitor — the system measures its own realized edge and stands down when reversion is dormant.</p>
             <div class='spec'>
-                <span>Sets:</span> Ignition / Regime / Flow<br>
-                <span>Ranking:</span> Sorted by Directional Priority<br>
-                <span>Long/Short:</span> Dual-sided directional logic<br>
-                <span>Timing:</span> Age-weighted signal aging
+                <span>Sides:</span> Long (oversold) / Short (overbought) tails<br>
+                <span>Conviction:</span> Tail strength × alpha-health × regime<br>
+                <span>Edge monitor:</span> Trailing realized cross-sectional IC<br>
+                <span>Context:</span> Order-flow + vol-regime overlays
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -2615,12 +2045,12 @@ def render_landing_page():
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
                 UNIVERSE & MODES
             </h3>
-            <p>Span eight asset classes through five analysis modes — from single-date snapshots to self-tuning calibration profiles.</p>
+            <p>Span eight asset classes through five analysis modes — from single-date snapshots to historical edge measurement.</p>
             <div class='spec'>
                 <span>Coverage:</span> 8 asset classes · 500+ symbols<br>
                 <span>Timeframes:</span> Daily · Weekly<br>
-                <span>Modes:</span> 5 modes · snapshot to self-tuning<br>
-                <span>Calibration:</span> Per-universe priority profiles
+                <span>Modes:</span> 5 modes · snapshot to time-series<br>
+                <span>Edge monitor:</span> Live alpha-health (realized IC)
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -2635,7 +2065,7 @@ def render_landing_page():
         </h4>
         <p>Configure via the <strong>Sidebar</strong>: select <strong>Universe</strong>, <strong>Timeframe</strong>, <strong>Analysis Mode</strong>, and any mode-specific settings.<br>
            Click the <strong>RUN</strong> button — its label adapts to the active mode (Screener · Pulse · Harvest · Correlation).<br>
-           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will compute Wave Trend oscillations · Analyze Abnormal Acceleration · Rank by calibrated Priority</span></p>
+           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will rank the cross-section by mean-reversion · scale conviction by live alpha-health · surface order-flow context</span></p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -2806,39 +2236,21 @@ def render_sidebar() -> SidebarState:
             disabled=not date_range_valid,
         )
 
-        # ── Per-universe profile sync (must run BEFORE Passport renders) ──
-        # When the (universe, selected_index, timeframe) triple changes — including
-        # the click that triggered THIS rerun — load the matching profile from disk
-        # so the Passport reflects the new universe/depth in the same render frame
-        # instead of lagging by one interaction.
+        # ── Per-universe alpha-health reset (must run BEFORE the Passport renders) ──
+        # When the (universe, selected_index, timeframe) triple changes — including the
+        # click that triggered THIS rerun — clear the stale trailing-IC reading so the
+        # alpha-health re-measures for the new universe on the next screener run. The
+        # reversion engine has no per-universe profiles on disk to load.
         _current_uni_key = (universe, selected_index, timeframe)
         _previous_uni_key = st.session_state.get("_last_universe_key")
         if _previous_uni_key != _current_uni_key:
-            _profile = pe.load_profile_for(universe, selected_index, timeframe)
-            _uni_label = (selected_index or universe or "—")
-            if _profile and isinstance(_profile.get("weights"), dict):
-                _set_active_weights(_profile["weights"])
-                pe.set_active_conf_model(_profile.get("signal_conf"))
-                pe.set_active_meta_model(_profile.get("meta_intel"))
-                st.session_state["opt_results"] = _profile
-                # Don't log the very first sync of a session (already covered by the
-                # session-start banner); only log genuine universe transitions.
-                if _previous_uni_key is not None:
-                    _ir_v = _profile.get("val_score")
-                    _ir_s = f"{_ir_v:+.3f}" if isinstance(_ir_v, (int, float)) else "—"
-                    console.detail(
-                        f"Profile loaded · {_uni_label} · val IR {_ir_s}"
-                    )
-            else:
-                _set_active_weights(pe.DEFAULT_W)
-                pe.set_active_conf_model(None)
-                pe.set_active_meta_model(None)
-                if "opt_results" in st.session_state:
-                    del st.session_state["opt_results"]
-                if _previous_uni_key is not None:
-                    console.detail(
-                        f"No profile for {_uni_label} · reverted to factory defaults"
-                    )
+            st.session_state.pop("alpha_health_ic", None)
+            st.session_state.pop("_alpha_health_key", None)
+            if "opt_results" in st.session_state:
+                del st.session_state["opt_results"]
+            if _previous_uni_key is not None:
+                _uni_label = (selected_index or universe or "—")
+                console.detail(f"Universe changed · {_uni_label} · alpha-health will re-measure")
             st.session_state["_last_universe_key"] = _current_uni_key
 
         # Model Passport — rendered in every mode. Surfaces the active priority profile,
@@ -2908,10 +2320,11 @@ def render_sidebar() -> SidebarState:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True, external_progress_slot=None, progress_offset=0, progress_scale=100, wt2_len=20, wt2_type="ALMA"):
-    """Execute WRCI momentum analysis on universe symbols and return ranked signals.
+    """Execute the cross-sectional reversion screen and return ranked signals.
 
-    Fetches market data for universe, computes Wave Trend oscillations, calculates
-    signal magnitude and trend values, detects overbought/oversold zones.
+    Fetches market data for the universe, computes per-symbol reversion features +
+    order-flow/regime context, then ranks the whole cross-section by the reversion
+    score (engine.compute_ranking), scaling conviction by the live alpha-health read.
 
     Args:
         external_progress_slot: Optional Streamlit container for external progress tracking (e.g., from correlation analysis)
@@ -2925,7 +2338,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (5 * progress_scale / 100)
-        progress_bar(progress_slot, pct_val, "Initializing WRCI engine", f"Universe: {universe}")
+        progress_bar(progress_slot, pct_val, "Initializing reversion engine", f"Universe: {universe}")
     
     console.start_phase("DATA ACQUISITION", 1, 2)
     console.section("Universe Configuration")
@@ -2989,30 +2402,27 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         console.item("Sectors mapped", f"{len(_breadth_panel.sector_rel)}" if _sector_map else "0 (Path C off)")
     console.end_phase("DATA ACQUISITION")
 
-    console.start_phase("WRCI MOMENTUM ANALYSIS", 2, 2)
+    console.start_phase("REVERSION RANKING", 2, 2)
 
-    console.section("Analysis Parameters")
+    console.section("Engine Parameters")
+    console.item("Engine", "Cross-Sectional Reversion v1")
     console.item("Timeframe", timeframe)
-    console.item("Regression Length", reg_len)
-    console.item("Wave Trend", f"N1={wt_n1}  N2={wt_n2}")
-    console.item("Signal Line", f"{wt2_type}({wt2_len})")
-    console.item("OB Levels", f"{obLevel1} / {obLevel2}")
-    console.item("OS Levels", f"{osLevel1} / {osLevel2}")
+    console.item("Reversion lookbacks", f"ret{eng.REV_RETURN_LAGS}  dist{eng.REV_MA_WINDOWS}")
+    console.item("Alpha-health", f"{st.session_state.get('alpha_health_mult', 1.0):.2f}× (live edge scaling)")
     console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (20 * progress_scale / 100)
-        progress_bar(progress_slot, pct_val, "Analyzing WRCI momentum", f"{len(data_dict)} stocks")
+        progress_bar(progress_slot, pct_val, "Ranking cross-section", f"{len(data_dict)} stocks")
 
     results = []
     _failed_symbols = []
-    # Per-symbol recent-bar feature windows, keyed by ticker. Powers fire-bar
-    # Intel confidence: aged signals (1d/2d/… ago) are scored at the bar they
-    # fired, not at the snapshot date — consistent with how Layer 2 was trained.
+    # Per-symbol recent-bar feature windows, keyed by ticker. Powers the fire-bar
+    # context status for aged order-flow context signals (1d/2d/… ago).
     intel_windows: dict = {}
 
-    # If an intelligence harvest just ran for this exact universe + params + date,
+    # If an edge-measurement harvest just ran for this exact universe + params + date,
     # its analyzed frames are cached — reuse them instead of recomputing the whole
-    # per-stock pipeline (the duplicate-work path on forced/missing-profile runs).
+    # per-stock pipeline.
     _cache_sig = _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
                                       wt2_len, wt2_type, end_date)
     _cache_hits = 0
@@ -3024,7 +2434,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         try:
             pct = int(progress_offset + (20 + (i + 1) / len(data_dict) * 75) * progress_scale / 100)
             if show_progress or external_progress_slot is not None:
-                progress_bar(progress_slot, pct, f"Analyzing Signals", f"{i + 1}/{len(data_dict)} stocks")
+                progress_bar(progress_slot, pct, "Analyzing instruments", f"{i + 1}/{len(data_dict)} stocks")
 
             _cached = _analyzed_cache_get(ticker, _cache_sig)
             if _cached is not None:
@@ -3048,12 +2458,6 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 df = run_full_analysis(df, reg_len, wt_n1, wt_n2, obLevel1, obLevel2, osLevel1, osLevel2,
                                        wt2_len=wt2_len, wt2_type=wt2_type)
                 df = run_regime_analysis(df)        # adds HMM_Bull/Bear, Vol_Regime, Change_Point, Regime_Confidence
-                df = calculate_divergences(df, timeframe=timeframe)      # adds Bullish_Div, Bearish_Div
-
-            # A/B/C signal triggers — consume Conviction/Pulse (full_analysis) + HMM
-            # (regime) + divergence, so they run here, after all three engines (and on
-            # cache hits too, since the cached frame predates this step).
-            df = compute_signal_sets(df, obLevel1, obLevel2, osLevel1, osLevel2)
 
             # Breadth columns (Universe_Breadth / Breadth_Momentum / Sector_Rel_Breadth).
             # Re-attached on cache hits too so the columns track this run's panel.
@@ -3086,14 +2490,13 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             last_row = df.iloc[idx_pos]
 
             # Capture the recent-bar feature window (offsets 0..4 = Today..Within-5d)
-            # for fire-bar Intel scoring. WT1_5ago is per-bar so reversion is correct
-            # at each fire bar, not just the snapshot bar.
-            df['WT1_5ago'] = df['WT1'].shift(5)
+            # for fire-bar Intel scoring — the order-flow features signal_conf_features
+            # reads at each fire bar (not just the snapshot bar).
             _win_cols = ['HMM_Bull', 'HMM_Bear', 'Vol_Regime', 'Regime_Confidence',
-                         'Change_Point', 'Bullish_Div', 'Bearish_Div', 'WT1',
-                         'WT1_5ago', 'Conviction', 'F1_PriceMom', 'Pulse', 'Close',
-                         'DLO_Strength', 'DLO_Cycle', 'DLO_SMA', 'Universe_Breadth',
-                         'VP_Pos', 'VP_Dist_POC', 'VP_At_VAL', 'VP_At_VAH', 'VP_Vol_Burst']
+                         'Change_Point', 'long_cond', 'short_cond',
+                         'long_cond_comp', 'short_cond_comp',
+                         'F1_PriceMom', 'CVD', 'CVD_Slope', 'Delta_Z', 'Close',
+                         'Universe_Breadth']
             _win = df.iloc[max(0, idx_pos - 4): idx_pos + 1]
             intel_windows[ticker] = _win[[c for c in _win_cols if c in _win.columns]].copy()
             # Recent daily-return volatility — the asset-agnostic scale for the
@@ -3131,33 +2534,33 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "Symbol": ticker,
                 "DisplayName": display_name,
                 "SimpleName": simple_name,
-                "Signal": round(last_row['Unified_Osc'], 2) if not pd.isna(last_row['Unified_Osc']) else 0.0,
-                "Trend": round(last_row['Norm_Trend'], 2) if not pd.isna(last_row['Norm_Trend']) else 0.0,
-                "Conviction": round(last_row['Conviction'], 2) if not pd.isna(last_row['Conviction']) else 0.0,
-                "Conviction_Delta": round(last_row['Conviction_Delta'], 2) if not pd.isna(last_row['Conviction_Delta']) else 0.0,
-                "Pulse": round(last_row['Pulse'], 2) if not pd.isna(last_row['Pulse']) else 0.0,
-                "Pulse_Delta": round(last_row['Pulse_Delta'], 2) if not pd.isna(last_row['Pulse_Delta']) else 0.0,
-                "AT_Filter": round(last_row.get('AT_Filter', 0), 2) if not pd.isna(last_row.get('AT_Filter', 0)) else 0.0,
-                "Wave": round(last_row['WT1'], 2) if not pd.isna(last_row['WT1']) else 0.0,
+                "Signal": round(last_row['Delta_Z'], 2) if not pd.isna(last_row['Delta_Z']) else 0.0,
+                "Bar_Delta": round(last_row['Bar_Delta'], 2) if not pd.isna(last_row['Bar_Delta']) else 0.0,
+                "CVD": round(last_row['CVD'], 2) if not pd.isna(last_row['CVD']) else 0.0,
+                "CVD_Slope": round(last_row['CVD_Slope'], 2) if not pd.isna(last_row['CVD_Slope']) else 0.0,
+                "Delta_Z": round(last_row['Delta_Z'], 2) if not pd.isna(last_row['Delta_Z']) else 0.0,
+                "Abs_Strength": round(last_row.get('Abs_Strength', 0), 2) if not pd.isna(last_row.get('Abs_Strength', 0)) else 0.0,
                 "Zone": last_row['Condition'],
                 "SignalType": signal_type,
                 "Price": round(last_row['Close'], 2),
                 "PctChange": round(pct_change, 2),
                 # v3 Metrics for Engine 2.0
-                "WT1_5ago":      round(df.iloc[idx_pos-5]['WT1'], 2) if idx_pos >= 5 else 0.0,
                 "RetVol20":      _retvol20,
-                "VolTrend":      round(last_row.get('VolTrend', 0), 3),
                 "HMM_Bull":      float(last_row.get('HMM_Bull', 0.33)),
                 "HMM_Bear":      float(last_row.get('HMM_Bear', 0.33)),
                 "Vol_Regime":    str(last_row.get('Vol_Regime', 'NORMAL')),
                 "Change_Point":  bool(last_row.get('Change_Point', False)),
                 "Regime_Confidence": float(last_row.get('Regime_Confidence', 0.0)),
-                "Bullish_Div":   bool(last_row.get('Bullish_Div', False)),
-                "Bearish_Div":   bool(last_row.get('Bearish_Div', False)),
                 "F1_PriceMom":   float(last_row.get('F1_PriceMom', 0)),
                 "F2_VolQual":    float(last_row.get('F2_VolQual', 0)),
-                "Liquidity_Osc": float(last_row.get('Liquidity_Osc', 0)),
-                "LO":            float(last_row.get('LO', 0)),
+                # Reversion features — the actual ranking inputs (engine.compute_ranking
+                # consumes these cross-sectionally to produce Rev_Score / Conviction / Side).
+                "_rev_ret2":     last_row.get('_rev_ret2'),
+                "_rev_ret5":     last_row.get('_rev_ret5'),
+                "_rev_dist5":    last_row.get('_rev_dist5'),
+                "_rev_dist10":   last_row.get('_rev_dist10'),
+                "_rev_rngpos":   last_row.get('_rev_rngpos'),
+                "ATR_Pct":       last_row.get('ATR_Pct'),
                 # Breadth (Paths A/B/C) — market-wide tape + sector participation.
                 "Universe_Breadth":   float(last_row.get('Universe_Breadth', breadth.BREADTH_NEUTRAL)),
                 "Breadth_Momentum":   float(last_row.get('Breadth_Momentum', 0.0)),
@@ -3199,34 +2602,22 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "SB_2d": "●" if sample_range.iloc[-3]['short_cond_comp'] else "—",
                 "SB_3d": "●" if sample_range.iloc[-4]['short_cond_comp'] else "—",
                 "SB_5d": "●" if sample_range.tail(5)['short_cond_comp'].any() else "—",
-                # Set C: Reversal — Historical Long Signals
-                "LC_Today": "●" if sample_range.iloc[-1]['long_cond_c'] else "—",
-                "LC_1d": "●" if sample_range.iloc[-2]['long_cond_c'] else "—",
-                "LC_2d": "●" if sample_range.iloc[-3]['long_cond_c'] else "—",
-                "LC_3d": "●" if sample_range.iloc[-4]['long_cond_c'] else "—",
-                "LC_5d": "●" if sample_range.tail(5)['long_cond_c'].any() else "—",
-                # Set C: Reversal — Historical Short Signals
-                "SC_Today": "●" if sample_range.iloc[-1]['short_cond_c'] else "—",
-                "SC_1d": "●" if sample_range.iloc[-2]['short_cond_c'] else "—",
-                "SC_2d": "●" if sample_range.iloc[-3]['short_cond_c'] else "—",
-                "SC_3d": "●" if sample_range.iloc[-4]['short_cond_c'] else "—",
-                "SC_5d": "●" if sample_range.tail(5)['short_cond_c'].any() else "—",
                 # Additional fields for detail cards
-                "Osc_Value": round(last_row.get('Unified_Osc', 0), 2),
+                "Osc_Value": round(last_row.get('Delta_Z', 0), 2),
                 "MA_Alignment": int(last_row.get('MA_Alignment', 0)),
-                "ZScore_Value": round(last_row.get('ZScore', 0), 2),
+                "ZScore_Value": round(last_row.get('Delta_Z', 0), 2),
             })
-            
-            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: Signal={last_row['Unified_Osc']:+.2f}  Zone={last_row['Condition']}  Status={signal_type}")
+
+            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: Delta_Z={last_row['Delta_Z']:+.2f}  Zone={last_row['Condition']}  Status={signal_type}")
             
         except Exception as e:
             console.failure(f"Analysis Failed: {ticker}", str(e))
             _failed_symbols.append(ticker)
             continue
 
-    console.end_phase("WRCI MOMENTUM ANALYSIS")
+    console.end_phase("REVERSION RANKING")
     if _cache_hits:
-        console.detail(f"Analyzed-frame cache: reused {_cache_hits}/{len(data_dict)} frames from the intelligence harvest (skipped re-analysis)")
+        console.detail(f"Analyzed-frame cache: reused {_cache_hits}/{len(data_dict)} frames from the edge-measurement harvest (skipped re-analysis)")
     # One-shot cache — release the harvested frames now that the screener has consumed them.
     _analyzed_cache_clear()
 
@@ -3271,40 +2662,29 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         else:
             st.info(
                 f"**No signals found** — {_n_fetched} of {_n_total} symbols had data for {analysis_date}, "
-                "but none produced a WRCI signal in the current timeframe. "
+                "but none produced an order-flow signal in the current timeframe. "
                 "Try an adjacent trading date, or check that the selected date is a market session."
             )
         # Return empty DataFrame with expected columns to prevent downstream KeyErrors
         expected_cols = [
-            "Symbol", "DisplayName", "SimpleName", "Signal", "Trend", "Wave", "Zone", "SignalType", "Price", "PctChange",
+            "Symbol", "DisplayName", "SimpleName", "Signal", "Bar_Delta", "CVD", "CVD_Slope", "Delta_Z", "Zone", "SignalType", "Price", "PctChange",
             "L_Today", "L_1d", "L_2d", "L_3d", "L_5d", "S_Today", "S_1d", "S_2d", "S_3d", "S_5d",
             "LA_Today", "LA_1d", "LA_2d", "LA_3d", "LA_5d", "SA_Today", "SA_1d", "SA_2d", "SA_3d", "SA_5d",
             "LB_Today", "LB_1d", "LB_2d", "LB_3d", "LB_5d", "SB_Today", "SB_1d", "SB_2d", "SB_3d", "SB_5d",
-            "LC_Today", "LC_1d", "LC_2d", "LC_3d", "LC_5d", "SC_Today", "SC_1d", "SC_2d", "SC_3d", "SC_5d",
             "Osc_Value", "MA_Alignment", "ZScore_Value",
         ]
         return pd.DataFrame(columns=expected_cols)
 
     results_df = pd.DataFrame(results)
-    
-    # Global ranking via Priority Engine — pass weights explicitly from session_state
-    # to prevent cross-session weight bleed on shared Streamlit Cloud deployments.
+
+    # Global ranking via the cross-sectional REVERSION engine (engine.py). The reversion
+    # composite is the validated alpha; conviction is scaled by the live alpha-health monitor
+    # (is the edge currently working?) and per-name vol-regime suitability. This single call
+    # emits the full UI contract (Priority_*, Intel_Confidence, Meta_*) — see engine.py.
     if not results_df.empty:
-        results_df = compute_priority(results_df, weights=_get_active_weights())
-        # Intelligence Confirmation (Layer 1): per-signal confidence from regime
-        # state + own-factor agreement. Non-destructive — annotates fired signals only.
-        results_df = pe.compute_signal_confidence(results_df, weights=_get_active_weights())
-        # Meta Intelligence (Layer 3): fuse cross-sectional Priority rank with the
-        # per-signal Intel confidence into a final Meta score + tier. Needs both
-        # Priority_*_pct and Intel_Confidence (just computed) on the frame.
-        results_df = pe.compute_meta(results_df)
-        # Default sort by Priority_Long for the global table. kind='stable' is
-        # load-bearing: compute_priority already sorted by the full tiebreaker
-        # cascade (_tb_long = Priority, Confidence, Vol-regime, |PriceMom|). A stable
-        # sort preserves that cascade as the secondary order within equal Priority_Long
-        # groups, so ties resolve by regime safety — not by arbitrary index order.
-        results_df = results_df.sort_values('Priority_Long', ascending=False, kind='stable')
-        
+        health = float(st.session_state.get("alpha_health_mult", 1.0))
+        results_df = eng.compute_ranking(results_df, alpha_health_mult=health)
+
     return results_df
 
 
@@ -3370,10 +2750,10 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     _breadth_panel = breadth.build_breadth_panel(data_dict, sector_map=_sector_map)
 
     # Start Unified Harvesting Phase
-    console.start_phase("INTELLIGENCE HARVESTING", 2, 2)
+    console.start_phase("EDGE MEASUREMENT", 2, 2)
     start_harvest = time.time()
 
-    progress_bar(progress_slot, 15, "Initializing Processing Intelligence", f"{len(data_dict)} stocks")
+    progress_bar(progress_slot, 15, "Measuring historical edge", f"{len(data_dict)} stocks")
     all_results = []
 
     # Analyzed-frame cache for this run — lets the screener that follows skip
@@ -3391,14 +2771,12 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
             # Global progress scale: 15% -> 85% for harvesting
             pct = int(15 + (i + 1) / len(data_dict) * 70)
-            progress_bar(progress_slot, pct, "Intelligence Harvesting", f"Processing {i + 1}/{len(data_dict)} Symbols | ETA: {eta_str}")
+            progress_bar(progress_slot, pct, "Edge-measurement harvest", f"Processing {i + 1}/{len(data_dict)} Symbols | ETA: {eta_str}")
             if timeframe == "Weekly":
                 df = resample_to_weekly(df)
             df = run_full_analysis(df, reg_len, wt_n1, wt_n2, *levels,
                                    wt2_len=wt2_len, wt2_type=wt2_type)
             df = run_regime_analysis(df)
-            df = calculate_divergences(df, timeframe=timeframe)
-            df = compute_signal_sets(df, *levels)    # A/B/C triggers (need regime + divergence)
             df = _breadth_panel.attach(df, ticker)   # breadth columns (Paths A/B/C)
             # Cache the analyzed frame so run_screener_analysis can reuse it instead
             # of recomputing. Stored by reference — the harvest-only columns appended
@@ -3406,21 +2784,19 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
             _analyzed_cache_put(ticker, df, _cache_sig)
 
             # Calculate forward returns for each training horizon
-            for h in pe.HOLD_HORIZONS:
+            for h in eng.HOLD_HORIZONS:
                 df[f'Ret_{h}b'] = df['Close'].shift(-h) / df['Close'] - 1
 
-            # Vectorized SignalType per bar (priority order: B > A > C > Zone)
+            # Vectorized SignalType per bar (priority order: B > A > Zone)
             df['SignalType'] = np.select(
                 [
                     df['long_cond_comp'], df['short_cond_comp'],
                     df['long_cond'],      df['short_cond'],
-                    df['long_cond_c'],    df['short_cond_c'],
                     df['Condition'] != 'Neutral',
                 ],
                 [
                     'B: Long', 'B: Short',
                     'A: Long', 'A: Short',
-                    'C: Long', 'C: Short',
                     df['Condition'],
                 ],
                 default='-',
@@ -3433,14 +2809,19 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                 all_results.append({
                     'Date': date,
                     'Symbol': ticker,
-                    'Signal': row['Unified_Osc'],
-                    'Trend': row['Norm_Trend'],
-                    'Conviction': row['Conviction'],
-                    'Wave': row['WT1'],
-                    'WT1_5ago': row.get('WT1_5ago', row['WT1']),
+                    'Signal': row['Delta_Z'],
+                    'Bar_Delta': row['Bar_Delta'],
+                    'CVD': row['CVD'],
+                    'CVD_Slope': row['CVD_Slope'],
+                    'Delta_Z': row['Delta_Z'],
                     'Zone': row['Condition'],
                     'LongSignal': row['long_cond'],
                     'ShortSignal': row['short_cond'],
+                    # Set A (triangle) + Set B (diamond) booleans — Layer-2 features
+                    'long_cond': row['long_cond'],
+                    'short_cond': row['short_cond'],
+                    'long_cond_comp': row['long_cond_comp'],
+                    'short_cond_comp': row['short_cond_comp'],
                     'SignalType': row['SignalType'],
                     # Regime Intelligence columns
                     'Regime': row.get('Regime', 'NEUTRAL'),
@@ -3449,8 +2830,6 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'Vol_Regime': row.get('Vol_Regime', 'NORMAL'),
                     'Change_Point': row.get('Change_Point', False),
                     'Regime_Confidence': row.get('Regime_Confidence', 0),
-                    'Bullish_Div': row.get('Bullish_Div', False),
-                    'Bearish_Div': row.get('Bearish_Div', False),
                     # Forward Returns for self-training
                     'Ret_2b': row.get('Ret_2b', 0),
                     'Ret_3b': row.get('Ret_3b', 0),
@@ -3460,9 +2839,16 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     # Optimization factors
                     'F1_PriceMom': row.get('F1_PriceMom', 0),
                     'F2_VolQual': row.get('F2_VolQual', 0),
-                    'Pulse': row.get('Pulse', 0),
-                    'Liquidity_Osc': row.get('Liquidity_Osc', 0),
-                    'LO': row.get('LO', 0),
+                    # Reversion features (engine.compute_ranking inputs) — let the
+                    # alpha-health monitor re-rank each harvested cross-section to
+                    # measure trailing realized IC. Mirrors the live screener row.
+                    '_rev_ret2':   row.get('_rev_ret2'),
+                    '_rev_ret5':   row.get('_rev_ret5'),
+                    '_rev_dist5':  row.get('_rev_dist5'),
+                    '_rev_dist10': row.get('_rev_dist10'),
+                    '_rev_rngpos': row.get('_rev_rngpos'),
+                    'ATR_Pct':     row.get('ATR_Pct'),
+                    'Close':       row.get('Close'),
                     # Breadth (Paths A/B/C) — must mirror the live screener row so
                     # the tuner (F8) and Layer-2 (breadth_align) train on apply-identical features.
                     'Universe_Breadth': row.get('Universe_Breadth', breadth.BREADTH_NEUTRAL),
@@ -3475,7 +2861,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
             continue
             
     console.success(f"Successfully processed {len(data_dict)} symbols for historical depth")
-    console.end_phase("INTELLIGENCE HARVESTING")
+    console.end_phase("EDGE MEASUREMENT")
 
     progress_slot.empty()
     if not all_results:
@@ -3486,19 +2872,10 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     ts_df['Date'] = pd.to_datetime(ts_df['Date'])
     ts_df = ts_df.sort_values('Date')
 
-    # Score every harvested bar with the same Signal Intelligence used live, so the
-    # historical dashboard and Excel export show what the Layer-2 model (or its
-    # heuristic fallback) would have rated each past signal. compute_flags=False —
-    # the per-row flag string is skipped on this large frame for speed; the
-    # Intel_Confidence column (the value users backtest against) is what matters.
-    try:
-        ts_df = pe.compute_signal_confidence(
-            ts_df, weights=_get_active_weights(),
-            conf_model=pe.get_active_conf_model(), compute_flags=False,
-        )
-    except Exception as _e:
-        console.detail(f"Historical Intel scoring skipped: {type(_e).__name__}: {_e}")
-
+    # The reversion engine has no per-row confidence model — the historical dashboard's
+    # Avg_Intel aggregation degrades gracefully when Intel_Confidence is absent (see
+    # _aggregate_timeseries). The trailing realized IC is measured separately by the
+    # alpha-health monitor (_measure_trailing_ic) from this same harvested panel.
     daily_agg, summary = _aggregate_timeseries(ts_df)
 
     console.summary("HISTORICAL RANGE SUMMARY", {
@@ -3540,8 +2917,8 @@ def _aggregate_timeseries(ts_df):
     """
     daily_agg = ts_df.groupby('Date').agg({
         'Signal': 'mean',
-        'Trend': 'mean',
-        'Wave': 'mean',
+        'CVD': 'mean',
+        'CVD_Slope': 'mean',
         'LongSignal': 'sum',
         'ShortSignal': 'sum',
         'Zone': lambda x: x.value_counts().idxmax() if len(x) > 0 else 'Neutral',
@@ -3551,8 +2928,6 @@ def _aggregate_timeseries(ts_df):
         'Vol_Regime': lambda x: x.value_counts().idxmax() if len(x) > 0 else 'NORMAL',
         'Change_Point': 'sum',
         'Regime_Confidence': 'mean',
-        'Bullish_Div': 'sum',
-        'Bearish_Div': 'sum',
     })
 
     daily_agg['TotalSignals'] = daily_agg['LongSignal'] + daily_agg['ShortSignal']
@@ -3561,13 +2936,14 @@ def _aggregate_timeseries(ts_df):
         np.nan,                          # undefined (all longs, no shorts) — show as NaN in charts
         daily_agg['LongSignal'] / daily_agg['ShortSignal'],
     )
-    daily_agg['Conviction']   = daily_agg['Signal'].abs()
+    daily_agg['Flow_Strength'] = daily_agg['Signal'].abs()
 
-    zone_counts   = ts_df.groupby('Date')['Zone'].apply(lambda x: (x.isin(['OB Extreme', 'OB'])).sum())
-    os_counts     = ts_df.groupby('Date')['Zone'].apply(lambda x: (x.isin(['OS Extreme', 'OS'])).sum())
+    # Flow-zone breadth: % of names in accumulation vs distribution each day.
+    acc_counts    = ts_df.groupby('Date')['Zone'].apply(lambda x: (x.isin(['Accumulation+', 'Accumulation'])).sum())
+    dist_counts   = ts_df.groupby('Date')['Zone'].apply(lambda x: (x.isin(['Distribution+', 'Distribution'])).sum())
     total_per_day = ts_df.groupby('Date').size()
-    daily_agg['Oversold_Pct']   = (zone_counts / total_per_day * 100).fillna(0)
-    daily_agg['Overbought_Pct'] = (os_counts   / total_per_day * 100).fillna(0)
+    daily_agg['Oversold_Pct']   = (dist_counts / total_per_day * 100).fillna(0)
+    daily_agg['Overbought_Pct'] = (acc_counts  / total_per_day * 100).fillna(0)
 
     regime_bull  = ts_df.groupby('Date')['Regime'].apply(lambda x: x.str.contains('BULL', na=False).sum())
     regime_bear  = ts_df.groupby('Date')['Regime'].apply(lambda x: x.str.contains('BEAR', na=False).sum())
@@ -3709,14 +3085,14 @@ def render_timeseries_dashboard():
         st.plotly_chart(fig_signals, width='stretch', key='chart_signals_overtime')
 
         st.markdown("<br>", unsafe_allow_html=True)
-        ui.render_section_header("Divergence Persistence", "Divergence Signals Over Time",
+        ui.render_section_header("Flow Breadth", "Accumulation vs Distribution Over Time",
                                  icon="trending-up", accent="amber")
         fig_div = go.Figure()
-        fig_div.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['Bullish_Div'],
-                                 name='Bullish Divergence',
+        fig_div.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['Overbought_Pct'],
+                                 name='Accumulation %',
                                  marker=dict(color='#D4A853', line=dict(color='#D4A853', width=1))))
-        fig_div.add_trace(go.Bar(x=daily_agg.index, y=-daily_agg['Bearish_Div'],
-                                 name='Bearish Divergence',
+        fig_div.add_trace(go.Bar(x=daily_agg.index, y=-daily_agg['Oversold_Pct'],
+                                 name='Distribution %',
                                  marker=dict(color='#06B6D4', line=dict(color='#06B6D4', width=1))))
         fig_div.update_layout(title='', height=300, hovermode='x unified', barmode='relative')
         apply_chart_theme(fig_div)
@@ -3829,7 +3205,7 @@ def render_timeseries_dashboard():
         display_ts = display_ts[display_cols]
         display_ts.columns = ['Date', 'Long Sig', 'Short Sig', 'Avg Signal',
                               'Oversold %', 'Overbought %',
-                              'Bull Regime %', 'Bear Regime %', 'Change Pts'] + (['Avg Intel'] if _has_intel else [])
+                              'Bull Regime %', 'Bear Regime %', 'Change Pts'] + (['Avg Conviction'] if _has_intel else [])
         st.dataframe(
             display_ts, width='stretch', hide_index=True,
             column_config={
@@ -3842,7 +3218,7 @@ def render_timeseries_dashboard():
                 'Bull Regime %':st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BULL'."),
                 'Bear Regime %':st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BEAR'."),
                 'Change Pts':   st.column_config.NumberColumn(help="Sum of Change_Point flags — count of symbols with a regime-state transition on this day."),
-                'Avg Intel':    st.column_config.NumberColumn(help="Mean Signal-Intelligence confidence of the fired signals on this day (0–1). Calibrated P(true) when a model is active, else the Layer-1 heuristic.", format="%.2f"),
+                'Avg Conviction': st.column_config.NumberColumn(help="Mean conviction of the surfaced long/short candidates on this day (0–1) — tail strength × alpha-health × regime.", format="%.2f"),
             },
         )
 
@@ -4071,14 +3447,14 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             console.detail("Correlation: reusing cached screener results from session state")
             wrci_results = _sdf
         else:
-            # Resolve calibrated weights BEFORE screening, exactly like the Single-Date
-            # path — otherwise the Confluence Score (built from Priority_Long/Short)
-            # would rank with factory-default weights, blind to the calibration engine.
+            # Measure alpha-health BEFORE screening, exactly like the Single-Date path —
+            # so the Confluence Score (built from Priority_Long/Short) ranks with the
+            # live edge-scaled conviction rather than a stale / cold-start reading.
             _corr_reg_len, _corr_n1, _corr_n2 = 20, 10, 21
             _corr_levels = (80, 40, -80, -40)
             _corr_wt2_len, _corr_wt2_type = 20, "ALMA"
             _calib = st.session_state.get("_calib_settings") or {}
-            _ensure_intel_weights(
+            _ensure_alpha_health(
                 universe, selected_index, timeframe, analysis_date,
                 _corr_reg_len, _corr_n1, _corr_n2, _corr_levels,
                 _corr_wt2_len, _corr_wt2_type, _calib,
@@ -4118,9 +3494,9 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 target_price = _pair[target_ticker].iloc[-1] if len(_pair) else np.nan
                 target_change = np.nan
 
-            # Get WRCI data if available — pull calibrated priorities from the
-            # screener's already-computed compute_priority output so Correlation
-            # Analysis benefits from any active Intelligence-mode calibration.
+            # Get WRCI data if available — pull priorities from the screener's
+            # already-computed reversion ranking output so Correlation Analysis
+            # benefits from the live edge-scaled conviction.
             wrci_signal = np.nan
             wrci_zone = "—"
             wrci_signal_type = "Neutral"
@@ -4197,7 +3573,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             pri_norm = abs_pri / max(abs_pri.max(), 1e-6)        # [0, 1]
             corr_df['Priority_Strength'] = pri_norm
             corr_df['Confluence_Score'] = (corr_df['Corr_Current'].abs() * pri_norm).clip(0.0, 1.0)
-            console.item("Confluence formula", "|Corr| × calibrated Priority strength")
+            console.item("Confluence formula", "|Corr| × reversion rank strength")
 
             # ── Signal-Intelligence penalty ──────────────────────────────────
             # A high-correlation, high-priority name can still be a trap if the
@@ -4213,8 +3589,8 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 corr_df['Confluence_Raw'] = corr_df['Confluence_Score']
                 corr_df['Confluence_Score'] = (corr_df['Confluence_Score'] * _factor).clip(0.0, 1.0)
                 _n_penalized = int((_intel.notna() & (_intel < 0.5)).sum())
-                console.item("Confluence formula", "|Corr| × Priority × (0.5 + 0.5·Intel)")
-                console.item("Intel-penalized signals", f"{_n_penalized} fired signal(s) below 0.50 confidence")
+                console.item("Confluence formula", "|Corr| × reversion rank × (0.5 + 0.5·Conviction)")
+                console.item("Low-conviction signals", f"{_n_penalized} candidate(s) below 0.50 conviction")
         else:
             # Normalise by the 95th-percentile absolute oscillator value so the
             # scale adapts to the current universe (weekly ≈ ±40, crypto ≈ ±200)
@@ -4294,6 +3670,26 @@ def _signed_color(value: float, pos: str = _GREEN, neg: str = _RED) -> str:
 def _delta_arrow(value: float) -> str:
     """Up arrow for non-negative deltas, down arrow for negative."""
     return "↑" if value >= 0 else "↓"
+
+
+def _human_vol(value: float, signed: bool = True) -> str:
+    """Compact K/M/B/T formatting for large volume-unit numbers (Bar Δ, CVD, CVD Slope).
+
+    1_234_567 → "1.23M", -45_000 → "-45.0K". `signed` prepends an explicit '+' on
+    positives so direction reads at a glance in the signed flow columns.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if not np.isfinite(v):
+        return "—"
+    sign = "-" if v < 0 else ("+" if signed else "")
+    a = abs(v)
+    for div, suf in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if a >= div:
+            return f"{sign}{a / div:.2f}{suf}"
+    return f"{sign}{a:.0f}"
 
 
 def _build_confluence_table_html(df: pd.DataFrame) -> str:
@@ -4414,7 +3810,7 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
                 <th class="numeric" title="Symbol's price change on the analysis date">Actual %</th>
                 <th class="numeric" title="Expected move = target asset return × rolling correlation">Expected %</th>
                 <th class="numeric" title="Divergence = Actual − Expected (positive = outperforming expectation)">Div %</th>
-                <th class="numeric" title="Layer 2 Signal Intelligence Confidence">Intel</th>
+                <th class="numeric" title="Conviction in the assigned side (0–1)">Intel</th>
                 <th class="numeric" title="Confluence = |Correlation| × normalised Priority strength [0–1]">Confluence</th>
             </tr>
         </thead>
@@ -4930,27 +4326,24 @@ def _entry_status(window, side: str, offset: int, row):
 
 
 def _active_model_sig() -> str:
-    """Cheap signature of the active confidence model — changes when it recalibrates."""
-    m = pe.get_active_conf_model()
-    if not m:
-        return 'heuristic'
-    return f"c{m.get('n_train', 0)}-{m.get('horizon', 0)}-{len(m.get('sets', {}))}"
+    """Cheap signature of the active confidence model — the reversion engine has none."""
+    return 'heuristic'
 
 
 def _cached_conf_series(symbol, window, side: str, condition_set: str):
     """Per-bar confidence for (symbol, side, set), memoized for the current screener run.
 
-    signal_confidence_at is a pure function of (window, side, set, active model);
-    the window is stable between screener runs, so caching by those keys avoids
-    recomputing on every Streamlit rerun. The cache is cleared when a new screener
-    run replaces intel_windows.
+    The reversion engine has no per-bar confidence model, so there is no fire-bar
+    confidence series to recompute — return empty arrays. Callers fall back to the
+    row's own snapshot Intel_Confidence / Conviction. Kept memoized for API parity;
+    the cache is cleared when a new screener run replaces intel_windows.
     """
     cache = st.session_state.setdefault("intel_fire_cache", {})
     key = (symbol, side, condition_set, _active_model_sig())
     hit = cache.get(key)
     if hit is not None:
         return hit
-    res = pe.signal_confidence_at(window, side, condition_set)
+    res = (np.array([]), np.array([]))
     cache[key] = res
     return res
 
@@ -4966,7 +4359,7 @@ def _fire_bar_metrics(window, side: str, condition_set: str, offset: int, row) -
     conf, src = np.nan, ''
     ctx = ('—', '#4B5563', '')
     confs = np.array([])
-    if window is not None and len(window) and condition_set in ('A', 'B', 'C'):
+    if window is not None and len(window) and condition_set in ('A', 'B'):
         confs, srcs = _cached_conf_series(row.get('Symbol'), window, side, condition_set)
         fidx = len(confs) - 1 - offset
         if 0 <= fidx < len(confs):
@@ -4984,15 +4377,13 @@ def _fire_bar_metrics(window, side: str, condition_set: str, offset: int, row) -
 def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'A', timeframe: str = 'Daily') -> dict:
     """Bucket signals by age (Today, 1d, 2d, 3d, 5d) with stats for timeline display.
 
-    condition_set: 'A' = Ignition (LA_/SA_), 'B' = Regime (LB_/SB_), 'C' = Reversal (LC_/SC_)
+    condition_set: 'A' = Momentum (LA_/SA_), 'B' = Crossover (LB_/SB_)
     timeframe: 'Daily' or 'Weekly' — determines age label names
     """
     if condition_set == 'A':
         prefix = 'LA' if side == 'long' else 'SA'
     elif condition_set == 'B':
         prefix = 'LB' if side == 'long' else 'SB'
-    elif condition_set == 'C':
-        prefix = 'LC' if side == 'long' else 'SC'
     else:
         prefix = 'L' if side == 'long' else 'S'
     target_indicator = "●"
@@ -5063,7 +4454,7 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
         if rows:
             signals = [r['Signal'] for r in rows]
             pct_changes = [r.get('PctChange', 0) for r in rows]
-            convictions = [r.get('Conviction', 0) for r in rows]
+            convictions = [abs(r.get('Delta_Z', 0)) for r in rows]
             avg_signal = np.mean(signals)
             avg_pct_change = np.mean(pct_changes)
             avg_conviction = np.mean(convictions)
@@ -5137,20 +4528,18 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
             price = float(row.get('Price', 0))
             pct_change = float(row.get('PctChange', 0))
             signal = float(row.get('Signal', 0))
-            trend = float(row.get('Trend', 0))
-            conviction = float(row.get('Conviction', 0))
-            pulse = float(row.get('Pulse', 0))
-            conv_delta = float(row.get('Conviction_Delta', 0))
-            pulse_delta = float(row.get('Pulse_Delta', 0))
-            at_filter = float(row.get('AT_Filter', 0))
-            at_color  = _signed_color(at_filter, pos="#fbbf24", neg="#38bdf8")  # amber + / cyan −
+            bar_delta = float(row.get('Bar_Delta', 0))
+            cvd = float(row.get('CVD', 0))
+            cvd_slope = float(row.get('CVD_Slope', 0))
+            delta_z = float(row.get('Delta_Z', 0))
+            abs_strength = float(row.get('Abs_Strength', 0))
+            abs_color = _signed_color(abs_strength - 1.0, pos="#fbbf24", neg="#38bdf8")  # >1× = amber
             signal_type = str(row.get('SignalType', '-'))
 
-            pct_color         = _signed_color(pct_change)
-            conv_delta_color  = _signed_color(conv_delta)
-            pulse_delta_color = _signed_color(pulse_delta, pos="#4a9eff", neg="#D4A853")
-            conv_delta_arrow  = _delta_arrow(conv_delta)
-            pulse_delta_arrow = _delta_arrow(pulse_delta)
+            pct_color        = _signed_color(pct_change)
+            cvd_color        = _signed_color(cvd)
+            cvd_slope_color  = _signed_color(cvd_slope, pos="#4a9eff", neg="#D4A853")
+            cvd_slope_arrow  = _delta_arrow(cvd_slope)
 
             # Intel Confirmation cell — fire-bar confidence (set on the row by
             # _bucket_signals_by_age), falling back to the snapshot value.
@@ -5176,11 +4565,11 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                 <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
-                <td class="numeric" style="color: #D4A853; font-weight: 600;">{conviction:+.2f}</td>
-                <td class="numeric" style="color: {conv_delta_color}; font-size: 0.65rem; font-weight: 600;">{conv_delta_arrow}{abs(conv_delta):.1f}</td>
-                <td class="numeric" style="color: #4a9eff; font-weight: 600;">{pulse:+.2f}</td>
-                <td class="numeric" style="color: {pulse_delta_color}; font-size: 0.65rem; font-weight: 600;">{pulse_delta_arrow}{abs(pulse_delta):.1f}</td>
-                <td class="numeric" style="color: {at_color}; font-weight: 600;">{at_filter:+.2f}</td>
+                <td class="numeric" style="color: #D4A853; font-weight: 600;">{_human_vol(bar_delta)}</td>
+                <td class="numeric" style="color: {cvd_color}; font-weight: 600;">{_human_vol(cvd)}</td>
+                <td class="numeric" style="color: {cvd_slope_color}; font-size: 0.65rem; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
+                <td class="numeric" style="color: #4a9eff; font-weight: 600;">{delta_z:+.2f}</td>
+                <td class="numeric" style="color: {abs_color}; font-weight: 600;">{abs_strength:.2f}×</td>
                 {intel_cell}
                 {meta_cell}
                 {ctx_cell}
@@ -5280,13 +4669,13 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                     <th class="numeric">Price</th>
                     <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
-                    <th class="numeric">Conv</th>
-                    <th class="numeric">Δ Conv</th>
-                    <th class="numeric">Pulse</th>
-                    <th class="numeric">Δ Pulse</th>
-                    <th class="numeric">DLO Cycle</th>
+                    <th class="numeric">Bar Δ</th>
+                    <th class="numeric">CVD</th>
+                    <th class="numeric">CVD Slope</th>
+                    <th class="numeric">Δ-Z</th>
+                    <th class="numeric">Absorp</th>
                     <th class="numeric">Intel</th>
-                    <th class="numeric" title="Layer-3 Meta Intelligence · rank × confidence">Meta</th>
+                    <th class="numeric" title="Fused score · reversion rank × conviction">Meta</th>
                     <th class="numeric">Context</th>
                     <th class="numeric">Entry</th>
                 </tr>
@@ -5321,18 +4710,17 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
             price = float(row.get('Price', 0))
             pct_change = float(row.get('PctChange', 0))
             signal = float(row.get('Signal', 0))
-            conviction = float(row.get('Conviction', 0))
-            pulse = float(row.get('Pulse', 0))
-            conv_delta = float(row.get('Conviction_Delta', 0))
-            pulse_delta = float(row.get('Pulse_Delta', 0))
-            at_filter = float(row.get('AT_Filter', 0))
-            at_color  = _signed_color(at_filter, pos="#fbbf24", neg="#38bdf8")  # amber + / cyan −
+            bar_delta = float(row.get('Bar_Delta', 0))
+            cvd = float(row.get('CVD', 0))
+            cvd_slope = float(row.get('CVD_Slope', 0))
+            delta_z = float(row.get('Delta_Z', 0))
+            abs_strength = float(row.get('Abs_Strength', 0))
+            abs_color = _signed_color(abs_strength - 1.0, pos="#fbbf24", neg="#38bdf8")
 
-            pct_color         = _signed_color(pct_change)
-            conv_delta_color  = _signed_color(conv_delta)
-            pulse_delta_color = _signed_color(pulse_delta, pos="#4a9eff", neg="#D4A853")
-            conv_delta_arrow  = _delta_arrow(conv_delta)
-            pulse_delta_arrow = _delta_arrow(pulse_delta)
+            pct_color       = _signed_color(pct_change)
+            cvd_color       = _signed_color(cvd)
+            cvd_slope_color = _signed_color(cvd_slope, pos="#4a9eff", neg="#D4A853")
+            cvd_slope_arrow = _delta_arrow(cvd_slope)
             # Layer-2 Signal Intelligence — same snapshot Intel cell used elsewhere
             # (calibrated % or muted ~heuristic; "—" when this symbol has no fired signal).
             intel_cell, _ = _intel_cell_and_style(
@@ -5346,11 +4734,11 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
                 <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: #60A5FA; font-weight: 600;">{signal:+.2f}</td>
-                <td class="numeric" style="color: #D4A853; font-weight: 600;">{conviction:+.2f}</td>
-                <td class="numeric" style="color: {conv_delta_color}; font-size: 0.65rem; font-weight: 600;">{conv_delta_arrow}{abs(conv_delta):.1f}</td>
-                <td class="numeric" style="color: #4a9eff; font-weight: 600;">{pulse:+.2f}</td>
-                <td class="numeric" style="color: {pulse_delta_color}; font-size: 0.65rem; font-weight: 600;">{pulse_delta_arrow}{abs(pulse_delta):.1f}</td>
-                <td class="numeric" style="color: {at_color}; font-weight: 600;">{at_filter:+.2f}</td>
+                <td class="numeric" style="color: #D4A853; font-weight: 600;">{_human_vol(bar_delta)}</td>
+                <td class="numeric" style="color: {cvd_color}; font-weight: 600;">{_human_vol(cvd)}</td>
+                <td class="numeric" style="color: {cvd_slope_color}; font-size: 0.65rem; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
+                <td class="numeric" style="color: #4a9eff; font-weight: 600;">{delta_z:+.2f}</td>
+                <td class="numeric" style="color: {abs_color}; font-weight: 600;">{abs_strength:.2f}×</td>
                 {intel_cell}
                 {meta_cell}
             </tr>
@@ -5422,13 +4810,13 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
                     <th class="numeric">Price</th>
                     <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
-                    <th class="numeric">Conv</th>
-                    <th class="numeric">Δ Conv</th>
-                    <th class="numeric">Pulse</th>
-                    <th class="numeric">Δ Pulse</th>
-                    <th class="numeric">DLO Cycle</th>
+                    <th class="numeric">Bar Δ</th>
+                    <th class="numeric">CVD</th>
+                    <th class="numeric">CVD Slope</th>
+                    <th class="numeric">Δ-Z</th>
+                    <th class="numeric">Absorp</th>
                     <th class="numeric">Intel</th>
-                    <th class="numeric" title="Layer-3 Meta Intelligence · rank × confidence">Meta</th>
+                    <th class="numeric" title="Fused score · reversion rank × conviction">Meta</th>
                 </tr>
             </thead>
             <tbody>
@@ -5444,11 +4832,11 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
 
 
 def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> str:
-    """Build ranked HTML table for top signals by Abnormal Acceleration (Pulse).
+    """Build ranked HTML table for top reversion candidates by conviction.
 
     Creates styled HTML table with colored accent for side (long=green, short=red),
     displaying symbol, price, signal magnitude, trend direction, and zone status.
-    Prioritizes Pulse (Velocity * Z-Score) as the ranking metric.
+    Prioritizes conviction (reversion tail strength × alpha-health) as the ranking metric.
 
     Returns: Complete HTML document string ready for st.components.v1.html().
     """
@@ -5478,16 +4866,17 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
             price = float(row.get('Price', 0))
             pct_change = float(row.get('PctChange', 0))
             signal = float(row.get('Signal', 0))
-            conviction = float(row.get('Conviction', 0))
-            pulse = float(row.get('Pulse', 0))
-            conv_delta = float(row.get('Conviction_Delta', 0))
-            at_filter = float(row.get('AT_Filter', 0))
-            at_color  = _signed_color(at_filter, pos="#fbbf24", neg="#38bdf8")  # amber + / cyan −
+            bar_delta = float(row.get('Bar_Delta', 0))
+            cvd = float(row.get('CVD', 0))
+            cvd_slope = float(row.get('CVD_Slope', 0))
+            delta_z = float(row.get('Delta_Z', 0))
+            abs_strength = float(row.get('Abs_Strength', 0))
+            abs_color = _signed_color(abs_strength - 1.0, pos="#fbbf24", neg="#38bdf8")
 
             rank_str = f"{idx:02d}"
-            pct_color        = _signed_color(pct_change)
-            conv_delta_color = _signed_color(conv_delta)
-            conv_delta_arrow = _delta_arrow(conv_delta)
+            pct_color       = _signed_color(pct_change)
+            cvd_slope_color = _signed_color(cvd_slope)
+            cvd_slope_arrow = _delta_arrow(cvd_slope)
 
             # v3 Metrics
             pct_rank = float(row.get(f'Priority_{side.capitalize()}_pct', 0))
@@ -5523,12 +4912,12 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                 <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
-                <td class="numeric" style="color: #D4A853; font-weight: 600;">{conviction:+.2f}</td>
-                <td class="numeric" style="color: {conv_delta_color}; font-size: 0.65rem; font-weight: 600;">{conv_delta_arrow}{abs(conv_delta):.1f}</td>
-                <td class="numeric" style="color: #4a9eff; font-weight: 600;">{pulse:+.2f}</td>
+                <td class="numeric" style="color: #D4A853; font-weight: 600;">{_human_vol(bar_delta)}</td>
+                <td class="numeric" style="color: {cvd_slope_color}; font-size: 0.65rem; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
+                <td class="numeric" style="color: #4a9eff; font-weight: 600;">{delta_z:+.2f}</td>
                 <td class="numeric" style="color: {regime_color}; font-weight: 700; font-size: 0.65rem;">{regime_tag}</td>
                 <td class="numeric" style="color: {vol_color}; font-weight: 700; font-size: 0.65rem;">{vol_reg}</td>
-                <td class="numeric" style="color: {at_color}; font-weight: 600;">{at_filter:+.2f}</td>
+                <td class="numeric" style="color: {abs_color}; font-weight: 600;">{abs_strength:.2f}×</td>
                 {_intel_cell}
                 {_meta_cell}
             </tr>
@@ -5609,14 +4998,14 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                     <th class="numeric">Price</th>
                     <th class="numeric">% Change</th>
                     <th class="numeric">Signal</th>
-                    <th class="numeric">Conv</th>
-                    <th class="numeric">Δ Conv</th>
-                    <th class="numeric">Pulse</th>
+                    <th class="numeric">Bar Δ</th>
+                    <th class="numeric">CVD Slope</th>
+                    <th class="numeric">Δ-Z</th>
                     <th class="numeric">Regime</th>
                     <th class="numeric">Vol</th>
-                    <th class="numeric">DLO Cycle</th>
+                    <th class="numeric">Absorp</th>
                     <th class="numeric">Intel</th>
-                    <th class="numeric" title="Layer-3 Meta Intelligence · rank × confidence">Meta</th>
+                    <th class="numeric" title="Fused score · reversion rank × conviction">Meta</th>
                 </tr>
             </thead>
             <tbody>
@@ -5633,15 +5022,12 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
 
 
 _SIGNAL_TYPE_REFERENCE = [
-    ("Set A · Ignition",  "amber",
-     "The Directional Logistic Oscillator crosses the zero line — crossing up = long, "
-     "crossing down = short. A momentum/trend regime shift."),
-    ("Set B · Regime",    "violet",
-     "The DLO bar color flips (deep-bearish → recovering, confirmed by Klinger flow up = long; "
-     "bullish → fading with Klinger flow down = short). Catches the strength regime turning."),
-    ("Set C · Flow",  "cyan",
-     "The Klinger Volume Oscillator crosses its signal line (up = long, down = short), gated by "
-     "DLO Market Strength falling on the bar. Volume-flow momentum, filtered by waning strength."),
+    ("Set A · Momentum",  "amber",
+     "The Hemrek Count Index crosses its Count Signal line (count.pine) — crossing up = long, "
+     "crossing down = short. Rides the momentum-streak turning."),
+    ("Set B · Crossover", "violet",
+     "The 3-bar rate of change of the Count Signal crosses zero (count.pine) — crossing down "
+     "through zero = long, crossing up = short. Flags the smoothed streak rolling over."),
 ]
 
 
@@ -5675,9 +5061,9 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
             key="sysdata_dl_full",
             help=(
                 f"All {len(results_df)} symbols with every computed factor. "
-                "Includes a Legend sheet defining each column: signal conditions (A/B/C), "
-                "factor descriptions (Price Momentum, Vol Quality, Conviction, Pulse, Wave), "
-                "and zone/regime definitions."
+                "Includes a Legend sheet defining each column: signal conditions (A=divergence/B=absorption), "
+                "factor descriptions (Price Momentum, Vol Quality, Bar Delta, CVD, CVD Slope, Δ-Z), "
+                "and flow-zone/regime definitions."
             ),
         )
     with dl2:
@@ -5719,11 +5105,11 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     )
     cols = ["DisplayName", "Price", "Signal", "SignalType",
             "Intel_Confidence", "Intel_Stars", "Intel_Source", "Intel_Flags",
-            "AT_Filter", "Priority_Long",
+            "Abs_Strength", "Priority_Long",
             "Priority_Long_pct", "F1_PriceMom", "F2_VolQual"]
     if "% Chng Since" in results_df.columns and results_df["% Chng Since"].notna().any():
         cols.insert(2, "% Chng Since")
-    cols += ["Conviction", "Conviction_Delta", "Pulse", "Pulse_Delta", "Wave"]
+    cols += ["Bar_Delta", "CVD", "CVD_Slope", "Delta_Z"]
     l_cols = [c for c in results_df.columns
               if c.startswith('L_') and (c[2:].replace('d', '').isdigit() or c == 'L_Today')]
     cols += sorted(l_cols)
@@ -5739,8 +5125,10 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
         "F1_PriceMom":       "Price Momentum",
         "F2_VolQual":        "Vol Quality",
         "Priority_Long_pct": "Long Priority %ile",
-        "Conviction_Delta":  "Conv Δ",
-        "Pulse_Delta":       "Pulse Δ",
+        "Bar_Delta":         "Bar Δ",
+        "CVD_Slope":         "CVD Slope",
+        "Delta_Z":           "Δ-Z",
+        "Abs_Strength":      "Absorption ×",
     }
     display_frame = results_df[cols].sort_values("Priority_Long", ascending=False).rename(columns=_col_display_names)
     _sysdata_colcfg = {
@@ -5807,209 +5195,6 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
             """, unsafe_allow_html=True)
 
 
-def _build_active_weights_table_html(active_weights: dict) -> str:
-    """Render active β/γ/tier weights as an HTML table consistent with screener tables.
-
-    Splits long/short pairs into a side-by-side layout so the user can see the
-    asymmetry the optimizer found. Tier multipliers (shared) are listed below.
-    """
-    factor_pairs = [
-        ("F1 · PriceMom",   "beta_F1_pricemom_long",   "beta_F1_pricemom_short"),
-        ("F2 · VolQual",    "beta_F2_volqual_long",    "beta_F2_volqual_short"),
-        ("F3 · Wave",       "beta_F3_wave_long",       "beta_F3_wave_short"),
-        ("F4 · Pulse",      "beta_F4_pulse_long",      "beta_F4_pulse_short"),
-        ("F5 · Regime",     "beta_F5_regime_long",     "beta_F5_regime_short"),
-        ("F6 · X-Sect",     "beta_F6_xsect_long",      "beta_F6_xsect_short"),
-        # F7 dormant by default (0/0) — gated out of the ranking search pending
-        # real-data validation; the "exp" tag signals experimental/probation, not a bug.
-        ("F7 · Liq (LO) ᵉˣᵖ", "beta_F7_liq_long",      "beta_F7_liq_short"),
-        # F8 (sector-relative breadth) IS searched by default — a live calibrated
-        # factor (no exp tag), unlike the dormant F7.
-        ("F8 · Breadth",    "beta_F8_breadth_long",    "beta_F8_breadth_short"),
-        ("γ · Reversion",   "gamma_reversion_long",    "gamma_reversion_short"),
-        ("γ · Divergence",  "gamma_divergence_long",   "gamma_divergence_short"),
-    ]
-    tier_pairs = [
-        ("Set A · Ignition",  "tier_A_mult"),
-        ("Set B · Regime",    "tier_B_mult"),
-        ("Set C · Flow",      "tier_C_mult"),
-        ("Default",           "tier_default_mult"),
-    ]
-
-    factor_rows = []
-    for label, lk, sk in factor_pairs:
-        lv = float(active_weights.get(lk, 0.0))
-        sv = float(active_weights.get(sk, 0.0))
-        delta = lv - sv
-        delta_color = "#34D399" if delta > 0.5 else "#FB7185" if delta < -0.5 else "#94A3B8"
-        delta_sign  = "+" if delta >= 0 else ""
-        factor_rows.append(f"""
-            <tr>
-                <td class="aw-label">{label}</td>
-                <td class="aw-num aw-long">{lv:.2f}</td>
-                <td class="aw-num aw-short">{sv:.2f}</td>
-                <td class="aw-num aw-delta" style="color:{delta_color};">{delta_sign}{delta:.2f}</td>
-            </tr>
-        """)
-
-    tier_rows = []
-    for label, key in tier_pairs:
-        # tier_C_mult falls back to tier_default_mult when unsearched — mirror the
-        # engine (priority_engine._tier_map) so the display shows the value actually applied.
-        _fallback = active_weights.get('tier_default_mult', 1.0) if key == 'tier_C_mult' else 1.0
-        v = float(active_weights.get(key, _fallback))
-        v_color = "#34D399" if v > 1.05 else "#FB7185" if v < 0.95 else "#94A3B8"
-        tier_rows.append(f"""
-            <tr>
-                <td class="aw-label">{label}</td>
-                <td class="aw-num" style="color:{v_color};">{v:.2f}×</td>
-            </tr>
-        """)
-
-    # Fixed structural parameters — applied by compute_priority but NOT searched by
-    # the optimizer (Path-A breadth tilt has zero within-date variance, so it can't
-    # earn cross-sectional IC). Shown separately so they aren't mistaken for tuned weights.
-    bt_long  = float(active_weights.get('breadth_tilt_long', 0.0))
-    bt_short = float(active_weights.get('breadth_tilt_short', 0.0))
-    fixed_pairs = [
-        (f"Breadth Tilt α · Long",  bt_long,  f"×[{1-bt_long:.2f}, {1+bt_long:.2f}]"),
-        (f"Breadth Tilt α · Short", bt_short, f"×[{1-bt_short:.2f}, {1+bt_short:.2f}]"),
-    ]
-    fixed_rows = []
-    for label, v, rng in fixed_pairs:
-        fixed_rows.append(f"""
-            <tr>
-                <td class="aw-label">{label}</td>
-                <td class="aw-num" style="color:#94A3B8;">{v:.2f}</td>
-                <td class="aw-num" style="color:#64748B; font-size:0.62rem;">{rng}</td>
-            </tr>
-        """)
-
-    return f"""
-    <html><head><style>
-        body {{
-            margin:0; padding:0;
-            background:transparent;
-            font-family:'IBM Plex Mono', ui-monospace, Menlo, monospace;
-            color:#E2E8F0;
-        }}
-        .aw-table {{
-            width:100%;
-            border-collapse:collapse;
-            margin-bottom:1rem;
-            background:rgba(255,255,255,0.015);
-            border:1px solid rgba(255,255,255,0.06);
-            border-radius:6px;
-            overflow:hidden;
-        }}
-        .aw-table thead th {{
-            font-family:'Space Grotesk', system-ui, sans-serif;
-            font-size:0.58rem;
-            font-weight:700;
-            color:#64748B;
-            text-transform:uppercase;
-            letter-spacing:0.12em;
-            text-align:right;
-            padding:0.55rem 0.7rem;
-            background:rgba(0,0,0,0.18);
-            border-bottom:1px solid rgba(255,255,255,0.06);
-        }}
-        .aw-table thead th:first-child {{ text-align:left; }}
-        .aw-table tbody tr {{
-            border-bottom:1px solid rgba(255,255,255,0.03);
-        }}
-        .aw-table tbody tr:last-child {{ border-bottom:0; }}
-        .aw-table tbody tr:hover {{ background:rgba(255,255,255,0.018); }}
-        .aw-label {{
-            font-family:'Space Grotesk', system-ui, sans-serif;
-            font-size:0.7rem;
-            font-weight:600;
-            color:#CBD5E1;
-            padding:0.5rem 0.7rem;
-            text-align:left;
-            letter-spacing:0.02em;
-        }}
-        .aw-num {{
-            font-size:0.7rem;
-            font-weight:600;
-            text-align:right;
-            padding:0.5rem 0.7rem;
-            font-variant-numeric:tabular-nums;
-        }}
-        .aw-long  {{ color:#2DD4A8; }}
-        .aw-short {{ color:#E8555A; }}
-        .aw-delta {{ font-size:0.65rem; font-weight:500; }}
-
-        .aw-section-title {{
-            font-family:'Space Grotesk', system-ui, sans-serif;
-            font-size:0.6rem;
-            font-weight:700;
-            color:#D4A853;
-            text-transform:uppercase;
-            letter-spacing:0.14em;
-            padding:0.5rem 0 0.4rem 0.1rem;
-            margin-top:0.4rem;
-        }}
-        .aw-footnote {{
-            font-family:'IBM Plex Mono', monospace;
-            font-size:0.6rem;
-            color:#475569;
-            line-height:1.5;
-            padding:0.5rem 0.2rem 0;
-        }}
-    </style></head><body>
-
-    <div class="aw-section-title">FACTOR WEIGHTS · LONG vs SHORT</div>
-    <table class="aw-table">
-        <thead>
-            <tr>
-                <th>Factor</th>
-                <th>Long</th>
-                <th>Short</th>
-                <th>Δ</th>
-            </tr>
-        </thead>
-        <tbody>{''.join(factor_rows)}</tbody>
-    </table>
-
-    <div class="aw-section-title">TIER MULTIPLIERS · SHARED</div>
-    <table class="aw-table">
-        <thead>
-            <tr>
-                <th>Signal Class</th>
-                <th>Multiplier</th>
-            </tr>
-        </thead>
-        <tbody>{''.join(tier_rows)}</tbody>
-    </table>
-
-    <div class="aw-section-title">FIXED · STRUCTURAL (not calibrated)</div>
-    <table class="aw-table">
-        <thead>
-            <tr>
-                <th>Parameter</th>
-                <th>α</th>
-                <th>Exposure ×</th>
-            </tr>
-        </thead>
-        <tbody>{''.join(fixed_rows)}</tbody>
-    </table>
-
-    <div class="aw-footnote">
-        Long / Short are independent weight vectors — Δ &gt; 0 means the factor
-        contributes more to the bullish ranking than the bearish, and vice versa.
-        Tier multipliers scale signal-class quality and are direction-agnostic.
-        The <b>Breadth Tilt α</b> (Path A) is a <i>fixed</i> market-regime exposure
-        multiplier — <code>long ×(1+α·b)</code>, <code>short ×(1−α·b)</code>, breadth
-        state <code>b∈[−1,1]</code> — applied after ranking and <b>not</b> optimized
-        (it has no within-date variance to calibrate against), so it rescales
-        long-vs-short exposure without reordering either side.
-    </div>
-
-    </body></html>
-    """
-
-
 def main():
     """Main app entry point with state-based flow."""
     # ── Animation-on-first-render gate ────────────────────────────────────
@@ -6034,16 +5219,7 @@ def main():
     if is_first_render:
         console.header("SANKET TERMINAL — Session Start", VERSION)
         console.item("Started", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        _profiles = pe.list_profiles()
-        if _profiles:
-            console.item("Calibrated profiles", f"{len(_profiles)} on disk")
-            for _p in _profiles[:3]:  # show up to 3 entries
-                _label = _p.get("selected_index") or _p.get("universe") or "—"
-                _ir    = _p.get("val_score")
-                _ir_s  = f"{_ir:+.3f}" if isinstance(_ir, (int, float)) else "—"
-                console.item(f"  · {_label}", f"val IR {_ir_s} · {_p.get('timestamp', '—')}")
-        else:
-            console.item("Calibrated profiles", "0 (running on factory defaults)")
+        console.item("Ranking engine", "Cross-Sectional Reversion v1 (alpha-health monitored)")
 
     # Render sidebar and get parameters + run button state
     sb = render_sidebar()
@@ -6094,9 +5270,9 @@ def main():
                 "Universe": universe, "Index": selected_index, "Timeframe": timeframe,
                 "Target Date": analysis_date, "Mode": mode,
             })
-            # Self-tuning, in one pass: reuse today's profile or harvest+calibrate inline,
-            # so the screen below ranks by data-tuned weights without a separate mode.
-            _calib_status = _ensure_intel_weights(
+            # Alpha-health, in one pass: reuse today's reading or harvest+measure inline,
+            # so the screen below scales conviction by the live realized edge.
+            _calib_status = _ensure_alpha_health(
                 universe, selected_index, timeframe, analysis_date,
                 reg_len, wt_n1, wt_n2, levels, wt2_len, wt2_type, calib_settings,
             )
@@ -6191,15 +5367,15 @@ def main():
                         f"{_pn_n} / {_pn_total} symbols · {_pn_date} · Full universe ranking by Abnormal Acceleration",
                         icon="zap", accent="amber"
                     )
-                    avg_pulse = results_df['Pulse'].mean()
-                    avg_conv = results_df['Conviction'].mean()
-                    strong_pulse = len(results_df[results_df['Pulse'].abs() > 10])
-                    bullish_bias = (results_df['Signal'] > 0).sum() / len(results_df) * 100 if len(results_df) > 0 else 0
+                    avg_delta = results_df['Delta_Z'].mean()
+                    avg_cvd_slope = results_df['CVD_Slope'].mean()
+                    strong_flow = len(results_df[results_df['Delta_Z'].abs() > 1.5])
+                    bullish_bias = (results_df['CVD_Slope'] > 0).sum() / len(results_df) * 100 if len(results_df) > 0 else 0
                     m1, m2, m3, m4 = st.columns(4)
-                    with m1: ui.render_metric_card("Universe Pulse", f"{avg_pulse:+.2f}", "Avg Acceleration (range ±100)", "neutral")
-                    with m2: ui.render_metric_card("Universe Conv", f"{avg_conv:+.2f}", "Avg Conviction (range ±100)", "neutral")
-                    with m3: ui.render_metric_card("High Pulse", str(strong_pulse), f"{strong_pulse/len(results_df)*100 if len(results_df)>0 else 0:.0f}% Universe", "info")
-                    with m4: ui.render_metric_card("Bullish Bias", f"{bullish_bias:.0f}%", "Signal > 0", "success" if bullish_bias > 50 else "danger")
+                    with m1: ui.render_metric_card("Universe Δ-Z", f"{avg_delta:+.2f}", "Avg signed delta z-score", "neutral")
+                    with m2: ui.render_metric_card("Universe CVD Slope", _human_vol(avg_cvd_slope), "Avg 3-bar flow build/drain", "neutral")
+                    with m3: ui.render_metric_card("Strong Flow", str(strong_flow), f"{strong_flow/len(results_df)*100 if len(results_df)>0 else 0:.0f}% Universe", "info")
+                    with m4: ui.render_metric_card("Flow Bias", f"{bullish_bias:.0f}%", "CVD slope > 0", "success" if bullish_bias > 50 else "danger")
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                     bull_narr_tab, bear_narr_tab = st.tabs(["Bullish Priority Ranking", "Bearish Priority Ranking"])
                     with bull_narr_tab:
@@ -6212,24 +5388,24 @@ def main():
                 # ════ Pulse Narrative · TAB 2: SIGNAL STRENGTH ═════════════════════════════
                 with tab_strength:
                     ui.render_section_header(
-                        "Abnormal Acceleration (Pulse)",
+                        "Order-Flow Signal Strength",
                         "Top 10 long / short candidates by calibrated Priority",
                         icon="zap", accent="amber",
                     )
                     pn_top_longs  = results_df.sort_values('Priority_Long',  ascending=False).head(10)
                     pn_top_shorts = results_df.sort_values('Priority_Short', ascending=False).head(10)
 
-                    pn_avg_pulse  = results_df['Pulse'].abs().mean()
-                    pn_avg_conv   = results_df['Conviction'].abs().mean()
-                    pn_strong_p   = len(results_df[results_df['Pulse'].abs() > 10])
-                    pn_strong_t   = len(results_df[results_df['Trend'].abs() > 30])
+                    pn_avg_delta  = results_df['Delta_Z'].abs().mean()
+                    pn_avg_abs    = results_df['Abs_Strength'].mean()
+                    pn_strong_p   = len(results_df[results_df['Delta_Z'].abs() > 1.5])
+                    pn_strong_t   = len(results_df[results_df['Abs_Strength'] > 1.8])
 
                     s1, s2, s3, s4 = st.columns(4)
-                    with s1: ui.render_metric_card("Avg Pulse",      f"{pn_avg_pulse:.1f}", "Abnormal Acceleration (abs, ±100)", "neutral")
-                    with s2: ui.render_metric_card("Avg Conviction", f"{pn_avg_conv:.1f}",  "Blended confluence (abs, ±100)",    "neutral")
-                    with s3: ui.render_metric_card("Strong Pulse",   str(pn_strong_p),
+                    with s1: ui.render_metric_card("Avg Δ-Z",        f"{pn_avg_delta:.2f}", "Signed delta z-score (abs)", "neutral")
+                    with s2: ui.render_metric_card("Avg Absorption", f"{pn_avg_abs:.2f}×",  "|Δ| vs 20-bar avg",          "neutral")
+                    with s3: ui.render_metric_card("Strong Flow",    str(pn_strong_p),
                                                    f"{pn_strong_p/len(results_df)*100:.0f}% of universe", "info")
-                    with s4: ui.render_metric_card("Strong Trends",  str(pn_strong_t),
+                    with s4: ui.render_metric_card("Absorption Hits", str(pn_strong_t),
                                                    f"{pn_strong_t/len(results_df)*100:.0f}% of universe", "info")
 
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -6274,24 +5450,16 @@ def main():
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
                         f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
-                        "Ignition (A) · Regime (B) · Flow (C)",
+                        "Momentum (A) · Crossover (B)",
                         icon="zap",
                         accent="amber"
                     )
 
-                    # Layer 3 · Meta Filter status banner (opt-in false-positive suppression).
+                    # Meta Filter status banner (opt-in low-conviction suppression).
                     _if_mode, _if_thr = _intel_filter_active()
                     if _if_mode != "Off":
-                        _meta_active = bool((pe.get_active_meta_model() or {}).get("active"))
                         _if_verb = "hiding" if _if_mode == "Hide" else "dimming"
-                        if _meta_active:
-                            _if_src = "active meta intelligence (rank × confidence, beat naked priority OOS)"
-                        elif pe.get_active_meta_model():
-                            _if_src = "advisory meta intelligence (rank × confidence) — dims only, never hides"
-                        elif pe.get_active_conf_model():
-                            _if_src = "rank × calibrated confidence (fallback)"
-                        else:
-                            _if_src = "rank × Layer-1 heuristic (fallback)"
+                        _if_src = "the reversion engine's Meta score (rank × edge-scaled conviction)"
                         st.markdown(
                             f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--amber); '
                             f'background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22); '
@@ -6314,30 +5482,26 @@ def main():
                     longs_a_df = results_df[(results_df['LA_5d'] != "—") & ~has_bearish_crossover].copy().sort_values('Priority_Long', ascending=False)
                     shorts_a_df = results_df[(results_df['SA_5d'] != "—") & ~has_bullish_crossover].copy().sort_values('Priority_Short', ascending=False)
 
-                    # Set B: Regime
+                    # Set B: Crossover
                     longs_b_df = results_df[results_df['LB_5d'] != "—"].copy().sort_values('Priority_Long', ascending=False)
                     shorts_b_df = results_df[results_df['SB_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False)
-
-                    # Set C: Reversal
-                    longs_c_df = results_df[results_df['LC_5d'] != "—"].copy().sort_values('Priority_Long', ascending=False)
-                    shorts_c_df = results_df[results_df['SC_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False)
 
                     if timeframe == 'Weekly':
                         _age_order = ["This Week", "1 Week Ago", "2 Weeks Ago", "3 Weeks Ago", "Within 5 Weeks"]
                     else:
                         _age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
 
-                    has_signals = any(not df_.empty for df_ in [longs_a_df, shorts_a_df, longs_b_df, shorts_b_df, longs_c_df, shorts_c_df])
+                    has_signals = any(not df_.empty for df_ in [longs_a_df, shorts_a_df, longs_b_df, shorts_b_df])
 
                     if has_signals:
-                        total_longs  = len(longs_a_df) + len(longs_b_df) + len(longs_c_df)
-                        total_shorts = len(shorts_a_df) + len(shorts_b_df) + len(shorts_c_df)
-                        all_longs  = pd.concat([longs_a_df, longs_b_df, longs_c_df]).drop_duplicates('Symbol').sort_values('Priority_Long', ascending=False)
-                        all_shorts = pd.concat([shorts_a_df, shorts_b_df, shorts_c_df]).drop_duplicates('Symbol').sort_values('Priority_Short', ascending=False)
+                        total_longs  = len(longs_a_df) + len(longs_b_df)
+                        total_shorts = len(shorts_a_df) + len(shorts_b_df)
+                        all_longs  = pd.concat([longs_a_df, longs_b_df]).drop_duplicates('Symbol').sort_values('Priority_Long', ascending=False)
+                        all_shorts = pd.concat([shorts_a_df, shorts_b_df]).drop_duplicates('Symbol').sort_values('Priority_Short', ascending=False)
 
                         mc1, mc2, mc3, mc4 = st.columns(4)
-                        with mc1: ui.render_metric_card("Long Signals", str(total_longs), f"A:{len(longs_a_df)} B:{len(longs_b_df)} C:{len(longs_c_df)}", "success")
-                        with mc2: ui.render_metric_card("Short Signals", str(total_shorts), f"A:{len(shorts_a_df)} B:{len(shorts_b_df)} C:{len(shorts_c_df)}", "danger")
+                        with mc1: ui.render_metric_card("Long Signals", str(total_longs), f"A:{len(longs_a_df)} B:{len(longs_b_df)}", "success")
+                        with mc2: ui.render_metric_card("Short Signals", str(total_shorts), f"A:{len(shorts_a_df)} B:{len(shorts_b_df)}", "danger")
                         with mc3:
                             strongest_long = all_longs.iloc[0] if not all_longs.empty else None
                             ui.render_metric_card("Strongest Long", strongest_long['SimpleName'] if strongest_long is not None else "—", f"Signal: {strongest_long['Signal']:.1f}" if strongest_long is not None else "No signals", "info")
@@ -6348,7 +5512,7 @@ def main():
                         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                         bull_tab, bear_tab = st.tabs(["Bullish Signals by Timing", "Bearish Signals by Timing"])
                         with bull_tab:
-                            mom_bull_tab, cross_bull_tab, rev_bull_tab, prio_bull_tab = st.tabs(["Ignition", "Regime", "Flow", "Priority Rank"])
+                            mom_bull_tab, cross_bull_tab, prio_bull_tab = st.tabs(["Momentum", "Crossover", "Priority Rank"])
                             with mom_bull_tab:
                                 _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A', timeframe=timeframe)
                                 la_html = _build_signal_table_html(la_stats, side='long', timeframe=timeframe)
@@ -6361,12 +5525,6 @@ def main():
                                 _g = sum(1 for a in _age_order if lb_stats[a]['count'] > 0)
                                 _r = sum(lb_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(lb_html, height=max(70 + _g * 46 + _r * 44, 110))
-                            with rev_bull_tab:
-                                _, lc_stats, _, _ = _bucket_signals_by_age(longs_c_df, side='long', condition_set='C', timeframe=timeframe)
-                                lc_html = _build_signal_table_html(lc_stats, side='long', timeframe=timeframe)
-                                _g = sum(1 for a in _age_order if lc_stats[a]['count'] > 0)
-                                _r = sum(lc_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(lc_html, height=max(70 + _g * 46 + _r * 44, 110))
                             with prio_bull_tab:
                                 # Entire universe ranked by the self-tuned LONG priority score —
                                 # not gated by any signal set; this is the Intelligence ranking.
@@ -6380,7 +5538,7 @@ def main():
                                 st.components.v1.html(_build_signal_strength_table_html(_all_long, side='long'),
                                                       height=min(150 + len(_all_long) * 55, 900), scrolling=True)
                         with bear_tab:
-                            mom_bear_tab, cross_bear_tab, rev_bear_tab, prio_bear_tab = st.tabs(["Ignition", "Regime", "Flow", "Priority Rank"])
+                            mom_bear_tab, cross_bear_tab, prio_bear_tab = st.tabs(["Momentum", "Crossover", "Priority Rank"])
                             with mom_bear_tab:
                                 _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A', timeframe=timeframe)
                                 sa_html = _build_signal_table_html(sa_stats, side='short', timeframe=timeframe)
@@ -6393,12 +5551,6 @@ def main():
                                 _g = sum(1 for a in _age_order if sb_stats[a]['count'] > 0)
                                 _r = sum(sb_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(sb_html, height=max(70 + _g * 46 + _r * 44, 110))
-                            with rev_bear_tab:
-                                _, sc_stats, _, _ = _bucket_signals_by_age(shorts_c_df, side='short', condition_set='C', timeframe=timeframe)
-                                sc_html = _build_signal_table_html(sc_stats, side='short', timeframe=timeframe)
-                                _g = sum(1 for a in _age_order if sc_stats[a]['count'] > 0)
-                                _r = sum(sc_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(sc_html, height=max(70 + _g * 46 + _r * 44, 110))
                             with prio_bear_tab:
                                 # Entire universe ranked by the self-tuned SHORT priority score.
                                 _all_short = results_df.sort_values('Priority_Short', ascending=False)
@@ -6435,24 +5587,23 @@ def main():
                 # ════ Action Dashboard · TAB 2: SIGNAL STRENGTH ═══════════════════════
                 with tab_strength:
                     ui.render_section_header(
-                        "Oscillator Velocity (Pulse)",
-                        "Top signals ranked by DLO velocity — Ignition (A) · Regime (B) · Reversal (C)",
+                        "Order-Flow Signal Strength",
+                        "Top signals ranked by Priority — Divergence (A) · Absorption (B)",
                         icon="zap",
                         accent="amber"
                     )
 
                     # Strength metrics
-                    avg_pulse = results_df['Pulse'].abs().mean()
-                    avg_conv = results_df['Conviction'].abs().mean()
-                    # Pulse is the DLO oscillator velocity, clipped to ±6 — "strong" ≈ |Pulse| > 3.
-                    strong_pulse_count = len(results_df[results_df['Pulse'].abs() > 3])
-                    strong_trend_count = len(results_df[results_df['Trend'].abs() > 30])
+                    avg_delta = results_df['Delta_Z'].abs().mean()
+                    avg_abs = results_df['Abs_Strength'].mean()
+                    strong_flow_count = len(results_df[results_df['Delta_Z'].abs() > 1.5])
+                    absorb_count = len(results_df[results_df['Abs_Strength'] > 1.8])
 
                     col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-                    with col_s1: ui.render_metric_card("Avg Pulse", f"{avg_pulse:.1f}", "DLO oscillator velocity", "neutral")
-                    with col_s2: ui.render_metric_card("Avg Conviction", f"{avg_conv:.1f}", "Blended confluence", "neutral")
-                    with col_s3: ui.render_metric_card("Strong Pulse", str(strong_pulse_count), f"{strong_pulse_count/len(results_df)*100:.0f}% of universe", "info")
-                    with col_s4: ui.render_metric_card("Strong Trends", str(strong_trend_count), f"{strong_trend_count/len(results_df)*100:.0f}% of universe", "info")
+                    with col_s1: ui.render_metric_card("Avg Δ-Z", f"{avg_delta:.2f}", "Signed delta z-score", "neutral")
+                    with col_s2: ui.render_metric_card("Avg Absorption", f"{avg_abs:.2f}×", "|Δ| vs 20-bar avg", "neutral")
+                    with col_s3: ui.render_metric_card("Strong Flow", str(strong_flow_count), f"{strong_flow_count/len(results_df)*100:.0f}% of universe", "info")
+                    with col_s4: ui.render_metric_card("Absorption Hits", str(absorb_count), f"{absorb_count/len(results_df)*100:.0f}% of universe", "info")
 
 
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -6507,27 +5658,27 @@ def main():
         render_footer()
 
 def _render_model_passport_sidebar(current_universe: str, current_index, current_timeframe=None, analysis_mode=None):
-    """Sidebar Passport — visible in every mode.
+    """Sidebar Engine Status panel — visible in every mode.
 
-    Surfaces:
-      • Profile state (Default / Calibrated)
-      • The universe + timeframe the profile was fit on
-      • Train + Val IR + last-updated timestamp
-      • A mismatch banner when the calibrated universe or timeframe ≠ current
-        sidebar selection (weights learned on daily data don't generalize to
-        weekly and vice-versa).
+    The reversion engine is fixed and validated; there are no per-universe profiles to
+    manage. This panel surfaces the engine name, the live alpha-health / trailing-IC
+    reading from the last screener run, and the universe/timeframe it was measured on,
+    plus a single 'Re-measure edge' control.
 
-    Caller must be inside a ``with st.sidebar:`` context.
+    Caller must be inside a ``with st.sidebar:`` context. Returns the settings dict the
+    alpha-health monitor consumes: {force, lookback_days, horizons}.
     """
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="sidebar-title">Model Passport</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-title">Engine Status</div>', unsafe_allow_html=True)
 
-    res = st.session_state.get("opt_results")
+    res = st.session_state.get("opt_results") or {}
+    trailing_ic = st.session_state.get("alpha_health_ic", res.get("trailing_ic"))
+    health = st.session_state.get("alpha_health_mult", res.get("alpha_health"))
+    measured = trailing_ic is not None and isinstance(trailing_ic, (int, float))
 
-    # What universe/timeframe is this profile from? What's selected now?
-    cal_universe  = (res.get("universe")       if res else None) or None
-    cal_index     = (res.get("selected_index") if res else None) or None
-    cal_timeframe = (res.get("timeframe")      if res else None) or None
+    cal_universe  = res.get("universe") or None
+    cal_index     = res.get("selected_index") or None
+    cal_timeframe = res.get("timeframe") or None
     cal_label     = cal_index or cal_universe or "—"
     cur_label     = (current_index or current_universe or "—")
     universe_mismatch  = bool(res) and cal_label != "—" and cur_label != "—" and cal_label != cur_label
@@ -6535,27 +5686,25 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                           and cal_timeframe != current_timeframe)
     mismatch = universe_mismatch or timeframe_mismatch
 
-    if res:
-        train_v = res.get('train_score', 0.0) or 0.0
-        val_v   = res.get('val_score',   0.0) or 0.0
-        train_str = f"{train_v:+.3f}"
-        val_str   = f"{val_v:+.3f}"
-        updated   = res.get('timestamp', '—')
-        train_color = "var(--emerald)" if train_v > 0 else "var(--rose)"
-        val_color   = "var(--emerald)" if val_v   > 0 else "var(--rose)"
-        cal_tf_disp = cal_timeframe or "—"
-        if mismatch:
-            profile_label = "Calibrated · ⚠"
-            card_class    = "warning"
+    if measured:
+        if trailing_ic > 0.01:
+            state_label, card_class = "Edge Active", "success"
+        elif trailing_ic > 0.0:
+            state_label, card_class = "Weak", "warning"
         else:
-            profile_label = "Calibrated"
-            card_class    = "success" if (val_v > 0 and train_v > 0) else "warning"
+            state_label, card_class = "Dormant", "danger"
+        ic_str     = f"{trailing_ic:+.3f}"
+        health_str = f"{float(health):.2f}×" if isinstance(health, (int, float)) else "—"
     else:
-        profile_label = "Default"
-        train_str = val_str = updated = "—"
-        cal_tf_disp = "—"
-        train_color = val_color = "var(--ink-secondary)"
+        state_label = "Cold Start"
         card_class  = "neutral"
+        ic_str      = "—"
+        health_str  = f"{float(health):.2f}×" if isinstance(health, (int, float)) else "—"
+    if mismatch:
+        card_class = "warning"
+    updated     = res.get("timestamp", "—") or "—"
+    ic_color    = "var(--emerald)" if (measured and trailing_ic > 0) else "var(--rose)" if measured else "var(--ink-secondary)"
+    cal_tf_disp = cal_timeframe or "—"
 
     def _trim(s, n=22):
         s = str(s)
@@ -6569,13 +5718,17 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
             padding:0.85rem 0.95rem;
             margin-bottom:0.7rem;
             animation:none;">
-        <h4 style="margin:0 0 0.3rem 0;">Profile</h4>
-        <h2 style="font-size:1.05rem; margin:0 0 0.7rem 0; letter-spacing:-0.01em;">{profile_label}</h2>
+        <h4 style="margin:0 0 0.3rem 0;">Reversion Engine</h4>
+        <h2 style="font-size:1.05rem; margin:0 0 0.7rem 0; letter-spacing:-0.01em;">{state_label}</h2>
         <div style="display:flex; flex-direction:column; gap:0.32rem;
                     padding-top:0.55rem;
                     border-top:1px solid rgba(255,255,255,0.06);">
             <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Trained on</span>
+                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Engine</span>
+                <span style="color:var(--ink-secondary); font-weight:500;">X-Sect Reversion v1</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
+                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Measured on</span>
                 <span style="color:var(--ink-secondary); font-weight:500; max-width:62%; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{cal_label_disp}</span>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
@@ -6583,12 +5736,12 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                 <span style="color:var(--ink-secondary); font-weight:500;">{cal_tf_disp}</span>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.65rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Train IR</span>
-                <span style="color:{train_color}; font-weight:600;">{train_str}</span>
+                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Trailing IC</span>
+                <span style="color:{ic_color}; font-weight:600;">{ic_str}</span>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.65rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Val IR</span>
-                <span style="color:{val_color}; font-weight:600;">{val_str}</span>
+                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Alpha-Health</span>
+                <span style="color:var(--ink-secondary); font-weight:600;">{health_str}</span>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.6rem;">
                 <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Updated</span>
@@ -6602,12 +5755,12 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
         mismatch_lines = []
         if universe_mismatch:
             mismatch_lines.append(
-                f"Profile fit on <b>{_trim(cal_label, 28)}</b><br>"
+                f"Edge measured on <b>{_trim(cal_label, 28)}</b><br>"
                 f"Active universe is <b>{_trim(cur_label, 28)}</b>"
             )
         if timeframe_mismatch:
             mismatch_lines.append(
-                f"Profile depth is <b>{cal_timeframe}</b><br>"
+                f"Measured depth is <b>{cal_timeframe}</b><br>"
                 f"Active depth is <b>{current_timeframe}</b>"
             )
         mismatch_body = "<br>".join(mismatch_lines)
@@ -6617,445 +5770,64 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                     border:1px solid rgba(212,168,83,0.22);
                     border-radius:6px; padding:0.55rem 0.65rem;
                     margin-bottom:0.7rem; line-height:1.45;">
-            <span style="font-weight:700;">Profile mismatch — calibrated weights are still active.</span><br>
+            <span style="font-weight:700;">Reading is from a different universe / depth.</span><br>
             {mismatch_body}<br>
-            <span style="color:var(--ink-tertiary);">Rankings are using weights fit on a different universe or timeframe.
-            Factors learned for one market do not generalise to another.
-            Reset to defaults or run a new calibration for the current selection.</span>
+            <span style="color:var(--ink-tertiary);">The alpha-health re-measures on the next run for
+            the current selection — or use Re-measure edge below.</span>
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Self-Tuning Intelligence — directly below the Passport card, above Import Profile.
-    # The Passport shows the ACTIVE profile; these controls tune it. Calibration is folded
-    # into the screener run (harvest + tune inline, once/day per universe).
+    # ── Alpha-Health controls — directly below the status card. The engine is fixed;
+    # the only knob is whether to force a fresh edge measurement this run.
     calib_force = False
     if analysis_mode in ("Single Date", "Pulse Narrative"):
-        with st.expander("⚙ Self-Tuning Intelligence", expanded=False):
+        with st.expander("⚙ Alpha-Health Monitor", expanded=False):
             st.markdown(
                 '<div style="font-family:var(--data); font-size:0.62rem; color:var(--ink-tertiary); '
-                'line-height:1.55; padding:0 0 0.55rem 0;">Ranks the screen by factor weights learned '
-                'from forward-return IC. Auto-calibrates once per day per universe — reuses the saved '
-                'profile otherwise.</div>',
+                'line-height:1.55; padding:0 0 0.55rem 0;">The ranker measures its own realized edge '
+                '(trailing cross-sectional IC) once per day per universe and scales conviction by it. '
+                'Reuses today\'s reading otherwise.</div>',
                 unsafe_allow_html=True,
             )
-            calib_trials = st.slider(
-                "Search Trials", min_value=20, max_value=200, value=75, step=5,
-                key="sb_calib_trials",
-                help="Optuna TPE weight configurations to try (21-dim long + short search).",
-            )
-            calib_train_pct = st.slider(
-                "Train / Val Split", min_value=50, max_value=90, value=70, step=5,
-                key="sb_calib_train_pct", format="%d%%",
-                help="Percent of dates used to fit weights; remainder is out-of-sample validation.",
-            )
-            calib_train_frac = calib_train_pct / 100.0
             calib_force = st.checkbox(
-                "Force recalibrate this run", value=False, key="sb_calib_force",
-                help="Re-harvest and re-tune even if today's profile already exists.",
+                "Re-measure edge this run", value=False, key="sb_calib_force",
+                help="Re-harvest the lookback panel and re-measure the trailing IC even if today's reading exists.",
             )
 
-            # ── Layer 3 · Meta Filter (opt-in false-positive suppression) ──
+            # ── Meta Filter (opt-in low-conviction suppression) ──
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             st.markdown(
                 '<div style="font-family:var(--data); font-size:0.62rem; color:var(--ink-tertiary); '
                 'line-height:1.55; padding:0 0 0.4rem 0;">Filter fired signals by <b>Meta score</b> — the '
-                'Layer-3 fusion of cross-sectional Priority rank × per-signal Intel confidence. '
-                'Dim greys low-conviction signals; Hide removes them from the Action Dashboard. '
-                'An <b>advisory</b> meta model (one that did not beat naked priority out-of-sample) '
-                'only dims, never hides. Off shows all signals.</div>',
+                'reversion engine\'s rank × edge-scaled conviction. Dim greys low-conviction signals; '
+                'Hide removes them from the Action Dashboard. Off shows all signals.</div>',
                 unsafe_allow_html=True,
             )
-            # Dynamic default for Min Confidence: track the calibrated Confirm AUC so
-            # the filter's strictness scales with model quality; fall back to 0.45 when
-            # no AUC exists. Calibration runs AFTER this sidebar renders, so the AUC
-            # only appears on a later rerun — we therefore re-seed the threshold to the
-            # AUC-derived default whenever it changes, UNLESS the user has manually
-            # dragged the slider (detected by the value diverging from the last auto-seed).
-            _res = st.session_state.get("opt_results") or {}
-            _mc  = (_res.get("meta_intel") or {}) if isinstance(_res, dict) else {}
-            _sc  = (_res.get("signal_conf") or {}) if isinstance(_res, dict) else {}
-            # Prefer the Layer-3 meta AUC (the filter now acts on the Meta score); fall
-            # back to the Layer-2 confidence AUC, then a fixed default.
-            _auc = _mc.get("val_auc") if isinstance(_mc.get("val_auc"), (int, float)) else _sc.get("val_auc")
-            _thr_default = float(_auc) if isinstance(_auc, (int, float)) and 0.0 <= _auc <= 1.0 else 0.45
-            _thr_default = round(_thr_default / 0.05) * 0.05   # align to slider's step grid
-            _prev_seed = st.session_state.get("_intel_thr_autoseed")
-            _cur_val   = st.session_state.get("intel_filter_threshold")
-            # Apply the auto-default if never seeded, or if the user hasn't overridden it
-            # (current value still equals the previous auto-seed) and the default moved.
-            if _cur_val is None or (_prev_seed is not None and abs(_cur_val - _prev_seed) < 1e-9 and abs(_cur_val - _thr_default) > 1e-9):
-                st.session_state["intel_filter_threshold"] = _thr_default
-            st.session_state["_intel_thr_autoseed"] = _thr_default
+            st.session_state.setdefault("intel_filter_threshold", 0.45)
             st.session_state.setdefault("intel_filter_mode", "Dim")
 
             intel_filter_mode = st.radio(
                 "Meta Filter", ["Off", "Dim", "Hide"],
                 horizontal=True, key="intel_filter_mode",
-                help="Off: show all. Dim: grey signals below the threshold. Hide: drop them entirely "
-                     "(active meta intelligence or aged fire-bar Intel only; advisory meta never hides).",
+                help="Off: show all. Dim: grey signals below the threshold. Hide: drop them entirely.",
             )
             intel_filter_threshold = st.slider(
                 "Min Meta Score", min_value=0.0, max_value=1.0,
                 step=0.05, key="intel_filter_threshold",
                 disabled=(intel_filter_mode == "Off"),
-                help=("Fired signals with Meta score below this are dimmed or hidden. "
-                      "Defaults to the calibrated AUC (or 0.45 if uncalibrated)."),
+                help="Fired signals with Meta score below this are dimmed or hidden.",
             )
-    else:
-        calib_trials, calib_train_frac = 75, 0.70
+
     # Inline-harvest lookback ending at the analysis date: ~3y weekly, ~2y daily.
     calib_lookback_days = 1095 if current_timeframe == "Weekly" else 730
     _calib_settings = {
-        "trials":        calib_trials,
-        "train_frac":    calib_train_frac,
-        "horizons":      pe.HOLD_HORIZONS,
         "force":         calib_force,
         "lookback_days": calib_lookback_days,
+        "horizons":      eng.HOLD_HORIZONS,
     }
-
-    with st.expander("↑ Import Profile", expanded=False):
-        uploaded = st.file_uploader(" ", type=["json"], label_visibility="collapsed", key="passport_uploader")
-        if uploaded:
-            try:
-                payload = json.load(uploaded)
-                # Accept the v2 full opt_results shape AND legacy weights-only dicts.
-                if isinstance(payload, dict) and isinstance(payload.get("weights"), dict):
-                    _set_active_weights(payload["weights"])
-                    pe.set_active_conf_model(payload.get("signal_conf"))
-                    pe.set_active_meta_model(payload.get("meta_intel"))
-                    st.session_state["opt_results"] = payload
-                    pe.save_profile(payload)
-                    _imp_label = payload.get("selected_index") or payload.get("universe") or "—"
-                    console.success(f"Profile imported · {_imp_label} · persisted to disk")
-                else:
-                    _set_active_weights(payload)  # legacy: file IS a weights dict
-                    pe.set_active_conf_model(None)
-                    pe.set_active_meta_model(None)
-                    _had_calibration = "opt_results" in st.session_state
-                    if _had_calibration:
-                        del st.session_state["opt_results"]
-                    pe.delete_profile()
-                    console.success("Profile imported · legacy weights (no calibration metadata)")
-                    if _had_calibration:
-                        st.warning(
-                            "Legacy weights-only file imported. Your previous calibrated profile "
-                            "(train/val scores, sensitivity data) has been cleared. "
-                            "Re-run the screener (or tick Force recalibrate) to produce a new calibrated profile."
-                        )
-                # Toast survives the rerun; success card alone would blink-and-disappear.
-                # Note: Streamlit's icon= validates against an emoji whitelist — '✓' (U+2713)
-                # is rejected as a "shortcode". Using '✅' (U+2705) which IS a valid emoji.
-                st.toast("Profile imported.", icon="✅")
-                st.success("Profile imported.")
-            except Exception as e:
-                st.error(f"Import failed: {e}")
-
-    # Export the full opt_results when calibrated; raw weights otherwise.
-    # Filename: sanket_profile_<universe_slug>_<timestamp>.json so the file
-    # is self-describing — important when users keep multiple profiles.
-    res = st.session_state.get("opt_results")
-    export_payload = res or {"weights": _get_active_weights()}
-    if res:
-        # Always use the profile's own universe/index — never the sidebar selection.
-        # If the profile pre-dates universe stamping (None), omit those parts rather
-        # than silently substituting the sidebar value, which could mislabel the file.
-        export_universe = res.get("universe")
-        export_index    = res.get("selected_index")
-        # Timestamp from opt_results may be 'YYYY-MM-DD HH:MM' — convert to date slug.
-        ts = res.get("timestamp") or ""
-        export_date = ts.split(" ")[0] if ts else None
-    else:
-        export_universe = current_universe
-        export_index    = current_index
-        export_date     = _today_ist()
-    st.download_button(
-        "↓ Export Profile",
-        data=json.dumps(export_payload, indent=2, default=str),
-        file_name=build_download_filename(
-            "profile", universe=export_universe, selected_index=export_index,
-            dates=export_date, ext="json",
-        ),
-        mime="application/json",
-        width='stretch',
-        key="passport_export",
-    )
-    if st.button("↺ Reset to Defaults", width='stretch', key="passport_reset"):
-        _set_active_weights(pe.DEFAULT_W)
-        if "opt_results" in st.session_state:
-            del st.session_state["opt_results"]
-        # Only delete THIS universe+timeframe profile — others are preserved.
-        pe.delete_profile(current_universe, current_index, current_timeframe)
-        _reset_label = (current_index or current_universe or "—")
-        console.detail(f"Profile reset · {_reset_label} · disk profile cleared")
-        st.rerun()
 
     return _calib_settings
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# CALIBRATION RUNNER — phase-aware progress, throttled logging, abort guard
-# ═══════════════════════════════════════════════════════════════════════════
-
-# Phase boundaries on the unified progress bar (build → calibrate → validate → apply).
-# Most visible movement is allocated to the calibration loop.
-_CALIB_PHASES = [
-    ("Building dataset",      6),    # phase 1 → 0–6 %
-    ("Calibrating weights",  92),    # phase 2 → 6–92 %  (Optuna trials live here)
-    ("Validating on holdout", 97),   # phase 3 → 92–97 %
-    ("Applying weights",     100),   # phase 4 → 97–100 %
-]
-
-
-def run_priority_optimization(ts_data, calib_settings):
-    """Phase-aware calibration runner.
-
-    Pipeline: build precomputed dataset → Optuna TPE search → out-of-sample
-    validation → activate best weights. Single themed progress card spans
-    all four phases. Terminal logs phase transitions and quartile checkpoints
-    only — no per-trial spam.
-
-    Args:
-        ts_data: time-series factor frame from run_timeseries_analysis.
-        calib_settings: dict {trials, train_frac, horizons}.
-    """
-    n_trials   = int(calib_settings.get("trials", 50))
-    train_frac = float(calib_settings.get("train_frac", 0.70))
-    horizons   = list(calib_settings.get("horizons", pe.HOLD_HORIZONS))
-
-    progress_slot = st.empty()
-    start_time    = time.time()
-
-    # ─── Phase 1 / 4 · Build dataset ──────────────────────────────────────
-    progress_bar(progress_slot, 1, "Calibration Engine", "Phase 1 / 4 · Building dataset")
-    console.section("QUANT CALIBRATION", phase="INTELLIGENCE")
-
-    tuner = intel.PriorityTuner(
-        ts_data,
-        hold_periods=horizons,
-        train_frac=train_frac,
-        # F7 (LO reversion) stays out of the ranking search unless explicitly enabled —
-        # it's collinear with the existing reversion machinery and unproven on real
-        # data, so default-off prevents spurious weight. Opt in via calib_settings.
-        enable_f7=bool(calib_settings.get("enable_f7", False)),
-        # F8 (sector-relative breadth) is genuinely cross-sectional and de-meaned
-        # against the market level, so it can earn real IC — searched by default.
-        enable_f8=bool(calib_settings.get("enable_f8", True)),
-    )
-    n_train_dates = tuner._train_pre.n_groups if not tuner._train_pre.empty else 0
-    n_val_dates   = tuner._val_pre.n_groups   if not tuner._val_pre.empty   else 0
-    n_train_rows  = tuner._train_pre.n_rows   if not tuner._train_pre.empty else 0
-    n_val_rows    = tuner._val_pre.n_rows     if not tuner._val_pre.empty   else 0
-
-    console.item("Trials",           n_trials)
-    console.item("Train dates",      f"{n_train_dates}  ({n_train_rows} rows)")
-    console.item("Validation dates", f"{n_val_dates}  ({n_val_rows} rows)")
-    console.item("Hold horizons",    str(horizons))
-    console.item("Train / val split", f"{int(train_frac * 100)} / {100 - int(train_frac * 100)}")
-
-    # Hard guard: not enough usable training data
-    MIN_TRAIN_DATES = 10
-    if n_train_dates < MIN_TRAIN_DATES:
-        progress_slot.empty()
-        st.error(
-            f"**Not enough training data** — only {n_train_dates} usable date(s) after "
-            f"dropping the trailing {max(horizons)}-bar boundary (forward returns NaN there). "
-            f"Need ≥ {MIN_TRAIN_DATES}. Increase the historical range to ~60+ trading days "
-            f"for meaningful calibration."
-        )
-        console.warning(
-            f"Calibration aborted — only {n_train_dates} usable training dates "
-            f"(need ≥ {MIN_TRAIN_DATES})."
-        )
-        return
-
-    # Soft warning: sparse cross-section makes IC-based ranking unreliable.
-    # IC measures rank correlation across symbols per date; with fewer than ~20
-    # symbols per date the rank has too few positions to produce stable IC estimates.
-    MIN_SYMBOLS_FOR_IC = 20
-    avg_symbols_per_date = n_train_rows / max(n_train_dates, 1)
-    if avg_symbols_per_date < MIN_SYMBOLS_FOR_IC:
-        st.warning(
-            f"**Small universe detected** — {avg_symbols_per_date:.0f} symbols/date on average "
-            f"(recommended ≥ {MIN_SYMBOLS_FOR_IC}). IC-based calibration can produce noisy, "
-            f"overfit weights with sparse cross-sections. Proceed, but treat the calibrated "
-            f"profile as experimental and validate out-of-sample carefully."
-        )
-        console.warning(
-            f"Small universe: ~{avg_symbols_per_date:.0f} symbols/date — "
-            f"IC estimates may be noisy (recommend ≥ {MIN_SYMBOLS_FOR_IC})."
-        )
-
-    progress_bar(progress_slot, _CALIB_PHASES[0][1], "Calibration Engine", "Phase 1 / 4 · Dataset built")
-    console.detail("[1/4] Dataset built ✓")
-
-    # ─── Phase 2 / 4 · Calibrate weights ──────────────────────────────────
-    progress_bar(
-        progress_slot, _CALIB_PHASES[0][1],
-        "Calibration Engine",
-        f"Phase 2 / 4 · Calibrating weights · trial 0 / {n_trials}",
-    )
-    console.detail(f"[2/4] Calibrating · {n_trials} trials over {n_train_dates} dates")
-
-    quartile_marks = {max(1, n_trials // 4), max(1, n_trials // 2),
-                      max(1, 3 * n_trials // 4), n_trials}
-    best_so_far = -float("inf")
-    p_opt_start = _CALIB_PHASES[0][1]
-    p_opt_end   = _CALIB_PHASES[1][1]
-
-    def on_trial(trial_num, total, score):
-        nonlocal best_so_far
-        done = trial_num + 1
-        best_so_far = max(best_so_far, score)
-        elapsed = time.time() - start_time
-        remaining = (elapsed / done) * (total - done)
-        eta_str = time.strftime("%M:%S", time.gmtime(remaining))
-
-        pct = int(p_opt_start + (done / total) * (p_opt_end - p_opt_start))
-        progress_bar(
-            progress_slot, pct,
-            "Calibration Engine",
-            f"Phase 2 / 4 · trial {done} / {total} · best IR {best_so_far:+.3f} · ETA {eta_str}",
-        )
-
-        # Terminal: quartile checkpoints only.
-        if done in quartile_marks:
-            console.detail(f"      · {done:>3} / {total} trials · best IR {best_so_far:+.3f}")
-
-    best_w, train_score = tuner.optimize(n_trials=n_trials, progress_callback=on_trial)
-
-    # ─── Phase 3 / 4 · Validate on holdout ────────────────────────────────
-    progress_bar(
-        progress_slot, _CALIB_PHASES[2][1],
-        "Calibration Engine",
-        f"Phase 3 / 4 · validating on {n_val_dates} held-out date(s)",
-    )
-    console.detail("[3/4] Validating on holdout dates")
-    val_score = tuner.evaluate_validation()
-
-    # ─── Phase 4 / 4 · Apply weights ──────────────────────────────────────
-    importance = tuner.get_param_importance()
-    top_factor = max(importance, key=importance.get) if importance else "—"
-    top_share  = importance.get(top_factor, 0.0) if importance else 0.0
-
-    progress_bar(
-        progress_slot, 99,
-        "Calibration Engine",
-        f"Phase 4 / 4 · activating weights · top factor {top_factor}",
-    )
-    console.detail("[4/4] Activating weights · storing profile")
-
-    _set_active_weights(best_w)
-
-    # ─── Layer 2 · Signal-confidence calibration ──────────────────────────
-    # Learn P(true | regime/context) per signal set on the harvested outcomes,
-    # so Intel_Confidence becomes a calibrated false-positive filter. Best-effort:
-    # a sparse panel simply leaves the heuristic (Layer 1) in place.
-    signal_conf = None
-    try:
-        conf_horizon = int(calib_settings.get("conf_horizon", 5))
-        signal_conf = intel.calibrate_signal_confidence(
-            ts_data, horizon=conf_horizon, train_frac=train_frac,
-        )
-    except Exception as _e:
-        console.warning(f"Signal-confidence calibration skipped: {_e}")
-    pe.set_active_conf_model(signal_conf)
-    if signal_conf:
-        _auc = signal_conf.get("val_auc")
-        _lift = signal_conf.get("val_precision_lift")
-        _covered = [s for s in ("A", "B", "C") if s in signal_conf.get("sets", {})]
-        console.detail(
-            f"Signal confidence calibrated · sets {','.join(_covered) or 'pooled-only'} · "
-            f"val AUC {(_auc if _auc is not None else float('nan')):.3f} · "
-            f"precision lift {(_lift if _lift is not None else float('nan')):+.3f}"
-        )
-    else:
-        console.detail("Signal confidence: panel too sparse — using Layer-1 heuristic")
-
-    # ─── Layer 3 · Meta Intelligence calibration ────────────────────────────
-    # Fuse the cross-sectional Priority rank with the per-signal Intel confidence
-    # into a single calibrated conviction. Walk-forward gated: it is marked active
-    # (allowed to reorder/filter) ONLY if its OOS rank-IR beat naked Priority's.
-    # Otherwise it stays advisory. Best-effort — a sparse panel leaves it None.
-    meta_model = None
-    try:
-        meta_model = intel.calibrate_meta(ts_data, weights=best_w,
-                                                      train_frac=train_frac)
-    except Exception as _e:
-        console.warning(f"Meta Intelligence calibration skipped: {_e}")
-    pe.set_active_meta_model(meta_model)
-    if meta_model:
-        _mir = meta_model.get("meta_val_ir")
-        _pir = meta_model.get("priority_val_ir")
-        _act = meta_model.get("active")
-        console.detail(
-            f"Meta Intelligence calibrated · meta IR {(_mir if _mir is not None else float('nan')):+.3f} "
-            f"vs priority IR {(_pir if _pir is not None else float('nan')):+.3f} · "
-            f"{'ACTIVE (beats priority OOS)' if _act else 'advisory (did not beat priority OOS)'}"
-        )
-    else:
-        console.detail("Meta Intelligence: panel too sparse — Layer-3 falls back to rank×conf")
-
-    ts_meta = st.session_state.get("ts_meta") or {}
-    opt_results = {
-        "weights":        best_w,
-        "train_score":    train_score,
-        "val_score":      val_score,
-        "sensitivity":    importance,
-        "signal_conf":    signal_conf,
-        "meta_intel": meta_model,
-        "timestamp":      datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "universe":       ts_meta.get("universe"),
-        "selected_index": ts_meta.get("selected_index"),
-        "timeframe":      ts_meta.get("timeframe"),
-    }
-    st.session_state["opt_results"] = opt_results
-    _persist_ok = pe.save_profile(opt_results)  # best-effort disk persistence
-    _persist_label = ts_meta.get("selected_index") or ts_meta.get("universe") or "—"
-    if _persist_ok:
-        console.detail(f"Profile persisted to disk · key='{_persist_label}'")
-    else:
-        console.warning(f"Profile persist failed (disk write error) · key='{_persist_label}'")
-
-    # ─── Final summary ────────────────────────────────────────────────────
-    duration_str = time.strftime("%M:%S", time.gmtime(time.time() - start_time))
-    # Three distinct quality states — overfit and low-IR are separate failure modes.
-    overfit  = train_score > 0.05 and val_score < train_score * 0.3
-    low_ir   = val_score <= 0.0   # negative or zero validation IC — profile adds no edge
-    cal_risk = overfit or low_ir
-
-    if low_ir:
-        cal_quality = "negative val IR — profile has no demonstrated edge"
-    elif overfit:
-        cal_quality = "overfit — train IR significantly exceeds validation IR"
-    else:
-        cal_quality = "none"
-
-    progress_bar(progress_slot, 100, "Calibration Engine",
-                 f"Complete · Train {train_score:+.3f} · Val {val_score:+.3f} · {duration_str}")
-
-    _cal_label = ts_meta.get("selected_index") or ts_meta.get("universe") or "—"
-    console.summary("CALIBRATION COMPLETE", {
-        "Universe":      _cal_label,
-        "Train IR":      f"{train_score:+.4f}",
-        "Validation IR": f"{val_score:+.4f}",
-        "Top factor":    f"{top_factor} ({top_share:.1f}%)",
-        "Trials":        n_trials,
-        "Duration":      duration_str,
-        "Quality risk":  cal_quality,
-        "Profile saved": "yes" if _persist_ok else "no (disk error)",
-    })
-
-    overfit_suffix = f" ⚠ {cal_quality}" if cal_risk else ""
-    st.toast(
-        f"Calibration complete · Train {train_score:+.3f} · Val {val_score:+.3f}{overfit_suffix}",
-        icon="🎯" if not cal_risk else "⚠️",
-    )
-
-    # Clear the calibration progress bar and RETURN to the caller — do NOT st.rerun().
-    # Calibration is now folded into the screener run (_ensure_intel_weights); a rerun here
-    # would abort the script before run_screener_analysis executes, leaving results_df=None
-    # (landing page) until a second click. Returning lets the same pass continue to the screen.
-    progress_slot.empty()
 
 if __name__ == "__main__":
     main()

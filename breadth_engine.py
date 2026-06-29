@@ -1,5 +1,5 @@
 """
-Sanket v3.5.0 — Breadth Engine: market & sector advance/decline intelligence.
+Sanket v4.0.0 — Breadth Engine: market & sector advance/decline intelligence.
 
 A shared, dependency-light module (numpy + pandas only) that turns the universe
 close panel the screener already holds into breadth signals. Ported from the
@@ -7,21 +7,18 @@ Hemrek "Market Breadth" app (Relative_Breadth = Fibonacci-MA blend of an
 EMA-smoothed A/(A+D) oscillator), with two additions for the Sanket stack:
 
   • Universe_Breadth + Breadth_Momentum  — one market-wide series per date.
-      Drives Path A (regime tilt in compute_priority) and Path B (a Layer-2
-      signal-confidence feature). Same value for every stock on a date — a
-      timing/regime signal, NOT a cross-sectional one.
+      A market-wide timing/regime read (same value for every stock on a date),
+      surfaced as risk/regime context alongside the reversion ranker. NOT a
+      cross-sectional ranking factor.
 
   • Sector_Rel_Breadth = sector_breadth − universe_breadth  — per (sector, date).
-      Drives Path C (the F8 cross-sectional factor). De-meaning against the
-      universe makes it orthogonal to Path A, so the two never double-count the
-      market-wide level: F8 ranks *which groups* are participating, the tilt
-      handles *how bullish the tape* is.
+      A sector-participation read (de-meaned against the universe). Surfaced as
+      context: which groups are participating, independent of the market level.
 
 The engine computes NOTHING the screener can't already see — it reads the same
 ``data_dict`` (ticker → OHLCV) used to rank, so there is zero new data
 dependency. Built once per run, before the per-stock loop, and attached
-identically in the live-screener and calibration-harvest paths so train and
-apply features match bar-for-bar.
+identically in the live-screener and edge-measurement harvest paths.
 """
 
 from __future__ import annotations
