@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Cross-Sectional Reversion Ranker · Obsidian Quant · Pragyam Family · `v4.0.0`
+### Cross-Sectional Reversion Ranker · Obsidian Quant · Pragyam Family · `v4.0.1`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -262,4 +262,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v4.0.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v4.0.1 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

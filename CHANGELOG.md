@@ -7,6 +7,102 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v4.0.1] · 2026-07-07
+### Fidelity Pass — Regime-Engine Corrections, Pine-Faithful Signal Sets, Honest Copy
+
+A full-system audit (every module read, statistical claims verified by simulation) followed by
+a dependency-ordered fix pass. No scoring-engine (`engine.py`) changes — the reversion ranker
+and alpha-health monitor were audited and found sound (no look-ahead: forward returns are NaN
+until realized; null-input simulation earns no health; skilled-input simulation earns full).
+
+#### Fixed — statistical / correctness
+- **GARCH vol-regime inversion under sustained high volatility.** The variance recursion was
+  clipped at 1.0 while the long-term mean tracked *unclipped* realized shock variance, so the
+  current/long-term ratio collapsed and sustained high-vol stretches read **"LOW"** (verified:
+  a simulated σ 0.5→2.5 jump read LOW on 100% of bars after ~60 bars). Since `Vol_Regime`
+  scales conviction (HIGH 1.15 / EXTREME 0.55 / LOW 0.90), this inverted the regime tilt in
+  exactly the regime where the reversion edge is strongest. The cap is now a pure numerical
+  guard (25.0). Post-fix, the same simulation reads EXTREME/HIGH right after the jump and
+  re-baselines to NORMAL (the detector is relative-to-own-norm by design). NOTE: the
+  `VOL_REGIME_REV` weights were validated against the old labels — flagged in ARCHITECTURE.md
+  for re-validation.
+- **HMM label switching.** The online adaptation of the 3-state Gaussian emissions had no
+  ordering constraint, so the "BULL" state's mean could drift below "BEAR"'s (31/200 simulated
+  paths fully inverted; 127/200 broke ordering at least once), semantically flipping every
+  Regime / HMM_Bull / HMM_Bear output thereafter. An identifiability projection now re-sorts
+  states by emission mean (permuting stds, beliefs, the transition matrix, and recorded state
+  labels consistently). Post-fix: 0/200 violations.
+- **Correlation "Trade Intelligence" setups were unreachable.** The classifier matched Zone
+  against the WRCI-era `OB/OS` names; the flow Condition emits `Accumulation*/Distribution*`,
+  so LAGGARD/RUNAWAY/CONTRA could never fire (the tab always showed 0 setups). Re-mapped to
+  the real zone vocabulary — and fixed a second latent defect exposed by the resurrection:
+  the divergence-sign conditions contradicted the classifier's own rationale (a "laggard"
+  required div > +2, i.e. *out*-performance). Signs now match the stated semantics.
+- **Expected % / Div % now use beta, not bare correlation.** `expected = corr × target_move`
+  silently assumed every symbol has the target's volatility, inflating implied moves for
+  low-vol names ~2× in simulation. Now `beta = corr × (σ_sym/σ_tgt)` over the same lookback.
+- **Meta Filter "Hide" was inert.** Hiding was gated on a `Meta_Active` column that the
+  reversion engine never emits, so Hide mode never hid anything. The gate is removed — the
+  engine's Meta score is always the live conviction fusion and may hide.
+- **"Aggregate Signal Momentum" chart was a dead flatline.** It plotted the daily mean of
+  Delta_Z (which concentrates within ±0.25) on a ±80 axis with ±20 "extreme" bands sized for
+  the removed WT1 ±100 oscillator; the strengthening/weakening trend badge used a ±5 threshold
+  on the same scale and was pinned to "Stable". Rescaled (±0.25 bands, autoscaled axis,
+  0.5 trend threshold) and retitled "Aggregate Flow Skew".
+- **Volatility Dynamics chart:** the High-Vol % trace was never assigned to the labeled right
+  axis (`yaxis2`), crushing the change-point bars on a shared axis. Assigned.
+- **"TOP x%" percentile cell** could display >100% for bottom-ranked names. Clamped.
+
+#### Changed — signal sets (two same-day steps; the second is what ships)
+- **Step 1 (superseded within the day):** Set A / Set B were first replaced with exact Pine
+  ports of the *structural* divergences — Set A = structural CVD divergence
+  (`inferred_delta.pine` `rawSBull`/`rawSBear`), Set B = structural thrust divergence
+  (`clamp.pine` `rawDivBull`/`rawDivBear`) — verified bit-identical to a bar-by-bar
+  Pine-runtime simulator (25 seeds × 500 bars). These fire at pivot *confirmation*, i.e.
+  10–20 bars after the swing, which made "Today" mean "confirmed today", not "happened today".
+- **Step 2 (final): LIVE same-bar Trigger/Confluence sets.** Set A (`long_cond`/`short_cond`)
+  = TRIGGERS, any one fires: (1) thrust EXHAUSTION (`clamp.pine` `rawExhSell`/`rawExhBuy`,
+  Relative mode, adaptive clamp width, incl. the 5-bar same-side cooldown — part of the pine
+  signal definition), (2) bar-level DELTA DIVERGENCE (`inferred_delta.pine` `rawBull`/
+  `rawBear`), (3) the weekly 80% RULE (open outside the prior week's re-binned value area,
+  two closes back inside; once per week; self-disables on weekly-resampled frames, matching
+  pine's `sessionable` gate). Set B (`*_comp`) = CONFLUENCE, fires when ≥2 of 6
+  direction-matched context filters agree: thrust sign, clamp squeeze (width percentile ≤15
+  or just released), value-area edge (rolling or prior-week), one-sided absorption
+  (relDelta>1.8, relRange<0.6), CVD agreement, RVOL>1. `SignalType` priority is now
+  A (trigger) > B (context). The order-flow ATR feeding `Rel_Range` switched from SMA to
+  pine's RMA (`ta.atr`) for absorption parity; the analyzed-frame cache tag bumped
+  (`rev1`→`rev2`) so frames computed under the old sets invalidate. Verified bit-identical
+  to a literal bar-by-bar pine-style reference (12 seeds × 520 bars × 4 signal streams).
+  Observed firing rates on synthetic daily data: Set A ≈ 5% of bars per side; Set B ≈ 65%
+  per side at the ≥2-of-6 gate (a deliberate, loose context read — raise `conf_min` to 3
+  in `compute_signal_sets` for tighter confluence).
+
+#### Removed — dead weight
+- The theme toggle: it rendered in a 0-height component iframe (invisible, unstyled) and its
+  JS set `data-theme` on the iframe's own document — it never switched anything. Its CSS rules
+  went with it (the `[data-theme="light"]` palette is retained but currently unreachable).
+- Ten zero-call-site UI components (~300 lines) from prior engine generations, two unused
+  `_zone_colors` dicts, unused legacy signal frames, four never-called `reset()` methods, a
+  dead `"tuned"` rerun branch, unused imports/locals, and the never-rendered "Intel Flags"
+  column config.
+- Duplicate CSS `@keyframes pulse`/`shimmer` definitions — the later bolt-on copies silently
+  overrode the design-system originals for every consumer (the progress dot had lost its scale
+  pulse; the skeleton sweep ran backwards).
+- Duplicate `VERSION`/`PRODUCT_NAME`/`COMPANY` constants in `ui/theme.py` (zero importers);
+  `sanket.VERSION` is the single source of truth.
+
+#### Docs / copy honesty
+- Purged stale WRCI/momentum/absorption/self-tuning vocabulary from every user-facing surface:
+  landing tagline ("WRCI Engine"), tab names, tooltips (incl. an "Intel Conf" tooltip that
+  described a removed calibrated-probability model), the Meta-Filter banner's pointer to a
+  sidebar section that no longer exists, and export/legend copy. The historical-dashboard
+  breadth series are now labeled what they are (Accumulation % / Distribution %).
+- `ARCHITECTURE.md`: new "Known limitations" section (alpha-health survivorship, trailing-IC
+  null behavior, vol-regime weight re-validation, relative nature of the GARCH regime).
+
+---
+
 ## [v4.0.0] · 2026-06-29
 ### The Honest Rebuild — Cross-Sectional Reversion, Evidence-First
 

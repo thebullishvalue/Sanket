@@ -87,3 +87,20 @@ context** so the trader sees flow/structure, but they do **not** enter the ranki
 - Ranking quality = cross-sectional IC and top-vs-bottom spread, **after costs**.
 - The alpha-health monitor is shown, not buried: when the edge is dormant the dashboard says
   so and conviction shrinks. A flat tape produces a flat, low-conviction screen — by design.
+
+## Known limitations (disclosed, not hidden)
+- **Survivorship in the alpha-health harvest.** The trailing-IC measurement applies *today's*
+  constituent list over the lookback window, so names that left the universe are not measured.
+  For a trailing ~60-day monitor of a fixed formula this bias is mild, but the trailing IC is
+  best read as "the edge on the names we can trade today," not a survivorship-free backtest.
+- **Trailing IC is a monitor, not a significance test.** It is a mean of ~60 overlapping-horizon
+  daily ICs; on pure noise its 1σ is ≈0.013, so short "EDGE ACTIVE" stretches can occur by
+  chance. No t-statistic or p-value is claimed from it anywhere — the health multiplier is a
+  smooth de-rating, not a hypothesis test.
+- **Vol-regime weights pending re-validation.** v4.0.1 fixed a variance-cap bug in the GARCH
+  regime detector that had been mislabeling sustained high-vol stretches as "LOW". The
+  `VOL_REGIME_REV` suitability weights were validated against the *old* (distorted) labels;
+  their empirical footing should be re-checked against the corrected labels. Worth revisiting.
+- **The GARCH regime is relative by design.** It compares current vol to its own trailing
+  norm, so a *sustained* new vol level re-baselines to "NORMAL" after ~2-3 months — it flags
+  transitions, not absolute levels.

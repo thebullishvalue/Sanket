@@ -27,7 +27,6 @@ import datetime
 import numpy as np
 import plotly.graph_objects as go
 import requests
-import json
 import io
 import urllib3
 import engine as eng
@@ -78,7 +77,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v4.0.0"
+VERSION = "v4.0.1"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -187,10 +186,11 @@ def _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
                          wt2_len, wt2_type, end_date) -> tuple:
     """Identity of an analyzed frame — everything that changes its computed values.
 
-    The 'rev1' engine tag invalidates frames cached by any prior engine (WRCI, the naive
-    order-flow ports) — the reversion engine emits new _rev_* feature columns those lack.
+    The engine tag invalidates frames cached under a previous signal/feature engine:
+    'rev1' = reversion features + structural-divergence sets; 'rev2' = reversion
+    features + LIVE trigger/confluence sets (exhaustion, delta divergence, 80% rule).
     """
-    return ("rev1", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
+    return ("rev2", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
             tuple(levels), int(wt2_len), str(wt2_type), end_date)
 
 
@@ -522,7 +522,7 @@ def _render_aging_reference():
     st.markdown(
         '<div style="font-family:var(--data); font-size:0.70rem; color:var(--ink-tertiary); '
         'padding:0.1rem 0 0.7rem 0; line-height:1.5;">'
-        'On the Momentum / Crossover tables, each aged signal (1d / 2d / … ago) carries '
+        'On the Set A / Set B signal tables, each aged signal (1d / 2d / … ago) carries '
         'two <b>orthogonal</b> reads, both scored <b>at the bar it fired</b>. '
         '<b style="color:var(--ink-secondary);">Context</b> asks whether the signal is still good; '
         '<b style="color:var(--ink-secondary);">Entry</b> asks whether the move has already run.</div>',
@@ -568,7 +568,11 @@ def _render_aging_reference():
 # INITIALIZE UI
 # ══════════════════════════════════════════════════════════════════════════════
 inject_css()
-ui.render_theme_toggle()
+# (The old theme-toggle component was removed: it rendered inside a 0-height
+# component iframe — invisible, unstyled, and its JS set data-theme on the
+# IFRAME's document, not the app's, so it never actually switched themes.
+# The app is dark-theme-only; theme.css's [data-theme="light"] rules are
+# retained but currently unreachable.)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS & UNIVERSE DEFINITIONS
@@ -1435,7 +1439,7 @@ def to_excel(df):
                 "Cumulative volume delta (running sum of Bar_Delta).",
                 "3-bar change in CVD — flow building (+) or draining (−).",
                 "Signed z-score of Bar_Delta vs its 20-bar distribution.",
-                "Absorption strength: |Bar_Delta| ÷ its 20-bar average (Set B fires > 1.8×).",
+                "Absorption strength: |Bar_Delta| ÷ its 20-bar average (order-flow context).",
                 "Statistical probability (0.0 - 1.0) of the detected HMM regime.",
                 "Volatility regime classification (Low/Normal/High) via GARCH analysis.",
                 "Structural change point detection (CUSUM) identifying regime shifts."
@@ -1524,10 +1528,13 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
 
     Everything else here is DESCRIPTIVE ORDER-FLOW CONTEXT, not the ranking signal: the
     OHLC-proxy inferred delta / CVD / volume profile (ported from `Order Flow.pine`), and
-    two order-flow overlay flags surfaced for the trader (compute_signal_sets):
-      • long_cond/short_cond   — flow-continuation context (POC reclaim + delta + CVD)
-      • *_comp                 — absorption-reversal context (one-sided delta absorbed at
-                                 the opposite value-area edge)
+    two LIVE same-bar signal-set overlays surfaced for the trader (compute_signal_sets):
+      • long_cond/short_cond   — Set A · TRIGGERS: thrust exhaustion (clamp.pine),
+                                 bar-level delta divergence and the weekly 80% Rule
+                                 (inferred_delta.pine) — any one fires the set
+      • *_comp                 — Set B · CONFLUENCE: ≥2 of 6 direction-matched context
+                                 filters agree (thrust sign, squeeze, value-area edge,
+                                 absorption, CVD, RVOL)
     These add no cross-sectional ranking edge (validated) — they are shown as flow colour,
     never as the rank.
 
@@ -1560,11 +1567,13 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     cvd        = bar_delta.cumsum()
     cvd_slope  = cvd.diff(3).fillna(0.0)          # 3-bar flow build/drain
     cvd_ma     = cvd.rolling(20).mean()
-    cvd_ema    = cvd.ewm(span=20, adjust=False).mean()   # CVD flow-trend (Set A gate)
+    cvd_ema    = cvd.ewm(span=20, adjust=False).mean()   # CVD flow-trend (UI context)
 
     # ── ATR(14) for absorption range-normalization ─────────────────────────────
-    tr   = calculate_true_range(df)
-    atr14 = tr.rolling(14).mean()
+    # Pine's ta.atr is RMA-smoothed (Wilder), not SMA — matched exactly so the
+    # Rel_Range used by the Set B absorption filter reproduces inferred_delta.pine.
+    tr    = calculate_true_range(df)
+    atr14 = pd.Series(_rma(tr.to_numpy(dtype=float), 14), index=df.index)
     mintick = (close.abs().clip(lower=1e-6) * 1e-4)   # proxy for syminfo.mintick
 
     # ── Signal strengths surfaced to UI + priority factors ─────────────────────
@@ -1577,12 +1586,12 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     delta_std  = bar_delta.rolling(20).std(ddof=0).clip(lower=1e-9)
     delta_z    = ((bar_delta - delta_mean) / delta_std).clip(-5, 5).fillna(0.0)
 
-    # ── Participation (RVOL) — gates Set A; thin bars don't make trustworthy breakouts ──
+    # ── Participation (RVOL) — measured participation gauge (UI context) ──
     rvol = (vol / vol.rolling(20).mean().clip(lower=1e-9)).fillna(1.0)
 
     # ── Rolling volume profile — POC (fair value) + value-area edges (VAH/VAL) ──
     poc, vah, val = _rolling_volume_profile(high, low, vol, win=20, va_pct=0.70)
-    # Position within the value area: 0 = at VAL (cheap), 1 = at VAH (rich). Drives Set B.
+    # Position within the value area: 0 = at VAL (cheap), 1 = at VAH (rich). UI context.
     va_pos = ((close - val) / (vah - val).replace(0, np.nan))
 
     # ── F1 · PRICE MOMENTUM (orthogonal, retained from prior engine) ───────────
@@ -1623,8 +1632,9 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
         ma_counts += (close > ema).astype(int)
     df['MA_Alignment'] = ma_counts
 
-    df = compute_signal_sets(df, bar_delta, cvd, cvd_ma, cvd_ema,
-                             rel_delta, rel_range, rvol, poc, va_pos)
+    df = compute_signal_sets(df, high, low, close, opn, vol,
+                             bar_delta, cvd, cvd_ma, cvd_slope,
+                             rel_delta, rel_range, rvol, vah, val)
 
     # ── REVERSION FEATURES (the actual ranking alpha; see engine.py / ARCHITECTURE.md) ──
     # Per-symbol features; the cross-sectional ranking (engine.compute_ranking) runs later
@@ -1634,56 +1644,291 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     return df
 
 
-def compute_signal_sets(df: pd.DataFrame,
-                        bar_delta: pd.Series, cvd: pd.Series, cvd_ma: pd.Series,
-                        cvd_ema: pd.Series, rel_delta: pd.Series, rel_range: pd.Series,
-                        rvol: pd.Series, poc: pd.Series, va_pos: pd.Series,
-                        abs_ratio: float = 1.5, abs_range: float = 0.8,
-                        va_edge: float = 0.25, rvol_min: float = 0.8) -> pd.DataFrame:
-    """Compute the two order-flow signal sets and the flow Condition.
+def _rma(x: np.ndarray, length: int) -> np.ndarray:
+    """Port of Pine ``ta.rma`` (Wilder smoothing, used by ``ta.atr``).
 
-    These are NOT the naive `Order Flow.pine` triangle/diamond labels. Those were tested
-    on real NSE F&O data (5y, 47 names) and showed *negative* edge — divergence triggers
-    too readily on falling knives, raw absorption was noise. The two sets below were
-    curated by screening order-flow confluence hypotheses on ATR-normalized forward
-    returns with a temporal train/test split and a per-symbol breadth check.
-
-    Set A — FLOW CONTINUATION (momentum). Price reclaims the rolling POC (fair value) in
-        the direction of the bar's inferred delta, with the CVD flow-trend agreeing and
-        real participation (RVOL). A "trend-from-value" entry.
-          long : Close crosses UP through POC, Bar_Delta > 0, CVD > CVD_EMA, RVOL ≥ rvol_min
-          short: Close crosses DOWN through POC, Bar_Delta < 0, CVD < CVD_EMA, RVOL ≥ rvol_min
-        Validated edge: ~+0.04 ATR at 3-5 bar horizons, positive in ~62% of symbols (holds OOS).
-
-    Set B — ABSORPTION REVERSAL (contrarian). A strong one-sided delta is absorbed in a
-        compressed range while price sits at the OPPOSITE value-area edge → fade to value.
-          long : absorption & Bar_Delta < 0 & price near VAL  (VA_Pos < va_edge)  — sellers absorbed at the low
-          short: absorption & Bar_Delta > 0 & price near VAH  (VA_Pos > 1−va_edge) — buyers absorbed at the high
-          absorption = Abs_Strength > abs_ratio (1.5) and Rel_Range < abs_range (0.8)
-        Validated edge: +0.2 to +0.4 ATR at 8-13 bar horizons, positive in ~62% of symbols (holds OOS).
-
-    Writes long_cond/short_cond (A), *_comp (B), and Condition.
+    Seeded exactly like Pine: the first output is the SMA of the first ``length``
+    finite values, then the ``alpha = 1/length`` recursion. NaN inputs hold the
+    previous value; output is NaN until the seed exists.
     """
-    close = df['Close']
+    n = x.shape[0]
+    out = np.full(n, np.nan)
+    csum = 0.0
+    cnt = 0
+    start = -1
+    for i in range(n):
+        if np.isfinite(x[i]):
+            cnt += 1
+            csum += x[i]
+            if cnt == length:
+                out[i] = csum / length
+                start = i
+                break
+    if start == -1:
+        return out
+    alpha = 1.0 / length
+    for i in range(start + 1, n):
+        xi = x[i]
+        out[i] = out[i - 1] if not np.isfinite(xi) else out[i - 1] + alpha * (xi - out[i - 1])
+    return out
 
-    # ── Set A — flow-confirmed POC reclaim (continuation) ──
-    poc_cross_up = (close > poc) & (close.shift(1) <= poc.shift(1))
-    poc_cross_dn = (close < poc) & (close.shift(1) >= poc.shift(1))
-    cont_long  = poc_cross_up & (bar_delta > 0) & (cvd > cvd_ema) & (rvol >= rvol_min)
-    cont_short = poc_cross_dn & (bar_delta < 0) & (cvd < cvd_ema) & (rvol >= rvol_min)
 
-    # ── Set B — absorption reversal at the opposite value-area edge (contrarian) ──
-    absorption = (rel_delta > abs_ratio) & (rel_range < abs_range)
-    rev_long  = absorption & (bar_delta < 0) & (va_pos < va_edge)        # sellers absorbed at VAL
-    rev_short = absorption & (bar_delta > 0) & (va_pos > 1.0 - va_edge)  # buyers absorbed at VAH
+def _percent_rank(x: np.ndarray, length: int, default: float = 50.0) -> np.ndarray:
+    """Port of ``nz(ta.percentrank(x, length), default)``.
 
-    df['long_cond']       = cont_long.fillna(False)
-    df['short_cond']      = cont_short.fillna(False)
-    df['long_cond_comp']  = rev_long.fillna(False)
-    df['short_cond_comp'] = rev_short.fillna(False)
+    Percent of the previous ``length`` values (excluding the current bar) that are
+    <= the current value. Emits ``default`` wherever Pine would emit na (warmup,
+    or NaN in the window/current value) — mirroring clamp.pine's ``nz(..., 50)``.
+    """
+    n = x.shape[0]
+    out = np.full(n, default)
+    for i in range(length, n):
+        xi = x[i]
+        if not np.isfinite(xi):
+            continue
+        w = x[i - length:i]
+        if not np.isfinite(w).all():
+            continue
+        out[i] = (w <= xi).mean() * 100.0
+    return out
 
-    # Flow Condition (replaces the old WRCI overbought/oversold zone label): where does
-    # cumulative delta sit vs its 20-bar mean → accumulation / distribution / neutral.
+
+def compute_signal_sets(df: pd.DataFrame,
+                        high: pd.Series, low: pd.Series, close: pd.Series,
+                        opn: pd.Series, vol: pd.Series,
+                        bar_delta: pd.Series, cvd: pd.Series, cvd_ma: pd.Series,
+                        cvd_slope: pd.Series, rel_delta: pd.Series,
+                        rel_range: pd.Series, rvol: pd.Series,
+                        vah: pd.Series, val: pd.Series,
+                        # Clamp engine (clamp.pine defaults)
+                        thr_length: int = 20, thr_stat_len: int = 60,
+                        thr_vol_norm_len: int = 50, base_k: float = 2.0,
+                        use_adaptive_k: bool = True, cool_bars: int = 5,
+                        sq_len: int = 100, sq_pct: float = 15.0,
+                        # Absorption (inferred_delta.pine rawAbsorb)
+                        abs_ratio: float = 1.8, abs_range: float = 0.6,
+                        # Confluence gate: minimum agreeing Set B context filters
+                        conf_min: int = 2) -> pd.DataFrame:
+    """LIVE same-bar signal sets: Set A triggers + Set B confluence filters.
+
+    Replaces the delayed pivot-confirmed structural divergences (which fired
+    10-20 bars after the swing) with signals that fire ON the bar they occur.
+
+    Set A — TRIGGERS (something happened NOW; fires when ANY condition hits):
+      A1 EXHAUSTION (clamp.pine rawExhSell/rawExhBuy, incl. the same-side
+         ``cool_bars`` cooldown — part of the pine signal definition): thrust
+         (vwm = RVOL × %ROC, Relative mode) breached the adaptive clamp
+         (mean ± k·σ, k stretched up to +50% by the volatility regime) last
+         bar, price still pushes in the move's direction, but thrust is
+         absorbed back inside and fading. Selling exhaustion → bullish
+         (long_cond); buying exhaustion → bearish (short_cond). All grades
+         (standard + STRONG) fire.
+      A2 BAR-LEVEL DELTA DIVERGENCE (inferred_delta.pine rawBull/rawBear):
+         bull = close down, inferred delta positive, low at a 3-bar low;
+         bear = close up, delta negative, high at a 3-bar high.
+      A3 80% RULE (inferred_delta.pine): the week opened OUTSIDE the prior
+         week's value area, then two consecutive closes back inside → odds
+         favor a traverse to the far VA edge. Open below prior VAL → long;
+         open above prior VAH → short. Fires once per week. On daily bars the
+         "session" is the ISO week (pine's non-intraday mapping, with the
+         finished week's VA re-binned against its final range: 50 bins, 70%);
+         on weekly-resampled frames it self-disables (pine: sessionable=false).
+
+    Set B — CONFLUENCE (context agrees; fires when ≥ ``conf_min`` of 6 align):
+      B1 thrust has room to exhaust     (bull: thrustZ < 0 · bear: thrustZ > 0)
+      B2 clamp squeeze active/released  (width percentile ≤ ``sq_pct``)
+      B3 price at/beyond the value edge (bull: close ≤ rolling VAL or prior-week
+                                         VAL · bear: ≥ VAH or prior-week VAH)
+      B4 one-sided absorption against the move (relDelta > ``abs_ratio``,
+                                         relRange < ``abs_range``, delta signed)
+      B5 CVD agrees                     (bull: cvd > cvd_ma or slope > 0 · mirrored)
+      B6 real participation             (RVOL > 1.0)
+
+    Writes long_cond/short_cond (Set A), *_comp (Set B), and the flow Condition.
+    """
+    n = len(df)
+    idx = df.index
+
+    high_a  = high.to_numpy(dtype=float)
+    low_a   = low.to_numpy(dtype=float)
+    close_a = close.to_numpy(dtype=float)
+    opn_a   = opn.to_numpy(dtype=float)
+    vol_a   = vol.to_numpy(dtype=float)
+
+    # ══ CLAMP ENGINE (clamp.pine · Relative mode + adaptive k — the defaults) ══
+    # ta.atr = RMA of true range; volRank stretches the clamp width in hot tape.
+    pc  = close.shift(1)
+    tr  = pd.concat([(high - low), (high - pc).abs(), (low - pc).abs()], axis=1).max(axis=1)
+    atr_c  = pd.Series(_rma(tr.to_numpy(dtype=float), 14), index=idx)
+    atr_ma = atr_c.rolling(50).mean()
+    vol_rank = ((atr_c - atr_ma * 0.7) / (atr_ma * 0.8).clip(lower=1e-10)).clip(0.0, 1.0)
+    dyn_k = base_k * (1.0 + 0.5 * vol_rank) if use_adaptive_k else pd.Series(base_k, index=idx)
+
+    chg       = close - close.shift(thr_length)                              # ta.change
+    close_lag = close.shift(thr_length)
+    velocity  = pd.Series(np.where(close_lag.to_numpy() != 0,
+                                   (chg / close_lag * 100.0), 0.0), index=idx)
+    rvol_thr  = vol / vol.rolling(thr_vol_norm_len).mean().clip(lower=1e-10)
+    vwm       = rvol_thr * velocity
+    vwm_mean  = vwm.rolling(thr_stat_len).mean()
+    vwm_std   = vwm.rolling(thr_stat_len).std(ddof=0)
+    clamp_up  = vwm_mean + dyn_k * vwm_std
+    clamp_dn  = vwm_mean - dyn_k * vwm_std
+    thrust_z  = pd.Series(np.where(vwm_std.to_numpy() > 0,
+                                   (vwm - vwm_mean).to_numpy()
+                                   / vwm_std.to_numpy().clip(min=1e-12), 0.0), index=idx)
+
+    # ── A1 · exhaustion triggers (clamp.pine trigBuy/trigSell + cooldown) ──
+    v, v1   = vwm.to_numpy(), vwm.shift(1).to_numpy()
+    cu, cu1 = clamp_up.to_numpy(), clamp_up.shift(1).to_numpy()
+    cd, cd1 = clamp_dn.to_numpy(), clamp_dn.shift(1).to_numpy()
+    c1      = pc.to_numpy()
+    with np.errstate(invalid='ignore'):
+        trig_buy  = (v1 > cu1) & (close_a > c1) & (v < cu) & (v < v1)   # buying exh → BEARISH warning
+        trig_sell = (v1 < cd1) & (close_a < c1) & (v > cd) & (v > v1)   # selling exh → BULLISH warning
+    exh_bear = np.zeros(n, dtype=bool)
+    exh_bull = np.zeros(n, dtype=bool)
+    last_buy  = -10 ** 9
+    last_sell = -10 ** 9
+    for i in range(n):
+        if trig_buy[i] and i - last_buy > cool_bars:
+            exh_bear[i] = True
+            last_buy = i
+        if trig_sell[i] and i - last_sell > cool_bars:
+            exh_bull[i] = True
+            last_sell = i
+
+    # ── B2 · squeeze: clamp-width percentile ≤ sq_pct, or just released ──
+    band_w = (clamp_up - clamp_dn).to_numpy(dtype=float)
+    width_rank = _percent_rank(band_w, sq_len)
+    sqz_on  = width_rank <= sq_pct
+    sqz_rel = np.zeros(n, dtype=bool)
+    sqz_rel[1:] = sqz_on[:-1] & ~sqz_on[1:]
+    b2 = sqz_on | sqz_rel
+
+    # ── A2 · bar-level delta divergence (inferred_delta.pine rawBull/rawBear) ──
+    bd  = bar_delta.to_numpy(dtype=float)
+    lo3 = low.rolling(3).min().to_numpy()
+    hi3 = high.rolling(3).max().to_numpy()
+    with np.errstate(invalid='ignore'):
+        div_bull = (close_a < c1) & (bd > 0) & (low_a <= lo3)
+        div_bear = (close_a > c1) & (bd < 0) & (high_a >= hi3)
+
+    # ── A3 · 80% Rule + prior-week value area (inferred_delta.pine) ──
+    r80_long   = np.zeros(n, dtype=bool)
+    r80_short  = np.zeros(n, dtype=bool)
+    prev_vah_s = np.full(n, np.nan)
+    prev_val_s = np.full(n, np.nan)
+    try:
+        idx_dt = pd.DatetimeIndex(pd.to_datetime(idx))
+        _gaps = (np.diff(idx_dt.values).astype('timedelta64[h]').astype(float)
+                 if n > 1 else np.array([24.0]))
+        sessionable = n > 1 and float(np.median(_gaps)) < 6 * 24.0
+    except (TypeError, ValueError):
+        sessionable = False
+    if sessionable:
+        SESS_BINS = 50
+        iso = idx_dt.isocalendar()
+        week_id = (iso['year'].to_numpy().astype(np.int64) * 100
+                   + iso['week'].to_numpy().astype(np.int64))
+        new_sess = np.zeros(n, dtype=bool)
+        new_sess[1:] = week_id[1:] != week_id[:-1]
+        cur_start = 0
+        prev_vah = prev_val = np.nan
+        r80_dir = 0
+        r80_done = False
+        inside_prev = False
+        for i in range(n):
+            if new_sess[i]:
+                # Finished week = bars [cur_start, i-1]: exact VA re-bin against
+                # the week's FINAL range (inferred_delta.pine session boundary).
+                wh = high_a[cur_start:i]
+                wl = low_a[cur_start:i]
+                cur_sh = np.nanmax(wh) if wh.size else np.nan
+                cur_sl = np.nanmin(wl) if wl.size else np.nan
+                if np.isfinite(cur_sh) and np.isfinite(cur_sl) and cur_sh > cur_sl:
+                    step = (cur_sh - cur_sl) / SESS_BINS
+                    hist = np.zeros(SESS_BINS)
+                    for o in range(cur_start, i):
+                        if not (np.isfinite(low_a[o]) and np.isfinite(high_a[o])):
+                            continue
+                        b0 = int(min(SESS_BINS - 1, max(0.0, np.floor((low_a[o] - cur_sl) / step))))
+                        b1 = int(min(SESS_BINS - 1, max(0.0, np.floor((high_a[o] - cur_sl) / step))))
+                        hist[b0:b1 + 1] += (vol_a[o] if np.isfinite(vol_a[o]) else 0.0) / (b1 - b0 + 1)
+                    tot = hist.sum()
+                    if tot > 0:
+                        p = int(hist.argmax())
+                        acc = hist[p]
+                        la = lb = p
+                        tgt = tot * 0.70
+                        while acc < tgt and (lb > 0 or la < SESS_BINS - 1):
+                            va_ = hist[la + 1] if la < SESS_BINS - 1 else -1.0
+                            vb_ = hist[lb - 1] if lb > 0 else -1.0
+                            if va_ >= vb_:
+                                la += 1
+                                acc += va_
+                            else:
+                                lb -= 1
+                                acc += vb_
+                        prev_vah = cur_sl + (la + 1) * step
+                        prev_val = cur_sl + lb * step
+                cur_start = i
+                r80_done = False
+                r80_dir = 0
+                if np.isfinite(prev_vah) and np.isfinite(prev_val) and np.isfinite(opn_a[i]):
+                    r80_dir = 1 if opn_a[i] < prev_val else (-1 if opn_a[i] > prev_vah else 0)
+            prev_vah_s[i] = prev_vah
+            prev_val_s[i] = prev_val
+            inside = bool(np.isfinite(prev_vah) and np.isfinite(prev_val)
+                          and np.isfinite(close_a[i])
+                          and prev_val <= close_a[i] <= prev_vah)
+            if (r80_dir != 0 and not r80_done and inside and inside_prev
+                    and not new_sess[i]):
+                r80_done = True
+                if r80_dir > 0:
+                    r80_long[i] = True
+                else:
+                    r80_short[i] = True
+            inside_prev = inside
+
+    # ── SET A: any trigger fires ──
+    long_cond  = exh_bull | div_bull | r80_long
+    short_cond = exh_bear | div_bear | r80_short
+
+    # ── SET B: ≥ conf_min of 6 direction-matched context filters ──
+    tz      = thrust_z.to_numpy()
+    rd      = rel_delta.to_numpy(dtype=float)
+    rr      = rel_range.to_numpy(dtype=float)
+    rv      = rvol.to_numpy(dtype=float)
+    cvd_a   = cvd.to_numpy(dtype=float)
+    cvdma_a = cvd_ma.to_numpy(dtype=float)
+    cvsl_a  = cvd_slope.to_numpy(dtype=float)
+    vah_a   = vah.to_numpy(dtype=float)
+    val_a   = val.to_numpy(dtype=float)
+    with np.errstate(invalid='ignore'):
+        absorb = (rd > abs_ratio) & (rr < abs_range)
+        bull_ct = ((tz < 0).astype(int)                                          # B1
+                   + b2.astype(int)                                              # B2
+                   + ((close_a <= val_a) | (close_a <= prev_val_s)).astype(int)  # B3
+                   + (absorb & (bd < 0)).astype(int)                             # B4
+                   + ((cvd_a > cvdma_a) | (cvsl_a > 0)).astype(int)              # B5
+                   + (rv > 1.0).astype(int))                                     # B6
+        bear_ct = ((tz > 0).astype(int)
+                   + b2.astype(int)
+                   + ((close_a >= vah_a) | (close_a >= prev_vah_s)).astype(int)
+                   + (absorb & (bd > 0)).astype(int)
+                   + ((cvd_a < cvdma_a) | (cvsl_a < 0)).astype(int)
+                   + (rv > 1.0).astype(int))
+    long_cond_comp  = bull_ct >= conf_min
+    short_cond_comp = bear_ct >= conf_min
+
+    df['long_cond']       = long_cond
+    df['short_cond']      = short_cond
+    df['long_cond_comp']  = long_cond_comp
+    df['short_cond_comp'] = short_cond_comp
+
+    # Flow Condition (unchanged): where cumulative delta sits vs its 20-bar mean →
+    # accumulation / distribution / neutral.
     cvd_dev = (cvd - cvd_ma)
     band    = cvd_dev.abs().rolling(20).mean().clip(lower=1e-9)
     df['Condition'] = np.select(
@@ -1700,7 +1945,7 @@ def compute_signal_sets(df: pd.DataFrame,
 # ══════════════════════════════════════════════════════════════════════════════
 
 class AdaptiveHMM:
-    """Hidden Markov Model for regime state discovery - classifies WRCI signals"""
+    """Hidden Markov Model for regime state discovery over the joint feature observation."""
     
     def __init__(self):
         self.n_states = 3
@@ -1745,17 +1990,30 @@ class AdaptiveHMM:
                     state_obs = recent_obs[mask]
                     self.emission_means[state] = 0.9 * self.emission_means[state] + 0.1 * np.mean(state_obs)
                     self.emission_stds[state] = 0.9 * self.emission_stds[state] + 0.1 * max(np.std(state_obs), 0.1)
-        
+
+            # Identifiability constraint: online adaptation of unconstrained Gaussian
+            # means is subject to LABEL SWITCHING — the "BULL" state's mean can drift
+            # below "BEAR"'s, after which every regime label is semantically flipped.
+            # Enforce mean(BULL) >= mean(NEUTRAL) >= mean(BEAR) by re-sorting the
+            # states whenever the ordering breaks, permuting every piece of per-state
+            # state (means, stds, beliefs, transition matrix, recorded state labels)
+            # consistently so the model is unchanged up to relabeling.
+            order = np.argsort(-self.emission_means)
+            if not np.array_equal(order, [0, 1, 2]):
+                self.emission_means = self.emission_means[order]
+                self.emission_stds = self.emission_stds[order]
+                self.state_probabilities = self.state_probabilities[order]
+                self.transition_matrix = self.transition_matrix[np.ix_(order, order)]
+                remap = np.empty(3, dtype=int)
+                remap[order] = np.arange(3)
+                self.state_history = [int(remap[s]) for s in self.state_history]
+                updated = self.state_probabilities
+
         return {"BULL": updated[0], "NEUTRAL": updated[1], "BEAR": updated[2]}
-    
-    def reset(self):
-        self.state_probabilities = np.array([0.33, 0.34, 0.33])
-        self.observation_history = []
-        self.state_history = []
 
 
 class GARCHDetector:
-    """GARCH-inspired volatility regime detection for WRCI signal variance"""
+    """GARCH-inspired volatility regime detection on the joint-observation shocks."""
     
     def __init__(self):
         self.current_variance = 0.04
@@ -1769,7 +2027,14 @@ class GARCHDetector:
         self.shock_history.append(shock)
         shock_sq = shock ** 2
         new_var = self.omega + self.alpha * shock_sq + self.beta * self.current_variance
-        self.current_variance = np.clip(new_var, 0.001, 1.0)
+        # Numerical guard ONLY — the ceiling must never bind on realistic shocks.
+        # The old cap of 1.0 was routinely hit (joint-obs shocks have variance ~1-6):
+        # current_variance pinned at 1.0 while long_term_mean tracked the UNCLIPPED
+        # realized variance, so the current/long-term ratio collapsed below 0.6 and
+        # sustained HIGH volatility was reported as "LOW" — inverting the regime read
+        # that scales conviction. 25.0 (σ=5 on a ±5-clipped observation scale) is
+        # unreachable in normal operation.
+        self.current_variance = np.clip(new_var, 1e-4, 25.0)
         
         if len(self.shock_history) >= 10:
             realized = np.var(self.shock_history[-min(50, len(self.shock_history)):])
@@ -1790,14 +2055,10 @@ class GARCHDetector:
             return "HIGH", 0.8
         else:
             return "EXTREME", 0.6
-    
-    def reset(self):
-        self.current_variance = 0.04
-        self.shock_history = []
 
 
 class CUSUMDetector:
-    """CUSUM change point detection for WRCI signal regime shifts"""
+    """CUSUM change-point detection for regime shifts in the joint observation."""
     
     def __init__(self, threshold=4.0, drift=0.5):
         self.threshold = threshold
@@ -1826,17 +2087,12 @@ class CUSUMDetector:
         if change_detected:
             self.positive_cusum = 0
             self.negative_cusum = 0
-        
+
         return change_detected
-    
-    def reset(self):
-        self.positive_cusum = 0.0
-        self.negative_cusum = 0.0
-        self.value_history = []
 
 
 class AdaptiveKalmanFilter:
-    """Kalman filter for WRCI signal smoothing"""
+    """Kalman filter smoothing of the joint observation before HMM/CUSUM."""
     
     def __init__(self, process_var=0.01, measurement_var=0.1):
         self.estimate = 0.0
@@ -1860,13 +2116,8 @@ class AdaptiveKalmanFilter:
         if len(self.innovation_history) >= 5:
             innovation_var = np.var(self.innovation_history[-min(20, len(self.innovation_history)):])
             self.measurement_variance = 0.9 * self.measurement_variance + 0.1 * innovation_var
-        
+
         return self.estimate
-    
-    def reset(self, initial=0.0):
-        self.estimate = initial
-        self.error_covariance = 1.0
-        self.innovation_history = []
 
 
 def run_regime_analysis(df):
@@ -1874,8 +2125,9 @@ def run_regime_analysis(df):
     Apply joint-state regime intelligence over (F1_PriceMom, F2_VolQual, CVD flow).
     The three input dimensions are roughly orthogonal (price momentum, volume
     quality, cumulative-delta flow), so HMM's classification reflects true market
-    state. The regime engine is order-flow-agnostic and is retained to drive the
-    volatility-damping cascade in the priority engine.
+    state. The regime engine is order-flow-agnostic; its Vol_Regime and
+    Regime_Confidence outputs feed the conviction read in engine.compute_ranking
+    and the per-name risk context in the UI.
     """
     hmm    = AdaptiveHMM()
     garch  = GARCHDetector()
@@ -1961,13 +2213,13 @@ def run_regime_analysis(df):
 def _classify_signal_type(row) -> str:
     """Return priority-ordered signal type for a single bar row (pandas Series).
 
-    Priority: B (absorption reversal) > A (flow continuation) > flow zone.
-    Matches the vectorised np.select used in the timeseries harvest path.
+    Priority: Set A (trigger) > Set B (confluence context) > flow zone.
+    Matches the vectorised np.select in the harvest path.
     """
-    if row.get('long_cond_comp'):  return "B: Long"
-    if row.get('short_cond_comp'): return "B: Short"
     if row.get('long_cond'):       return "A: Long"
     if row.get('short_cond'):      return "A: Short"
+    if row.get('long_cond_comp'):  return "B: Long"
+    if row.get('short_cond_comp'): return "B: Short"
     cond = row.get('Condition', 'Neutral')
     return cond if cond != 'Neutral' else '-'
 
@@ -2204,9 +2456,11 @@ def render_sidebar() -> SidebarState:
             corr_lookback = int(corr_lookback_str.replace("D", ""))
             corr_method = st.selectbox("Method", ["Pearson", "Spearman"], key="sb_corr_method", label_visibility="collapsed")
 
-        # WRCI Engine — hardcoded defaults (parity with wrci.pine inputs)
+        # Legacy engine parameters — retained ONLY because run_full_analysis /
+        # the analyzed-frame cache signature still thread them (reg_len drives the
+        # ATR window; the rest are inert). Do not expose as user knobs.
         reg_len, wt_n1, wt_n2 = 20, 10, 21
-        wt2_len, wt2_type = 20, "ALMA"   # Signal Line Length / Type (ALMA default)
+        wt2_len, wt2_type = 20, "ALMA"
         obLevel1, obLevel2, osLevel1, osLevel2 = 80, 40, -80, -40
 
         # ── Date-range validation (Historical Range only) ──
@@ -2253,9 +2507,9 @@ def render_sidebar() -> SidebarState:
                 console.detail(f"Universe changed · {_uni_label} · alpha-health will re-measure")
             st.session_state["_last_universe_key"] = _current_uni_key
 
-        # Model Passport — rendered in every mode. Surfaces the active priority profile,
-        # then (between the card and Import Profile) the Self-Tuning Intelligence controls,
-        # then profile import/export/reset. Returns the resolved calibration settings.
+        # Engine Status panel — rendered in every mode. Surfaces the engine name, the
+        # live alpha-health / trailing-IC reading, and the Meta Filter controls.
+        # Returns the resolved alpha-health settings (force / lookback / horizons).
         calib_settings = _render_model_passport_sidebar(universe, selected_index, timeframe, analysis_mode)
 
         # System Spec Card — always rendered as the LAST block in the sidebar.
@@ -2375,11 +2629,12 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (15 * progress_scale / 100)
         progress_bar(progress_slot, pct_val, "Fetching Market Data", f"{len(stock_list)} stocks")
-    # Anchor the fetch at analysis_date (not today): the screener locates analysis_date
-    # inside the panel and never reads bars after it, so this yields the same snapshot
-    # while sharing the registry key the intelligence harvest already populated for this
-    # (universe, analysis_date) — no second yfinance round-trip on historical-date runs.
-    # For the common analysis_date == today run this is identical to before.
+    # Anchor the fetch at analysis_date (not today): the screener snaps to the
+    # analysis_date bar for all signal/ranking reads (the only post-date read is the
+    # display-only "% Chng Since" column, which uses the few buffer days after it),
+    # while sharing the registry key the alpha-health harvest already populated for
+    # this (universe, analysis_date) — no second yfinance round-trip on historical
+    # runs. For the common analysis_date == today run this is identical to before.
     end_date = analysis_date if isinstance(analysis_date, datetime.date) else _today_ist()
     data_dict, fetch_msg = get_universe_data(stock_list, end_date=end_date)
 
@@ -2689,7 +2944,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
 
 def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe, wt2_len=20, wt2_type="ALMA"):
-    """Compute the WRCI time-series factor frame for a date range.
+    """Compute the per-(date, symbol) factor frame for a date range.
 
     Pure compute path: fetches history, runs full / regime / divergence analyses on
     every symbol, builds the per-(date, symbol) row set, and stores ts_results_df +
@@ -2787,16 +3042,16 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
             for h in eng.HOLD_HORIZONS:
                 df[f'Ret_{h}b'] = df['Close'].shift(-h) / df['Close'] - 1
 
-            # Vectorized SignalType per bar (priority order: B > A > Zone)
+            # Vectorized SignalType per bar (priority: A trigger > B confluence > Zone)
             df['SignalType'] = np.select(
                 [
-                    df['long_cond_comp'], df['short_cond_comp'],
                     df['long_cond'],      df['short_cond'],
+                    df['long_cond_comp'], df['short_cond_comp'],
                     df['Condition'] != 'Neutral',
                 ],
                 [
-                    'B: Long', 'B: Short',
                     'A: Long', 'A: Short',
+                    'B: Long', 'B: Short',
                     df['Condition'],
                 ],
                 default='-',
@@ -3006,10 +3261,10 @@ def render_timeseries_dashboard():
         ui.render_metric_card("Total Signals", str(summary['total_signals']),
                               f"{summary['total_buys']} long · {summary['total_sells']} short", "info")
     with c2:
-        ui.render_metric_card("Avg Oversold", f"{summary['avg_oversold']:.1f}%",
+        ui.render_metric_card("Avg Distribution", f"{summary['avg_oversold']:.1f}%",
                               timeframe_label, "success")
     with c3:
-        ui.render_metric_card("Avg Overbought", f"{summary['avg_overbought']:.1f}%",
+        ui.render_metric_card("Avg Accumulation", f"{summary['avg_overbought']:.1f}%",
                               timeframe_label, "danger")
     with c4:
         ui.render_metric_card("Period Regime", summary['dominant_regime'],
@@ -3032,16 +3287,16 @@ def render_timeseries_dashboard():
 
     # ── TAB 1 · Signal Dashboard ───────────────────────────────────────────
     with tab1:
-        ui.render_section_header("Extreme Signal Trends",
-                                 "Overbought / Oversold Distribution Over Time",
+        ui.render_section_header("Flow-Zone Extremes",
+                                 "Distribution / Accumulation Breadth Over Time",
                                  icon="activity", accent="cyan")
         fig_zones = go.Figure()
         fig_zones.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Oversold_Pct'],
-                                       mode='lines', name='Oversold %',
+                                       mode='lines', name='Distribution %',
                                        fill='tozeroy', fillcolor='rgba(52,211,153,0.12)',
                                        line=dict(color='#2DD4A8', width=2)))
         fig_zones.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Overbought_Pct'],
-                                       mode='lines', name='Overbought %',
+                                       mode='lines', name='Accumulation %',
                                        fill='tozeroy', fillcolor='rgba(251,113,133,0.12)',
                                        line=dict(color='#E8555A', width=2)))
         _pct_raw = max(daily_agg['Oversold_Pct'].max(), daily_agg['Overbought_Pct'].max())
@@ -3100,9 +3355,16 @@ def render_timeseries_dashboard():
 
     # ── TAB 3 · Regime Analysis ────────────────────────────────────────────
     with tab3:
-        ui.render_section_header("Aggregate Signal Momentum", "Average Signal Value Over Time",
+        ui.render_section_header("Aggregate Flow Skew", "Average Delta Z-Score Over Time",
                                  icon="activity", accent="rose")
-        colors = ['#2DD4A8' if v < -20 else '#E8555A' if v > 20 else '#64748B' for v in daily_agg['Signal']]
+        # Signal = per-name Delta_Z (clipped ±5); its daily cross-sectional MEAN
+        # concentrates near zero (σ ≈ 1/√N ≈ 0.08 for ~150 names). The extreme
+        # bands sit at ±0.25 (~3σ of that mean) — the old ±20 bands / ±80 axis
+        # were sized for the removed WT1 ±100 oscillator and rendered a dead
+        # flatline with never-triggering colors.
+        _sig_band = 0.25
+        colors = ['#2DD4A8' if v < -_sig_band else '#E8555A' if v > _sig_band else '#64748B'
+                  for v in daily_agg['Signal']]
         fig_avg = go.Figure()
         fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Signal'].clip(lower=0),
                                      fill='tozeroy', fillcolor='rgba(232,85,90,0.05)',
@@ -3111,13 +3373,16 @@ def render_timeseries_dashboard():
                                      fill='tozeroy', fillcolor='rgba(45,212,168,0.05)',
                                      line=dict(width=0), showlegend=False, hoverinfo='skip'))
         fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Signal'],
-                                     mode='lines+markers', name='Avg Signal',
+                                     mode='lines+markers', name='Avg Δ-Z',
                                      line=dict(color='#D4A853', width=2),
                                      marker=dict(size=6, color=colors)))
-        fig_avg.add_hline(y=20,  line=dict(color='rgba(239,68,68,0.5)', width=1, dash='dash'))
-        fig_avg.add_hline(y=-20, line=dict(color='rgba(16,185,129,0.5)', width=1, dash='dash'))
+        fig_avg.add_hline(y=_sig_band,  line=dict(color='rgba(239,68,68,0.5)', width=1, dash='dash'))
+        fig_avg.add_hline(y=-_sig_band, line=dict(color='rgba(16,185,129,0.5)', width=1, dash='dash'))
         fig_avg.add_hline(y=0,   line=dict(color='rgba(255,255,255,0.3)', width=1))
-        fig_avg.update_layout(title='', height=300, hovermode='x unified', yaxis=dict(range=[-80, 80]))
+        _sig_span = float(np.nanmax(np.abs(daily_agg['Signal']))) if len(daily_agg) else 0.0
+        _sig_lim = max(_sig_span * 1.2, _sig_band * 1.6)
+        fig_avg.update_layout(title='', height=300, hovermode='x unified',
+                              yaxis=dict(range=[-_sig_lim, _sig_lim]))
         apply_chart_theme(fig_avg)
         st.plotly_chart(fig_avg, width='stretch', key='chart_avg_signal')
 
@@ -3146,8 +3411,12 @@ def render_timeseries_dashboard():
         vol_high = ts_df.groupby('Date')['Vol_Regime'].apply(
             lambda x: (x.isin(['HIGH', 'EXTREME'])).sum() / len(x) * 100)
         fig_vol = go.Figure()
+        # High-Vol % belongs on the RIGHT axis (yaxis2) — without the explicit
+        # assignment both series shared y1 and the labeled right axis sat empty,
+        # letting the 0-100% line crush the per-day change-point counts.
         fig_vol.add_trace(go.Scatter(x=daily_agg.index, y=vol_high.fillna(0),
                                      mode='lines+markers', name='High Vol %',
+                                     yaxis='y2',
                                      line=dict(color='#D4A853', width=2),
                                      marker=dict(size=5)))
         fig_vol.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['Change_Point'],
@@ -3204,17 +3473,17 @@ def render_timeseries_dashboard():
             display_cols.append('Avg_Intel')
         display_ts = display_ts[display_cols]
         display_ts.columns = ['Date', 'Long Sig', 'Short Sig', 'Avg Signal',
-                              'Oversold %', 'Overbought %',
+                              'Distribution %', 'Accumulation %',
                               'Bull Regime %', 'Bear Regime %', 'Change Pts'] + (['Avg Conviction'] if _has_intel else [])
         st.dataframe(
             display_ts, width='stretch', hide_index=True,
             column_config={
                 'Date':         st.column_config.TextColumn(help="Trading day (YYYY-MM-DD)."),
-                'Long Sig':     st.column_config.NumberColumn(help="Daily count of symbols firing a long-momentum signal (Set A long_cond)."),
-                'Short Sig':    st.column_config.NumberColumn(help="Daily count of symbols firing a short-momentum signal (Set A short_cond)."),
-                'Avg Signal':   st.column_config.NumberColumn(help="Cross-sectional mean of WT1 (Composite Index) on this day. Range ≈ ±100."),
-                'Oversold %':   st.column_config.NumberColumn(help="Percent of universe in OB / OB-Extreme zones — interpreted as oversold-side breadth."),
-                'Overbought %': st.column_config.NumberColumn(help="Percent of universe in OS / OS-Extreme zones — interpreted as overbought-side breadth."),
+                'Long Sig':     st.column_config.NumberColumn(help="Daily count of symbols firing a Set A bullish trigger (selling exhaustion / bullish delta divergence / 80% rule up)."),
+                'Short Sig':    st.column_config.NumberColumn(help="Daily count of symbols firing a Set A bearish trigger (buying exhaustion / bearish delta divergence / 80% rule down)."),
+                'Avg Signal':   st.column_config.NumberColumn(help="Cross-sectional mean of Delta_Z (signed delta z-score, clipped ±5) on this day. The daily mean concentrates near 0; ±0.25 is already a strongly one-sided tape."),
+                'Distribution %': st.column_config.NumberColumn(help="Percent of universe in Distribution / Distribution+ flow zones (net selling flow)."),
+                'Accumulation %': st.column_config.NumberColumn(help="Percent of universe in Accumulation / Accumulation+ flow zones (net buying flow)."),
                 'Bull Regime %':st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BULL'."),
                 'Bear Regime %':st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BEAR'."),
                 'Change Pts':   st.column_config.NumberColumn(help="Sum of Change_Point flags — count of symbols with a regime-state transition on this day."),
@@ -3247,7 +3516,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
     """Execute correlation analysis between universe constituents and a target asset.
 
     Returns a dict with correlation data, rolling correlations, prices, and returns,
-    plus WRCI confluence scoring for trade intelligence.
+    plus a confluence score (|correlation| × reversion rank strength × conviction).
     """
     if analysis_date is None:
         analysis_date = _today_ist()
@@ -3380,7 +3649,6 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         progress_bar(progress_slot, 60, "Computing Rolling Correlation", f"Lookback: {lookback} bars")
 
         # Compute rolling correlation — use vectorized rolling correlation
-        rolling_corr_dict = {}
         console.item("Computing rolling correlations", f"method={method}, lookback={lookback}, cols={len(universe_returns.columns)}")
 
         try:
@@ -3415,6 +3683,14 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         current_corr = rolling_corr_df.iloc[-1]
         avg_corr = rolling_corr_df.mean()
         corr_trend = current_corr - avg_corr
+
+        # Per-symbol return σ over the SAME lookback window as the correlation.
+        # The correlation-implied expected move is a regression BETA, not the bare
+        # correlation: E[r_sym | r_tgt] = corr × (σ_sym / σ_tgt) × r_tgt. Using corr
+        # alone silently assumed every symbol has the target's volatility — inflating
+        # implied moves (and thus "Divergence") for low-vol names by the vol ratio.
+        _win_sigma = returns_df.tail(lookback).std()
+        _tgt_sigma = float(_win_sigma.get(target_ticker, np.nan))
 
         # Compute tiers
         def get_corr_tier(corr):
@@ -3522,8 +3798,14 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                     if 'Intel_Source' in wrci_row.columns:
                         intel_source = wrci_row['Intel_Source'].values[0]
 
-            # Compute divergence
-            expected_change = current_corr[symbol] * target_change
+            # Correlation-implied expected move = beta × target move, where
+            # beta = corr × σ_sym/σ_tgt over the same lookback window (see above).
+            _sym_sigma = float(_win_sigma.get(symbol, np.nan))
+            if np.isfinite(_sym_sigma) and np.isfinite(_tgt_sigma) and _tgt_sigma > 0:
+                _beta = current_corr[symbol] * (_sym_sigma / _tgt_sigma)
+            else:
+                _beta = current_corr[symbol]   # degraded fallback: assume equal vols
+            expected_change = _beta * target_change
             divergence = price_change - expected_change
 
             corr_data_list.append({
@@ -3556,15 +3838,12 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         corr_df = corr_df.sort_values('Corr_Current', key=abs, ascending=False)
 
-        # ── Confluence score — now calibration-aware ─────────────────────
-        # Old: |Corr| × |WRCI_Signal| / 80  (raw oscillator only).
-        # New: |Corr| × normalized max(|Priority_Long|, |Priority_Short|).
-        # When Intelligence-mode calibration is active, Priority_Long/Short
-        # already incorporates the universe-specific calibrated weights, so
-        # the confluence ranking automatically benefits from the learning.
-        # When defaults are active, falls back to default-weighted priorities.
+        # ── Confluence score ──────────────────────────────────────────────
+        # |Corr| × normalized max(|Priority_Long|, |Priority_Short|), where the
+        # priorities are the cross-sectional reversion scores (engine.py) — so
+        # the confluence ranking carries the live, alpha-health-scaled read.
         # If Priority columns are missing entirely (defensive), drop back to
-        # the legacy WRCI_Signal formula.
+        # the legacy Delta_Z-based formula.
         if 'Priority_Long' in corr_df.columns and corr_df['Priority_Long'].notna().any():
             abs_pri = pd.concat(
                 [corr_df['Priority_Long'].abs(), corr_df['Priority_Short'].abs()],
@@ -3575,14 +3854,14 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             corr_df['Confluence_Score'] = (corr_df['Corr_Current'].abs() * pri_norm).clip(0.0, 1.0)
             console.item("Confluence formula", "|Corr| × reversion rank strength")
 
-            # ── Signal-Intelligence penalty ──────────────────────────────────
-            # A high-correlation, high-priority name can still be a trap if the
-            # Layer-2 model rates its fired signal a likely false positive (e.g. a
-            # bearish-divergence long at 15% confidence). Penalize the confluence of
-            # FIRED signals by their Intel confidence: factor = 0.5 + 0.5·Intel, so a
-            # fully-corroborated signal (Intel=1) is unchanged and a near-certain
-            # false positive (Intel→0) is halved (not zeroed — the correlation read
-            # still carries information). Non-fired rows (Intel NaN) are untouched.
+            # ── Conviction penalty ───────────────────────────────────────────
+            # A high-correlation, high-priority name still deserves less weight when
+            # the engine's conviction in its assigned side is low (thin tail, dormant
+            # alpha-health, or hostile vol regime). Penalize the confluence of FIRED
+            # signals by conviction: factor = 0.5 + 0.5·Conviction, so full conviction
+            # is unchanged and near-zero conviction is halved (not zeroed — the
+            # correlation read still carries information). Non-fired rows (Intel NaN)
+            # are untouched.
             if 'Intel_Confidence' in corr_df.columns and corr_df['Intel_Confidence'].notna().any():
                 _intel = corr_df['Intel_Confidence']
                 _factor = np.where(_intel.notna(), 0.5 + 0.5 * _intel.fillna(0.0), 1.0)
@@ -3808,7 +4087,7 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
                 <th>Zone</th>
                 <th>Type</th>
                 <th class="numeric" title="Symbol's price change on the analysis date">Actual %</th>
-                <th class="numeric" title="Expected move = target asset return × rolling correlation">Expected %</th>
+                <th class="numeric" title="Expected move = target return × beta (rolling correlation × vol ratio over the lookback)">Expected %</th>
                 <th class="numeric" title="Divergence = Actual − Expected (positive = outperforming expectation)">Div %</th>
                 <th class="numeric" title="Conviction in the assigned side (0–1)">Intel</th>
                 <th class="numeric" title="Confluence = |Correlation| × normalised Priority strength [0–1]">Confluence</th>
@@ -3949,14 +4228,14 @@ def render_correlation_results(corr_data: dict) -> None:
             <div style="color:#F1F5F9; line-height:1.6;">
                 Each setup type is ranked by <span style="color:#38BDF8; font-weight:600;">Confluence Score</span> (0-1).
                 Highest rank = strongest opportunity. Look for: <span style="font-weight:600;">(1) Score >0.7</span>,
-                <span style="font-weight:600;">(2) |Div %| >3%</span>, <span style="font-weight:600;">(3) Confirmed Zone (OB/OS Extreme)</span>
+                <span style="font-weight:600;">(2) |Div %| >3%</span>, <span style="font-weight:600;">(3) a confirming flow Zone (Accumulation+/Distribution+)</span>
             </div>
             <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:0.5rem; margin-top:0.75rem;">
                 <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
                     <span style="color:#38BDF8; font-weight:600;">Corr</span> — Correlation strength
                 </div>
                 <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
-                    <span style="color:#38BDF8; font-weight:600;">Zone</span> — Momentum extreme (OB/OS)
+                    <span style="color:#38BDF8; font-weight:600;">Zone</span> — Flow zone (Accumulation / Distribution)
                 </div>
                 <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
                     <span style="color:#38BDF8; font-weight:600;">Div %</span> — Actual vs Expected
@@ -3968,21 +4247,31 @@ def render_correlation_results(corr_data: dict) -> None:
         # Trade setup classification.
         # Thresholds: corr ±0.4 = meaningful directional relationship;
         # div ±2 = at least 2% price divergence from the target asset;
-        # zone conditions ensure the oscillator agrees with the setup direction.
+        # zone conditions ensure the flow read agrees with the setup direction.
+        # Zone vocabulary = the flow Condition column (Accumulation*/Distribution*):
+        # Distribution zones (net selling flow) play the oversold side, Accumulation
+        # zones (net buying flow) the overbought side — the same mapping the
+        # historical dashboard uses. (The old OB/OS names died with the WRCI engine;
+        # matching on them made LAGGARD/RUNAWAY/CONTRA unreachable.)
         _CORR_THRESH = 0.4   # minimum |correlation| to consider a relationship directional
         _DIV_THRESH  = 2.0   # minimum % divergence to flag a laggard / runaway
+        _ZONES_SOLD   = ('Distribution', 'Distribution+')   # net selling flow
+        _ZONES_BOUGHT = ('Accumulation', 'Accumulation+')   # net buying flow
         def classify_setup(row):
             corr = row['Corr_Current']
             div = row['Divergence']
             zone = row['WRCI_Zone']
 
-            if corr > _CORR_THRESH and div > _DIV_THRESH and zone in ['OS', 'OS Extreme']:
+            # Div = Actual − Expected: NEGATIVE = the name underperformed what the
+            # correlation implied (a laggard), POSITIVE = it outran the implication.
+            # (The pre-rewrite version had these signs inverted vs its own rationale.)
+            if corr > _CORR_THRESH and div < -_DIV_THRESH and zone in _ZONES_SOLD:
                 return "LAGGARD"
-            elif corr > _CORR_THRESH and div < -_DIV_THRESH and zone in ['OB', 'OB Extreme']:
+            elif corr > _CORR_THRESH and div > _DIV_THRESH and zone in _ZONES_BOUGHT:
                 return "RUNAWAY"
             elif abs(corr) < 0.2:
                 return "CONVERGING"
-            elif corr < -_CORR_THRESH and div < -_DIV_THRESH and zone in ['OB', 'OB Extreme']:
+            elif corr < -_CORR_THRESH and div > _DIV_THRESH and zone in _ZONES_BOUGHT:
                 return "CONTRA"
             else:
                 return "NEUTRAL"
@@ -4051,15 +4340,15 @@ def render_correlation_results(corr_data: dict) -> None:
         setup_interpretation = {
             "LAGGARD": {
                 "action": "BUY",
-                "rationale": "Stock lagging expected move — expect catch-up rally to target's pace",
-                "validate": "Check that Zone is OS/OS Extreme and Div % is positive & large (>3%)",
+                "rationale": "Stock lagging its correlation-implied move, with selling flow already absorbed — expect catch-up toward the target's pace",
+                "validate": "Check that Zone is Distribution/Distribution+ and Div % is negative & large (<-3%)",
                 "risk": "Correlation may break; stock continues lagging instead of catching up"
             },
             "RUNAWAY": {
                 "action": "SHORT",
-                "rationale": "Stock overextended vs expected move — expect pullback to fair value",
-                "validate": "Check that Zone is OB/OB Extreme and Div % is negative & large (<-3%)",
-                "risk": "Stock may continue running; wait for Zone to weaken before shorting"
+                "rationale": "Stock outran its correlation-implied move on buying flow — expect pullback to fair value",
+                "validate": "Check that Zone is Accumulation/Accumulation+ and Div % is positive & large (>3%)",
+                "risk": "Stock may continue running; wait for flow to weaken before shorting"
             },
             "CONVERGING": {
                 "action": "DE-RISK",
@@ -4068,9 +4357,9 @@ def render_correlation_results(corr_data: dict) -> None:
                 "risk": "Old positions may unwind suddenly; previous divergence trades may fail"
             },
             "CONTRA": {
-                "action": "LONG (vs target down)",
-                "rationale": "Negative correlation + target down — expect rally when target recovers",
-                "validate": "Check Corr is strongly negative (<-0.6) and Zone is OB/OB Extreme",
+                "action": "LONG (vs target)",
+                "rationale": "Strong inverse mover beating its inverse-implied move on buying flow — relative-strength long against target weakness",
+                "validate": "Check Corr is strongly negative (<-0.4), Div % positive & large, Zone Accumulation/Accumulation+",
                 "risk": "Negative correlations are unstable; requires conviction and risk management"
             }
         }
@@ -4177,11 +4466,12 @@ def render_correlation_results(corr_data: dict) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _intel_filter_active():
-    """Read the Layer-3 Intelligence Filter settings from session state.
+    """Read the Meta Filter settings from session state.
 
-    Returns (mode, threshold) where mode ∈ {'Off','Dim','Hide'}. The filter is
-    opt-in and applies only to fired-signal tables — never to the full-universe
-    priority ranking (whose non-fired rows have no confidence score).
+    Returns (mode, threshold) where mode ∈ {'Off','Dim','Hide'}. Defaults to
+    'Dim' at 0.45 (set in the sidebar expander); it applies only to fired-signal
+    tables — never to the full-universe priority ranking (whose non-fired rows
+    have no confidence score).
     """
     mode = st.session_state.get("intel_filter_mode", "Off")
     if mode not in ("Off", "Dim", "Hide"):
@@ -4422,17 +4712,17 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
             fc = m['conf']
             _fc_src = m['src']
             # FILTER decision value (drives Hide here + Dim styling in the table) — the
-            # Layer-3 Meta score on today's fired signals (fused rank × confidence), else
-            # the fire-bar Intel for aged signals. Probation: an ADVISORY meta (didn't
-            # beat naked priority OOS) may dim but never HIDE — only an active meta or the
-            # legacy fire-bar Intel may hide.
+            # Meta score on fired signals (rank × edge-scaled conviction), else the
+            # fire-bar Intel for aged signals. The old "probation" gate keyed off a
+            # Meta_Active column the removed fused model emitted; the reversion engine
+            # never emits it, so gating Hide on it made Hide silently inert — the
+            # engine's Meta score is always the live conviction fusion and may hide.
             _mv = r.get('Meta_Score')
             if _mv is not None and not pd.isna(_mv):
                 _filter_val = float(_mv)
-                _filter_may_hide = bool(r.get('Meta_Active'))
             else:
                 _filter_val = fc
-                _filter_may_hide = True
+            _filter_may_hide = True
             # Hide mode — drop low-score signals (and don't let an older fire of the same
             # symbol resurface in a later bucket).
             if (_filter_mode == "Hide" and _filter_may_hide and _filter_val is not None
@@ -4476,10 +4766,14 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
     newest_avg = stats[newest_label]['avg_signal'] if stats[newest_label]['count'] > 0 else 0
     older_avg = np.mean([stats[age]['avg_signal'] for age in older_labels if stats[age]['count'] > 0]) if any(stats[age]['count'] for age in older_labels) else 0
 
-    if newest_avg > older_avg + 5:
+    # Signal = Delta_Z (clipped ±5); bucket averages move on a ~±1 scale, so the
+    # strengthening/weakening threshold is 0.5 — the old ±5 threshold (sized for
+    # the removed ±100 oscillator) was unreachable and pinned the badge on "Stable".
+    _TREND_EPS = 0.5
+    if newest_avg > older_avg + _TREND_EPS:
         trend = f"{SVGS['UP'].replace('12','14').replace('12','14')} Strengthening"
         trend_color = "#2DD4A8"
-    elif newest_avg < older_avg - 5:
+    elif newest_avg < older_avg - _TREND_EPS:
         trend = f"{SVGS['DOWN'].replace('12','14').replace('12','14')} Weakening"
         trend_color = "#E8555A"
     else:
@@ -4514,15 +4808,13 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
         count = stats[age]['count']
         table_rows.append(f"""
         <tr style="background: {header_bg}; border-bottom: 2px solid {border_color};">
-            <td colspan="14" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
-                {age} · {count} signal{'s' if count != 1 else ''} · Avg Conv: {avg_conv:+.1f} · Avg %: {avg_pct:+.1f}
+            <td colspan="13" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
+                {age} · {count} signal{'s' if count != 1 else ''} · Avg |Δ-Z|: {avg_conv:+.1f} · Avg %: {avg_pct:+.1f}
             </td>
         </tr>
         """)
 
         # Data rows for this age group
-        _zone_colors = {"OB Extreme": "#FB7185", "OB": "#FCA5A5",
-                        "OS Extreme": "#34D399", "OS": "#86EFAC"}
         for row in stats[age]['rows']:
             symbol = html.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
             price = float(row.get('Price', 0))
@@ -4859,8 +5151,6 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
         </tr>
         """)
     else:
-        _zone_colors = {"OB Extreme": "#FB7185", "OB": "#FCA5A5",
-                        "OS Extreme": "#34D399", "OS": "#86EFAC"}
         for idx, (_, row) in enumerate(df.iterrows(), 1):
             symbol = html.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
             price = float(row.get('Price', 0))
@@ -4908,7 +5198,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
             <tr>
                 <td class="numeric" style="color: #D4A853; font-weight: 700;">{rank_str}</td>
                 <td class="symbol">{symbol}</td>
-                <td class="numeric" style="color: #4a9eff; font-weight: 700;">TOP {101-pct_rank:,.1f}%</td>
+                <td class="numeric" style="color: #4a9eff; font-weight: 700;">TOP {min(100.0, 101-pct_rank):,.1f}%</td>
                 <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
@@ -5022,12 +5312,19 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
 
 
 _SIGNAL_TYPE_REFERENCE = [
-    ("Set A · Momentum",  "amber",
-     "The Hemrek Count Index crosses its Count Signal line (count.pine) — crossing up = long, "
-     "crossing down = short. Rides the momentum-streak turning."),
-    ("Set B · Crossover", "violet",
-     "The 3-bar rate of change of the Count Signal crosses zero (count.pine) — crossing down "
-     "through zero = long, crossing up = short. Flags the smoothed streak rolling over."),
+    ("Set A · Triggers",   "amber",
+     "Live, same-bar timing events — any one fires the set. (1) Thrust EXHAUSTION "
+     "(clamp.pine): momentum breached its adaptive clamp, price still pushes, but thrust is "
+     "absorbed back inside — a selling climax is bullish, a buying climax bearish. "
+     "(2) Bar-level DELTA DIVERGENCE (inferred_delta.pine): close down on positive inferred "
+     "delta at a 3-bar low (bull) / close up on negative delta at a 3-bar high (bear). "
+     "(3) The weekly 80% RULE: opened outside the prior week's value area, two closes back "
+     "inside — odds favor a traverse to the far VA edge."),
+    ("Set B · Confluence", "violet",
+     "Context filters — fires when ≥2 of 6 agree with a direction: thrust sign has room to "
+     "exhaust · clamp squeeze active/just released · price at/beyond the value-area edge · "
+     "one-sided absorption against the move · CVD agreement · real participation (RVOL > 1). "
+     "Strongest reads pair a Set A trigger with Set B confluence in the same direction."),
 ]
 
 
@@ -5061,7 +5358,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
             key="sysdata_dl_full",
             help=(
                 f"All {len(results_df)} symbols with every computed factor. "
-                "Includes a Legend sheet defining each column: signal conditions (A=divergence/B=absorption), "
+                "Includes a Legend sheet defining each column: signal-set conditions (Set A / Set B), "
                 "factor descriptions (Price Momentum, Vol Quality, Bar Delta, CVD, CVD Slope, Δ-Z), "
                 "and flow-zone/regime definitions."
             ),
@@ -5104,7 +5401,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
         icon="list", accent="emerald",
     )
     cols = ["DisplayName", "Price", "Signal", "SignalType",
-            "Intel_Confidence", "Intel_Stars", "Intel_Source", "Intel_Flags",
+            "Intel_Confidence", "Intel_Stars", "Intel_Source",
             "Abs_Strength", "Priority_Long",
             "Priority_Long_pct", "F1_PriceMom", "F2_VolQual"]
     if "% Chng Since" in results_df.columns and results_df["% Chng Since"].notna().any():
@@ -5121,7 +5418,6 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
         "Intel_Confidence":  "Intel Conf",
         "Intel_Stars":       "Intel ★",
         "Intel_Source":      "Intel Src",
-        "Intel_Flags":       "Intel Flags",
         "F1_PriceMom":       "Price Momentum",
         "F2_VolQual":        "Vol Quality",
         "Priority_Long_pct": "Long Priority %ile",
@@ -5133,19 +5429,13 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     display_frame = results_df[cols].sort_values("Priority_Long", ascending=False).rename(columns=_col_display_names)
     _sysdata_colcfg = {
         "Intel Conf": st.column_config.ProgressColumn(
-            help=("Intelligence Confirmation: per-signal confidence in [0,1], computed purely "
-                  "per-symbol — from the symbol's own regime alignment (HMM), its own momentum/"
-                  "conviction lean, and trust multipliers (vol regime, change-point, reversion, "
-                  "divergence). Calibrated P(true) when a Layer-2 model is active, else heuristic. "
-                  "Low = the intelligence layer does not corroborate this fired signal (likely false positive)."),
+            help=("Conviction in the row's assigned side, in [0,1] — cross-sectional tail "
+                  "strength × live alpha-health × vol-regime suitability (engine.compute_ranking). "
+                  "NaN/empty = the row has no assigned side (middle of the cross-section)."),
             format="%.2f", min_value=0.0, max_value=1.0,
         ),
         "Intel ★": st.column_config.NumberColumn(
-            help="Confidence rating 1–5 on fixed bands (5 = strongest corroboration). 0 = no fired signal.",
-        ),
-        "Intel Flags": st.column_config.TextColumn(
-            help=("Dominant contradictions behind a low score: bear/bull-regime, extreme-vol, "
-                  "change-pt, rev-risk, div-contra, rank-disagree."),
+            help="Conviction rating 1–5 on fixed bands (5 = strongest). 0 = no assigned side.",
         ),
     }
     st.dataframe(display_frame, width='stretch', height=500, column_config=_sysdata_colcfg)
@@ -5291,13 +5581,10 @@ def main():
                 "analysis_date": analysis_date,
                 "timeframe":     timeframe,
             }
-            # Passport refresh: the sidebar (incl. Model Passport) already rendered THIS frame,
-            # BEFORE inline calibration updated opt_results — so a fresh tune leaves the Passport
-            # showing "Default" until the next interaction. One rerun fixes it: results_df is
-            # already persisted (body re-renders from session state, no recompute) and run_clicked
-            # is False on the rerun (no re-tune; the profile is now made-today and would cache).
-            if _calib_status == "tuned":
-                st.rerun()
+            # NOTE: _ensure_alpha_health returns cached|measured|harvest_empty; the
+            # sidebar Engine Status card picks up a fresh reading on the next natural
+            # rerun (the old "tuned" rerun branch died with the calibrator).
+            _ = _calib_status
 
         elif mode == "Historical Range":
             console.header("SANKET TERMINAL — Bulk Range Intelligence", VERSION)
@@ -5334,7 +5621,7 @@ def main():
         show_landing = True
 
     if show_landing:
-        ui.render_header("Sanket", "Market Signal Screener · WRCI Engine")
+        ui.render_header("Sanket", "Market Signal Screener · Cross-Sectional Reversion Engine")
         if st.session_state.get("run_error"):
             st.error(st.session_state["run_error"])
         render_landing_page()
@@ -5364,7 +5651,7 @@ def main():
                     _pn_date    = analysis_date.strftime("%d %b %Y") if hasattr(analysis_date, "strftime") else str(analysis_date)
                     ui.render_section_header(
                         f"Pulse Narrative — {timeframe} Universe State",
-                        f"{_pn_n} / {_pn_total} symbols · {_pn_date} · Full universe ranking by Abnormal Acceleration",
+                        f"{_pn_n} / {_pn_total} symbols · {_pn_date} · Full universe ranking by reversion score",
                         icon="zap", accent="amber"
                     )
                     avg_delta = results_df['Delta_Z'].mean()
@@ -5389,7 +5676,7 @@ def main():
                 with tab_strength:
                     ui.render_section_header(
                         "Order-Flow Signal Strength",
-                        "Top 10 long / short candidates by calibrated Priority",
+                        "Top 10 long / short candidates by reversion priority",
                         icon="zap", accent="amber",
                     )
                     pn_top_longs  = results_df.sort_values('Priority_Long',  ascending=False).head(10)
@@ -5450,7 +5737,7 @@ def main():
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
                         f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
-                        "Momentum (A) · Crossover (B)",
+                        "Triggers (A) · Confluence (B)",
                         icon="zap",
                         accent="amber"
                     )
@@ -5467,22 +5754,19 @@ def main():
                             f'⚙ Meta Filter <b>{_if_mode}</b> — {_if_verb} signals with '
                             f'Meta score &lt; <b>{_if_thr:.2f}</b> · scored by {_if_src}. '
                             f'Today\'s fired signals use the Meta score; aged signals fall back to fire-bar Intel. '
-                            f'Adjust in the sidebar ▸ Self-Tuning Intelligence.</div>',
+                            f'Adjust in the sidebar ▸ Alpha-Health Monitor.</div>',
                             unsafe_allow_html=True,
                         )
 
-                    # Set A: Momentum — legacy L_/S_ alias columns, sorted by Directional Priority v3
-                    longs_df = results_df[results_df['L_5d'] != "—"].copy().sort_values('Priority_Long', ascending=False)
-                    shorts_df = results_df[results_df['S_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False)
-
-                    # Set A: Momentum — broad crossover anywhere
+                    # Cross-set veto inputs: any Set B fire (either side) in the window.
                     has_bullish_crossover = (results_df[['LB_Today', 'LB_1d', 'LB_2d', 'LB_3d', 'LB_5d']] != "—").any(axis=1)
                     has_bearish_crossover = (results_df[['SB_Today', 'SB_1d', 'SB_2d', 'SB_3d', 'SB_5d']] != "—").any(axis=1)
 
+                    # Set A fires, vetoed by an opposite-side Set B fire in the window.
                     longs_a_df = results_df[(results_df['LA_5d'] != "—") & ~has_bearish_crossover].copy().sort_values('Priority_Long', ascending=False)
                     shorts_a_df = results_df[(results_df['SA_5d'] != "—") & ~has_bullish_crossover].copy().sort_values('Priority_Short', ascending=False)
 
-                    # Set B: Crossover
+                    # Set B fires
                     longs_b_df = results_df[results_df['LB_5d'] != "—"].copy().sort_values('Priority_Long', ascending=False)
                     shorts_b_df = results_df[results_df['SB_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False)
 
@@ -5512,7 +5796,7 @@ def main():
                         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                         bull_tab, bear_tab = st.tabs(["Bullish Signals by Timing", "Bearish Signals by Timing"])
                         with bull_tab:
-                            mom_bull_tab, cross_bull_tab, prio_bull_tab = st.tabs(["Momentum", "Crossover", "Priority Rank"])
+                            mom_bull_tab, cross_bull_tab, prio_bull_tab = st.tabs(["Set A", "Set B", "Priority Rank"])
                             with mom_bull_tab:
                                 _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A', timeframe=timeframe)
                                 la_html = _build_signal_table_html(la_stats, side='long', timeframe=timeframe)
@@ -5526,19 +5810,19 @@ def main():
                                 _r = sum(lb_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(lb_html, height=max(70 + _g * 46 + _r * 44, 110))
                             with prio_bull_tab:
-                                # Entire universe ranked by the self-tuned LONG priority score —
-                                # not gated by any signal set; this is the Intelligence ranking.
+                                # Entire universe ranked by the LONG reversion priority —
+                                # not gated by any signal set; this is the engine ranking.
                                 _all_long = results_df.sort_values('Priority_Long', ascending=False)
                                 st.markdown(
                                     '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
-                                    'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the self-tuned long priority '
-                                    'score (Intelligence weights) — independent of signal sets A–B.</div>',
+                                    'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the long reversion priority '
+                                    '(cross-sectional score, alpha-health-scaled) — independent of signal sets A–B.</div>',
                                     unsafe_allow_html=True,
                                 )
                                 st.components.v1.html(_build_signal_strength_table_html(_all_long, side='long'),
                                                       height=min(150 + len(_all_long) * 55, 900), scrolling=True)
                         with bear_tab:
-                            mom_bear_tab, cross_bear_tab, prio_bear_tab = st.tabs(["Momentum", "Crossover", "Priority Rank"])
+                            mom_bear_tab, cross_bear_tab, prio_bear_tab = st.tabs(["Set A", "Set B", "Priority Rank"])
                             with mom_bear_tab:
                                 _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A', timeframe=timeframe)
                                 sa_html = _build_signal_table_html(sa_stats, side='short', timeframe=timeframe)
@@ -5552,12 +5836,12 @@ def main():
                                 _r = sum(sb_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(sb_html, height=max(70 + _g * 46 + _r * 44, 110))
                             with prio_bear_tab:
-                                # Entire universe ranked by the self-tuned SHORT priority score.
+                                # Entire universe ranked by the SHORT reversion priority.
                                 _all_short = results_df.sort_values('Priority_Short', ascending=False)
                                 st.markdown(
                                     '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
-                                    'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the self-tuned short priority '
-                                    'score (Intelligence weights) — independent of signal sets A–B.</div>',
+                                    'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the short reversion priority '
+                                    '(cross-sectional score, alpha-health-scaled) — independent of signal sets A–B.</div>',
                                     unsafe_allow_html=True,
                                 )
                                 st.components.v1.html(_build_signal_strength_table_html(_all_short, side='short'),
@@ -5565,7 +5849,7 @@ def main():
                     else:
                         st.info(
                             f"**No signals found** for {selected_index} on {analysis_date} ({timeframe}). "
-                            "All symbols were analyzed but none crossed the WRCI signal thresholds. "
+                            "All symbols were analyzed but none fired a Set A / Set B condition in the last 5 bars. "
                             "Try an adjacent trading date or switch to a broader universe."
                         )
 
@@ -5588,7 +5872,7 @@ def main():
                 with tab_strength:
                     ui.render_section_header(
                         "Order-Flow Signal Strength",
-                        "Top signals ranked by Priority — Divergence (A) · Absorption (B)",
+                        "Top signals ranked by reversion priority — Set A · Set B overlays",
                         icon="zap",
                         accent="amber"
                     )
@@ -5625,7 +5909,7 @@ def main():
                         <span style="font-family:var(--display); font-size:0.62rem; font-weight:700;
                                      letter-spacing:0.12em; text-transform:uppercase; color:#D4A853;
                                      padding:0.18rem 0.5rem; background:rgba(212,168,83,0.1);
-                                     border:1px solid rgba(212,168,83,0.3); border-radius:4px;">PRIORITY ENGINE</span>
+                                     border:1px solid rgba(212,168,83,0.3); border-radius:4px;">REVERSION ENGINE</span>
                         <span style="font-family:var(--display); font-size:1rem; font-weight:700;
                                      color:#F1F5F9; letter-spacing:0.04em;">Top 10 Rankings</span>
                     </div>
