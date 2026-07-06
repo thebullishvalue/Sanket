@@ -2751,35 +2751,8 @@ footer {
 /* ================================================================
    Theme Toggle Button
    ================================================================ */
-.theme-toggle {
-    position: fixed;
-    top: var(--sp-4);
-    right: var(--sp-4);
-    z-index: 1001;
-    background: var(--glass);
-    backdrop-filter: blur(8px);
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    padding: var(--sp-2) var(--sp-3);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    font-family: var(--data);
-    font-size: 0.65rem;
-    color: var(--ink-secondary);
-    transition: all 200ms ease;
-}
-
-.theme-toggle:hover {
-    border-color: var(--amber);
-    color: var(--amber);
-}
-
-.theme-toggle svg {
-    width: 14px;
-    height: 14px;
-}
+/* (.theme-toggle styles removed — the toggle component was deleted; it lived
+   in a 0-height iframe where none of these parent-page styles applied.) */
 
 /* ================================================================
    Export Button Row
@@ -3512,27 +3485,11 @@ footer {
     }
 }
 
-@keyframes pulse {
-
-    0%,
-    100% {
-        opacity: 1;
-    }
-
-    50% {
-        opacity: 0.5;
-    }
-}
-
-@keyframes shimmer {
-    0% {
-        background-position: -200% 0;
-    }
-
-    100% {
-        background-position: 200% 0;
-    }
-}
+/* NOTE: `pulse` and `shimmer` are defined ONCE, in the design-system sections
+   above (progress dot / loading skeletons). This animation-library block used
+   to redefine both — and since CSS keyframes share one global namespace, the
+   redefinitions silently overrode the originals for EVERY consumer (the
+   progress dot lost its scale pulse; the skeleton sweep ran backwards). */
 
 @keyframes glow {
 
@@ -3837,28 +3794,6 @@ footer {
 }
 
 /* ================================================================
-   THEME TOGGLE ENHANCEMENT
-   ================================================================ */
-
-.theme-toggle {
-    animation: fadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.5s both;
-    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.theme-toggle:hover {
-    transform: scale(1.1);
-    box-shadow: 0 0 20px var(--amber-glow);
-}
-
-.theme-toggle svg {
-    transition: transform 0.3s ease;
-}
-
-.theme-toggle:hover svg {
-    transform: rotate(15deg);
-}
-
-/* ================================================================
    BUTTON ENHANCEMENTS
    ================================================================ */
 
@@ -4084,18 +4019,6 @@ footer {
    FIXED-POSITION ELEMENTS — Prevent overlap on mobile
    ================================================================ */
 @media (max-width: 768px) {
-
-    /* Theme toggle — move below header */
-    .theme-toggle {
-        position: relative !important;
-        top: auto !important;
-        right: auto !important;
-        margin: var(--sp-2) auto;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        width: fit-content;
-    }
 
     /* Sidebar hint — hide on mobile (no sidebar overlap risk) */
     .sidebar-hint {

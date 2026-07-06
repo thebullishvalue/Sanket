@@ -1,7 +1,16 @@
 """
-Pragyam v4.0.0 — Reusable UI components: metric cards, signal badges, headers, section headers.
+Sanket v4.0.0 — Reusable UI components: section headers, metric cards, masthead,
+interpretation cards.
 
 UI — Obsidian Quant Terminal design language.
+
+Pruned in the v4.0.x fidelity pass: ten zero-call-site components from prior
+engine generations (signal items, conviction rows, system cards, collapsible
+sections, export rows, the signal guide, and the theme toggle) were removed.
+The theme toggle in particular was non-functional by construction — it rendered
+inside a 0-height component iframe (invisible, unstyled by the parent page's
+CSS) and its JS set ``data-theme`` on the iframe's own document rather than the
+app's, so it could never actually switch themes.
 """
 
 from __future__ import annotations
@@ -35,6 +44,11 @@ ICONS = {
     "compass":    '<svg aria-label="Regime icon" role="img" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>',
     "link":       '<svg aria-label="Link/Correlation icon" role="img" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
     "brain":      '<svg aria-label="Intelligence icon" role="img" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.79-2.79 2.5 2.5 0 0 1 .44-4.96 2.5 2.5 0 0 1-.44-4.96 2.5 2.5 0 0 1 2.79-2.79A2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.79-2.79 2.5 2.5 0 0 0-.44-4.96 2.5 2.5 0 0 0 .44-4.96 2.5 2.5 0 0 0-2.79-2.79A2.5 2.5 0 0 0 14.5 2z"/></svg>',
+    "history":    '<svg aria-label="History icon" role="img" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg>',
+    "clock":      '<svg aria-label="Clock icon" role="img" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
+    "info":       '<svg aria-label="Info icon" role="img" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+    "list":       '<svg aria-label="List icon" role="img" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>',
+    "trending-up": '<svg aria-label="Trending up icon" role="img" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>',
 }
 
 
@@ -66,11 +80,6 @@ def render_section_header(
         f'</div>',
         unsafe_allow_html=True,
     )
-
-
-def section_gap() -> None:
-    """Insert vertical spacing between major sections."""
-    st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
 
 
 def render_metric_card(
@@ -116,117 +125,6 @@ def render_metric_card(
     )
 
 
-def render_metric_row(metrics: list[dict[str, str]]) -> None:
-    """Render a row of metric cards.
-
-    Args:
-        metrics: List of dicts with keys: label, value, delta (opt), kind (opt).
-    """
-    cols = st.columns(len(metrics))
-    for i, m in enumerate(metrics):
-        with cols[i]:
-            render_metric_card(
-                m["label"],
-                m["value"],
-                m.get("delta", ""),
-                m.get("kind", "primary")
-            )
-
-
-def render_signal_item(symbol: str, price: float, change: float, signal: str, score: float) -> None:
-    """Render a premium signal list item."""
-    kind = "success" if signal == "BUY" else "danger" if signal == "SELL" else "neutral"
-    icon = "trending_up" if signal == "BUY" else "trending_down" if signal == "SELL" else "activity"
-    
-    st.markdown(f"""
-    <div class="symbol-row">
-        <div style="display:flex; align-items:center; gap:0.75rem;">
-            <div class="signal-icon {kind}">{signal}</div>
-            <div>
-                <div class="symbol-name">{symbol}</div>
-                <div class="symbol-price">{price:,.2f} <span style="color: {'var(--emerald)' if change >= 0 else 'var(--rose)'};">{change:+.2f}%</span></div>
-            </div>
-        </div>
-        <div class="symbol-score" style="color: var(--amber);">Score {score:,.1f}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def render_conviction_signal(
-    symbol: str,
-    conviction: float,
-    rsi: str = "—",
-    osc: str = "—",
-    zscore: str = "—",
-    ma: str = "—",
-) -> None:
-    """Render a conviction signal row for position guide.
-
-    Args:
-        symbol: Stock symbol.
-        conviction: Conviction score (0-100).
-        rsi: RSI value formatted.
-        osc: Oscillator value formatted.
-        zscore: Z-score value formatted.
-        ma: Moving average alignment formatted.
-    """
-    if conviction >= 65:
-        signal_class = "buy"
-        signal_text = "Strong Buy"
-        icon_svg = ICONS["target"].replace('1.5', '2') # Bolder icon
-        conviction_bar_width = min(100, conviction)
-        conviction_bar_color = "var(--emerald)"
-    elif conviction >= 50:
-        signal_class = "buy"
-        signal_text = "Buy"
-        icon_svg = ICONS["activity"]
-        conviction_bar_width = min(100, conviction)
-        conviction_bar_color = "var(--emerald-bright)"
-    elif conviction >= 35:
-        signal_class = "hold"
-        signal_text = "Hold"
-        icon_svg = ICONS["cube"]
-        conviction_bar_width = min(100, conviction)
-        conviction_bar_color = "var(--amber)"
-    else:
-        signal_class = "sell"
-        signal_text = "Caution"
-        icon_svg = ICONS["shield"]
-        conviction_bar_width = min(100, conviction)
-        conviction_bar_color = "var(--rose)"
-
-    st.markdown(
-        f"""
-        <div class="signal-row" style="display:flex; align-items:center; gap:0.75rem; padding:0.75rem 0; border-bottom:1px solid var(--border-subtle); position:relative; overflow:hidden;">
-            <div style="position:absolute; left:0; top:0; bottom:0; width:{conviction_bar_width} * 0.3%; background: linear-gradient(90deg, {conviction_bar_color}08, {conviction_bar_color}03); pointer-events:none;"></div>
-            <div style="flex:1; font-family:var(--data); font-weight:600; color:var(--ink-primary); position:relative; z-index:1;">{html_mod.escape(symbol)}</div>
-            <div style="font-family:var(--data); font-size:0.7rem; color:var(--ink-tertiary); position:relative; z-index:1;">
-                <span style="color:var(--ink-secondary); font-weight:500;">RSI</span> {rsi}
-            </div>
-            <div style="font-family:var(--data); font-size:0.7rem; color:var(--ink-tertiary); position:relative; z-index:1;">
-                <span style="color:var(--ink-secondary); font-weight:500;">Osc</span> {osc}
-            </div>
-            <div style="font-family:var(--data); font-size:0.7rem; color:var(--ink-tertiary); position:relative; z-index:1;">
-                <span style="color:var(--ink-secondary); font-weight:500;">Z</span> {zscore}
-            </div>
-            <div style="font-family:var(--data); font-size:0.7rem; color:var(--ink-tertiary); position:relative; z-index:1;">
-                <span style="color:var(--ink-secondary); font-weight:500;">MA</span> {ma}
-            </div>
-            <div style="position:relative; z-index:1;">
-                <div style="width:60px; height:4px; background:var(--bg-elevated); border-radius:2px; overflow:hidden;">
-                    <div style="width:{conviction_bar_width}%; height:100%; background:{conviction_bar_color}; border-radius:2px; transition:width 0.6s cubic-bezier(0.16, 1, 0.3, 1);"></div>
-                </div>
-            </div>
-            <div style="font-family:var(--data); font-size:0.75rem; font-weight:700; color:var(--ink-primary); min-width:40px; text-align:right; position:relative; z-index:1;">{int(conviction)}</div>
-            <div class="signal-pill {signal_class}" style="display:inline-flex; align-items:center; gap:0.4rem; padding:0.3rem 0.75rem; border-radius:20px; font-size:0.72rem; font-weight:600; position:relative; z-index:1;">
-                <div style="width:12px; height:12px;">{icon_svg}</div> {signal_text}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def render_header(title: str, tagline: str) -> None:
     """Render the terminal masthead."""
     st.markdown(
@@ -235,235 +133,6 @@ def render_header(title: str, tagline: str) -> None:
         f'<div class="tagline">{html_mod.escape(tagline)}</div>'
         f"</div>",
         unsafe_allow_html=True,
-    )
-
-
-def render_info_box(title: str, content: str, color: str = "cyan") -> None:
-    """Render an info box."""
-    st.markdown(
-        f'<div class="info-box">'
-        f"<h4>{html_mod.escape(title)}</h4>"
-        f"<p>{html_mod.escape(content)}</p>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def render_system_card(
-    title: str,
-    description: str,
-    specs: list[tuple[str, str]],
-    card_class: str = "portfolio",
-) -> None:
-    """Render a system feature card for landing page.
-
-    Args:
-        title: Card title.
-        description: Card description.
-        specs: List of (label, value) tuples for specifications.
-        card_class: CSS class — "portfolio", "regime", "strategies".
-    """
-    spec_html = "".join(
-        f'<span>{html_mod.escape(label)}</span> {html_mod.escape(value)}<br>'
-        for label, value in specs
-    )
-
-    st.markdown(
-        f"""
-        <div class='system-card {html_mod.escape(card_class)}'>
-            <h3>{html_mod.escape(title)}</h3>
-            <p>{html_mod.escape(description)}</p>
-            <div class='spec'>{spec_html}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_warning_box(title: str, content: str) -> None:
-    """Render a themed alert/warning box."""
-    st.markdown(
-        f"""
-        <div class="warning-box">
-            <div class="icon"></div>
-            <div>
-                <div class="title">{html_mod.escape(title)}</div>
-                <div class="content">{html_mod.escape(content)}</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_chart_skeleton(height: int = 280) -> None:
-    """Render a loading skeleton placeholder for charts.
-
-    Provides visual feedback while chart data is being computed.
-    Uses CSS shimmer animation for a polished loading experience.
-    """
-    st.markdown(
-        f'<div class="skeleton-chart" style="min-height:{height}px;">'
-        f'<div class="skeleton-line skeleton-pulse"></div>'
-        f'<div class="skeleton-block skeleton-pulse"></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-
-def render_collapsible_section(
-    title: str,
-    description: str = "",
-    icon: str = "chart",
-    accent: str = "",
-    default_open: bool = False,
-):
-    """Render a collapsible section header with chevron toggle.
-
-    Returns a context manager that yields content when expanded.
-    Uses Streamlit's container + checkbox pattern for state management.
-
-    Args:
-        title: Section title (rendered uppercase).
-        description: Optional one-line description below title.
-        icon: Key from ICONS dict.
-        accent: CSS color class — "", "cyan", "emerald", "violet", "rose".
-        default_open: Whether section starts expanded or collapsed.
-    """
-    svg = ICONS.get(icon, ICONS["chart"])
-    section_id = f"collapsible_{html_mod.escape(title.lower().replace(' ', '_'))}"
-    is_open = st.checkbox(
-        f"toggle_{section_id}",
-        value=default_open,
-        label_visibility="collapsed",
-        key=f"_{section_id}_state",
-    )
-
-    icon_class = f"icon {accent}" if accent else "icon"
-    hdr_class = f"section-hdr {accent}" if accent else "section-hdr"
-    desc_html = f'<div class="desc">{html_mod.escape(description)}</div>' if description else ""
-    open_class = "open" if is_open else ""
-
-    st.markdown(
-        f'<div class="collapsible-section {open_class}" id="{section_id}">'
-        f'<div class="collapsible-header" data-target="{section_id}">'
-        f'<span class="chevron">{ICONS["chevron-right"]}</span>'
-        f'<div class="{hdr_class}" style="margin:0;padding:0;border:none;flex:1;">'
-        f'<div class="{icon_class}">{svg}</div>'
-        f'<div class="text">'
-        f'<h3>{html_mod.escape(title)}</h3>'
-        f'{desc_html}'
-        f'</div>'
-        f'</div>'
-        f'</div>'
-        f'<div class="collapsible-body">'
-        f'<div class="collapsible-body-inner">',
-        unsafe_allow_html=True,
-    )
-
-    return is_open
-
-
-def render_collapsible_section_close() -> None:
-    """Close a collapsible section opened by render_collapsible_section."""
-    st.markdown(
-        '</div></div>',
-        unsafe_allow_html=True,
-    )
-
-
-def render_theme_toggle() -> None:
-    """Render a fixed-position theme toggle button (dark/light mode).
-
-    Uses JavaScript to toggle data-theme attribute on the html element.
-    Persists preference in localStorage.
-    """
-    import streamlit as st
-    st.components.v1.html(
-        """
-        <div class="theme-toggle" id="theme-toggle" title="Toggle theme" onclick="toggleTheme()">
-            <svg id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <circle cx="12" cy="12" r="5"/>
-                <line x1="12" y1="1" x2="12" y2="3"/>
-                <line x1="12" y1="21" x2="12" y2="23"/>
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-                <line x1="1" y1="12" x2="3" y2="12"/>
-                <line x1="21" y1="12" x2="23" y2="12"/>
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-            </svg>
-            <svg id="theme-icon-moon" style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-            </svg>
-            <span id="theme-label">Light</span>
-        </div>
-        <script>
-        (function() {
-            var html = document.documentElement;
-            var saved = localStorage.getItem('pragyam-theme');
-            var theme = saved || 'dark';
-            html.setAttribute('data-theme', theme);
-            updateUI(theme);
-
-            window.toggleTheme = function() {
-                var current = html.getAttribute('data-theme');
-                var next = current === 'dark' ? 'light' : 'dark';
-                html.setAttribute('data-theme', next);
-                localStorage.setItem('pragyam-theme', next);
-                updateUI(next);
-            };
-
-            function updateUI(theme) {
-                var sun = document.getElementById('theme-icon-sun');
-                var moon = document.getElementById('theme-icon-moon');
-                var label = document.getElementById('theme-label');
-                if (theme === 'light') {
-                    if (sun) sun.style.display = 'none';
-                    if (moon) moon.style.display = 'block';
-                    if (label) label.textContent = 'Dark';
-                } else {
-                    if (sun) sun.style.display = 'block';
-                    if (moon) moon.style.display = 'none';
-                    if (label) label.textContent = 'Light';
-                }
-            }
-        })();
-        </script>
-        """,
-        height=0,
-    )
-
-
-def render_export_button_row(
-    label: str = "Export",
-    icon: str = "download",
-    data: bytes = b"",
-    file_name: str = "export.xlsx",
-    mime: str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-) -> None:
-    """Render a right-aligned export button with icon.
-
-    Args:
-        label: Button label text.
-        icon: Key from ICONS dict (defaults to "download").
-        data: Binary data to export.
-        file_name: Default download filename.
-        mime: MIME type for the download.
-    """
-    svg = ICONS.get(icon, ICONS["download"])
-    st.markdown(
-        f'<div class="export-btn-row">'
-        f'{svg}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    st.download_button(
-        label=f"{svg}  {label}",
-        data=data,
-        file_name=file_name,
-        mime=mime,
-        key=f"export_{file_name}",
     )
 
 
@@ -484,50 +153,5 @@ def render_interpretation_card(
         f'<div class="interp-title">{html_mod.escape(str(title))}</div>'
         f'<div class="interp-body">{html_mod.escape(str(body))}</div>'
         f'</div>',
-        unsafe_allow_html=True,
-    )
-
-
-def render_signal_guide() -> None:
-    """Render the Signal Interpretation Guide for the cross-sectional reversion ranker.
-
-    Describes the two sides the engine surfaces (Long / Short reversion candidates) and
-    the alpha-health monitor, in a glassmorphic card matching the terminal. Structure and
-    CSS classes are unchanged — only the copy reflects the reversion engine.
-    """
-    st.markdown(
-        '''
-        <div class="signal-guide">
-            <div class="signal-guide-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <path d="M12 6v6l4 2"></path>
-                </svg>
-                Signal Types Reference
-            </div>
-
-            <div class="signal-guide-grid">
-                <div class="signal-type momentum">
-                    <div class="signal-type-label">Long · Mean-Reversion</div>
-                    <div class="signal-type-desc">Names that have sold off most relative to their own volatility (oversold tail of the cross-section) tend to out-perform peers over the next 1–5 days. The engine ranks the universe and surfaces the strongest oversold candidates as Longs. Validated IC ≈ +0.031 (t ≈ +8).</div>
-                </div>
-
-                <div class="signal-type crossover">
-                    <div class="signal-type-label">Short · Mean-Reversion</div>
-                    <div class="signal-type-desc">Symmetric: names that have run up most relative to their volatility (overbought tail) tend to under-perform peers. The strongest overbought candidates are surfaced as Shorts. Conviction auto-scales by the live alpha-health monitor — when the edge is dormant the screen intentionally goes low-conviction.</div>
-                </div>
-            </div>
-
-            <div class="signal-guide-metrics">
-                <div class="signal-guide-metrics-title">Key Metrics</div>
-                <div class="signal-guide-metrics-grid">
-                    <div class="metric-item"><span class="metric-label">Rev Score</span> · Cross-sectional reversion score (+ = long-attractive)</div>
-                    <div class="metric-item"><span class="metric-label">Rank %ile</span> · Standing within today's universe</div>
-                    <div class="metric-item"><span class="metric-label">Conviction</span> · Tail strength × alpha-health × regime [0–1]</div>
-                    <div class="metric-item"><span class="metric-label">Alpha-Health</span> · Is the reversion edge working right now?</div>
-                </div>
-            </div>
-        </div>
-        ''',
         unsafe_allow_html=True,
     )

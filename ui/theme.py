@@ -1,5 +1,5 @@
 """
-Pragyam v4.0.0 — Shared CSS, chart theming, and color constants for the UI layer.
+Sanket — Shared CSS, chart theming, and color constants for the UI layer.
 
 UI — "Obsidian Quant" Institutional Research Terminal design language.
 
@@ -19,9 +19,9 @@ from pathlib import Path
 
 import streamlit as st
 
-VERSION = "v4.0.0"
-PRODUCT_NAME = "Sanket"
-COMPANY = "@thebullishvalue"
+# NOTE: the single source of truth for the version string is sanket.VERSION —
+# the duplicates that used to live here had zero importers and could silently
+# drift from the real version.
 
 # Path to external CSS file
 CSS_PATH = Path(__file__).parent / "theme.css"
