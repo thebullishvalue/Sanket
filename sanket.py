@@ -188,9 +188,10 @@ def _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
     The engine tag invalidates frames cached under a previous signal/feature engine:
     'rev1' = reversion + structural-divergence sets; 'rev2' = LIVE trigger/confluence
     sets; 'rev3' = selective 6-filter Set B; 'rev4' = Set B VWM clamp cross; 'rev5' =
-    Set A is delta divergence gated by the thrust mean axis (vwm vs vwm_mean).
+    Set A is delta divergence gated by the thrust mean axis (vwm vs vwm_mean); 'rev6' =
+    ATR(14)/Close < 0.05 volatility gate on both Set A & Set B.
     """
-    return ("rev5", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
+    return ("rev6", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
             tuple(levels), int(wt2_len), str(wt2_type), end_date)
 
 
@@ -1732,20 +1733,28 @@ def compute_signal_sets(df: pd.DataFrame,
     mode) with an adaptive clamp band (mean ± k·σ, k stretched up to +50% by the
     volatility regime) and a mean axis (vwm_mean).
 
+    Volatility gate (shared by Set A & Set B):
+      ATR(14) / Close < 0.05 — filters out high-volatility names where the daily
+      average true range exceeds 5% of the close price.
+
     Set A — DELTA DIVERGENCE confirmed by the thrust's side of the mean axis:
       bull (long_cond)  : rawBull (inferred_delta.pine — close down, inferred
                           delta positive, low at a 3-bar low) AND vwm > vwm_mean
-                          (net thrust above the mean axis, force turning up).
+                          (net thrust above the mean axis, force turning up)
+                          AND ATR(14)/Close < 0.05.
       bear (short_cond) : rawBear (close up, delta negative, high at a 3-bar high)
-                          AND vwm < vwm_mean (thrust below the mean axis).
+                          AND vwm < vwm_mean (thrust below the mean axis)
+                          AND ATR(14)/Close < 0.05.
 
     Set B — CLAMP CROSS (VWM thrust re-enters the adaptive clamp band):
       bull (long_cond_comp)  : vwm crosses UP through the LOWER clamp
                                (vwm ≤ clamp_lower last bar, > it now) — a
-                               selling-thrust impact absorbed back inside.
+                               selling-thrust impact absorbed back inside
+                               AND ATR(14)/Close < 0.05.
       bear (short_cond_comp) : vwm crosses DOWN through the UPPER clamp
                                (vwm ≥ clamp_upper last bar, < it now) — a
-                               buying-thrust impact absorbed back inside.
+                               buying-thrust impact absorbed back inside
+                               AND ATR(14)/Close < 0.05.
     Same direction convention as clamp.pine (below-lower = selling = bullish).
 
     Writes long_cond/short_cond (Set A), *_comp (Set B), and the flow Condition.
@@ -1784,6 +1793,11 @@ def compute_signal_sets(df: pd.DataFrame,
     cd, cd1 = clamp_dn.to_numpy(), clamp_dn.shift(1).to_numpy()
     c1      = pc.to_numpy()
 
+    # ── VOLATILITY GATE: ATR(14) / Close < 0.05 — shared by Set A & Set B ──────
+    # Filters out high-volatility names where daily ATR exceeds 5% of the close.
+    atr_pct = (atr_c / close.clip(lower=1e-10)).to_numpy(dtype=float)
+    low_vol_ok = atr_pct < 0.05
+
     # ── SET A: bar-level delta divergence CONFIRMED by the thrust's side of the mean axis ──
     #   rawBull (inferred_delta.pine): close down, inferred delta positive, at a 3-bar low.
     #   rawBear:                       close up,   delta negative,           at a 3-bar high.
@@ -1796,10 +1810,10 @@ def compute_signal_sets(df: pd.DataFrame,
     with np.errstate(invalid='ignore'):
         raw_bull = (close_a < c1) & (bd > 0) & (low_a <= lo3)
         raw_bear = (close_a > c1) & (bd < 0) & (high_a >= hi3)
-        long_cond  = raw_bull & (v > vm)
-        short_cond = raw_bear & (v < vm)
-    long_cond  = np.where(np.isnan(v) | np.isnan(vm), False, long_cond)
-    short_cond = np.where(np.isnan(v) | np.isnan(vm), False, short_cond)
+        long_cond  = raw_bull & (v > vm) & low_vol_ok
+        short_cond = raw_bear & (v < vm) & low_vol_ok
+    long_cond  = np.where(np.isnan(v) | np.isnan(vm) | np.isnan(atr_pct), False, long_cond)
+    short_cond = np.where(np.isnan(v) | np.isnan(vm) | np.isnan(atr_pct), False, short_cond)
 
     # ── SET B: VWM thrust crossing back INTO the clamp band ──
     #   bull  = vwm crosses UP through the LOWER clamp (was ≤ lower last bar, now
@@ -1810,11 +1824,11 @@ def compute_signal_sets(df: pd.DataFrame,
     #           i.e. the exhaustion re-entry without the price-still-pushing gate or
     #           the same-side cooldown — a cleaner "thrust returned to normal" cross.
     with np.errstate(invalid='ignore'):
-        long_cond_comp  = (v1 <= cd1) & (v > cd)    # cross up through lower clamp
-        short_cond_comp = (v1 >= cu1) & (v < cu)    # cross down through upper clamp
-    long_cond_comp  = np.where(np.isnan(v1) | np.isnan(cd1) | np.isnan(cd),
+        long_cond_comp  = (v1 <= cd1) & (v > cd) & low_vol_ok    # cross up through lower clamp
+        short_cond_comp = (v1 >= cu1) & (v < cu) & low_vol_ok    # cross down through upper clamp
+    long_cond_comp  = np.where(np.isnan(v1) | np.isnan(cd1) | np.isnan(cd) | np.isnan(atr_pct),
                                False, long_cond_comp)
-    short_cond_comp = np.where(np.isnan(v1) | np.isnan(cu1) | np.isnan(cu),
+    short_cond_comp = np.where(np.isnan(v1) | np.isnan(cu1) | np.isnan(cu) | np.isnan(atr_pct),
                                False, short_cond_comp)
 
     df['long_cond']       = long_cond
