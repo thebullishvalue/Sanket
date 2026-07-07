@@ -77,7 +77,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v4.0.2"
+VERSION = "v4.0.3"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -187,11 +187,11 @@ def _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
     """Identity of an analyzed frame — everything that changes its computed values.
 
     The engine tag invalidates frames cached under a previous signal/feature engine:
-    'rev1' = reversion features + structural-divergence sets; 'rev2' = LIVE
-    trigger/confluence sets; 'rev3' = same, with the selective (non-coin-flip)
-    Set B filters + ≥3-of-6 gate.
+    'rev1' = reversion + structural-divergence sets; 'rev2' = LIVE trigger/confluence
+    sets; 'rev3' = selective 6-filter Set B; 'rev4' = Set B is the VWM clamp cross
+    (bull = cross up through lower clamp, bear = cross down through upper clamp).
     """
-    return ("rev3", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
+    return ("rev4", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
             tuple(levels), int(wt2_len), str(wt2_type), end_date)
 
 
@@ -286,15 +286,17 @@ def _measure_trailing_ic(ts_data) -> tuple:
     harvested panel. Re-ranks each date's cross-section with engine.compute_ranking,
     then correlates the reversion score vs a forward-return column.
 
-    Returns (trailing_ic, n_dates). trailing_ic is None when the panel is too thin.
+    Returns (trailing_ic, n_dates, t_stat). trailing_ic / t_stat are None when the
+    panel is too thin. t_stat carries the 3-bar-overlap significance haircut so the
+    UI can tell a real edge from a noise-level +0.01 IC.
     """
     if ts_data is None or getattr(ts_data, "empty", True):
-        return None, 0
+        return None, 0, None
     df = ts_data.copy()
     # Pick a forward-return column: prefer Ret_3b, else the first available Ret_*.
     ret_cols = [c for c in df.columns if c.startswith("Ret_")]
     if not ret_cols:
-        return None, 0
+        return None, 0, None
     fwd_col = "Ret_3b" if "Ret_3b" in ret_cols else ret_cols[0]
     ics = []
     for _date, day in df.groupby("Date"):
@@ -311,9 +313,19 @@ def _measure_trailing_ic(ts_data) -> tuple:
         if ic is not None and np.isfinite(ic):
             ics.append(ic)
     if not ics:
-        return None, 0
-    trailing_ic = float(np.mean(ics[-60:]))   # last ~60 daily ICs
-    return trailing_ic, len(ics)
+        return None, 0, None
+    window = np.asarray(ics[-60:], dtype=float)   # last ~60 daily ICs
+    trailing_ic = float(window.mean())
+    # Significance of the trailing mean IC. The daily ICs use a 3-bar-forward
+    # return, so consecutive days overlap → the naive t overstates significance.
+    # Haircut the effective sample size by the horizon (Newey-West-lite): a +0.010
+    # IC at t≈1 is statistically indistinguishable from zero and must NOT read as a
+    # confident "edge active". t is None when the window is too thin to be meaningful.
+    t_stat = None
+    if len(window) >= 10 and window.std(ddof=1) > 0:
+        eff_n = max(len(window) / 3.0, 1.0)
+        t_stat = float(trailing_ic / (window.std(ddof=1) / np.sqrt(eff_n)))
+    return trailing_ic, len(ics), t_stat
 
 
 def _ensure_alpha_health(universe, selected_index, timeframe, analysis_date,
@@ -352,7 +364,7 @@ def _ensure_alpha_health(universe, selected_index, timeframe, analysis_date,
                             wt2_len=wt2_len, wt2_type=wt2_type)
     ts_data = st.session_state.get("ts_results_df")
 
-    trailing_ic, n_dates = _measure_trailing_ic(ts_data)
+    trailing_ic, n_dates, t_stat = _measure_trailing_ic(ts_data)
     if trailing_ic is None:
         # Cold-start neutral — keep a dim, low-conviction screen rather than failing it.
         st.session_state["alpha_health_mult"] = 0.75
@@ -362,6 +374,7 @@ def _ensure_alpha_health(universe, selected_index, timeframe, analysis_date,
             "trailing_ic":    None,
             "alpha_health":   0.75,
             "n_dates":        0,
+            "t_stat":         None,
             "timestamp":      _today_ist().strftime("%Y-%m-%d %H:%M"),
             "universe":       universe,
             "selected_index": selected_index,
@@ -374,20 +387,54 @@ def _ensure_alpha_health(universe, selected_index, timeframe, analysis_date,
     health = eng.alpha_health(trailing_ic)
     st.session_state["alpha_health_mult"] = health
     st.session_state["alpha_health_ic"]   = trailing_ic
+    st.session_state["alpha_health_t"]    = t_stat
     st.session_state["_alpha_health_key"] = key
     st.session_state["opt_results"] = {
         "trailing_ic":    trailing_ic,
         "alpha_health":   health,
         "n_dates":        n_dates,
+        "t_stat":         t_stat,
         "timestamp":      _today_ist().strftime("%Y-%m-%d %H:%M"),
         "universe":       universe,
         "selected_index": selected_index,
         "timeframe":      timeframe,
     }
-    console.detail(f"Alpha-health: trailing IC {trailing_ic:+.3f} → health {health:.2f} over {n_dates} dates")
+    _t_disp = f", t {t_stat:+.1f}" if t_stat is not None else ""
+    console.detail(f"Alpha-health: trailing IC {trailing_ic:+.3f}{_t_disp} → health {health:.2f} over {n_dates} dates")
     # The harvest flag is an internal precondition here, not a Historical-Range deliverable.
     st.session_state["timeseries_done"] = False
     return "measured"
+
+
+# Edge-state thresholds. The old badge flipped ACTIVE↔WEAK at a single IC=0.01
+# cutoff — so a noise-level +0.0102 (t≈1, indistinguishable from zero) rendered a
+# confident green "EDGE ACTIVE". Two fixes: (1) require BOTH a higher IC and a
+# significant t before claiming an active edge; (2) hysteresis — a wide neutral
+# band between ACTIVE and DORMANT so a reading hovering at the boundary doesn't
+# oscillate. Significance is the real gate: mean IC alone is not enough.
+_EDGE_IC_ACTIVE = 0.015    # IC must clear this AND be significant to read "active"
+_EDGE_IC_DORMANT = 0.000   # below this = actively standing down
+_EDGE_T_SIGNIF = 1.5       # trailing-IC t (overlap-adjusted) needed for "active"
+
+
+def _edge_state(trailing_ic, t_stat):
+    """Classify the live edge from IC + significance → (label, css_class, note).
+
+    Honest about statistics: a positive-but-insignificant IC is 'MARGINAL', not
+    'EDGE ACTIVE'. Returns a short note flagging when the reading is noise-level.
+    """
+    if trailing_ic is None:
+        return "COLD START", "neutral", "no reading yet — measures on the next run"
+    sig = t_stat is not None and abs(t_stat) >= _EDGE_T_SIGNIF
+    t_txt = (f"t {t_stat:+.1f}" if t_stat is not None else "t n/a")
+    if trailing_ic >= _EDGE_IC_ACTIVE and sig:
+        return "EDGE ACTIVE", "success", f"significant ({t_txt})"
+    if trailing_ic <= _EDGE_IC_DORMANT:
+        return "DORMANT — standing down", "danger", f"no edge ({t_txt})"
+    # positive IC but not both high AND significant → be honest it's marginal/noise
+    if trailing_ic > 0 and not sig:
+        return "MARGINAL — not significant", "warning", f"IC ~ noise ({t_txt})"
+    return "WEAK", "warning", f"partial edge ({t_txt})"
 
 
 def _render_intelligence_tab(universe, selected_index, timeframe):
@@ -403,6 +450,7 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
     trailing_ic = st.session_state.get("alpha_health_ic", res.get("trailing_ic"))
     health = float(st.session_state.get("alpha_health_mult", res.get("alpha_health", 1.0)) or 1.0)
     n_dates = int(res.get("n_dates", 0) or 0)
+    t_stat = st.session_state.get("alpha_health_t", res.get("t_stat"))
     measured = trailing_ic is not None and isinstance(trailing_ic, (int, float))
 
     ui.render_section_header(
@@ -411,16 +459,10 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
         icon="brain", accent="violet",
     )
 
-    # ── Interpretation tag from the trailing realized IC ──
-    if not measured:
-        tag, tag_class = "COLD START", "neutral"
-    elif trailing_ic > 0.01:
-        tag, tag_class = "EDGE ACTIVE", "success"
-    elif trailing_ic > 0.0:
-        tag, tag_class = "WEAK", "warning"
-    else:
-        tag, tag_class = "DORMANT — standing down", "danger"
+    # ── Interpretation tag — significance-gated, with hysteresis (see _edge_state) ──
+    tag, tag_class, tag_note = _edge_state(trailing_ic if measured else None, t_stat)
 
+    ic_t = f" · t {t_stat:+.1f}" if (measured and t_stat is not None) else ""
     ic_str     = f"{trailing_ic:+.3f}" if measured else "—"
     health_str = f"{health:.2f}×"
     health_class = "success" if health >= 0.85 else ("warning" if health >= 0.55 else "danger")
@@ -430,7 +472,7 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
     <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:1rem; margin-top:0.5rem;">
         <div class="metric-card {"info" if measured else "neutral"}" style="margin:0;">
             <h4>Trailing IC</h4><h2>{ic_str}</h2>
-            <div class="sub-metric">realized cross-sectional · score vs fwd return</div>
+            <div class="sub-metric">realized IC · score vs fwd return{ic_t}</div>
         </div>
         <div class="metric-card {health_class}" style="margin:0;">
             <h4>Alpha-Health</h4><h2>{health_str}</h2>
@@ -438,7 +480,7 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
         </div>
         <div class="metric-card {tag_class}" style="margin:0;">
             <h4>Edge State</h4><h2 style="font-size:1.15rem;">{tag}</h2>
-            <div class="sub-metric">live verdict</div>
+            <div class="sub-metric">{html.escape(tag_note)}</div>
         </div>
         <div class="metric-card info" style="margin:0;">
             <h4>Dates Measured</h4><h2>{dates_str}</h2>
@@ -1533,9 +1575,9 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
       • long_cond/short_cond   — Set A · TRIGGERS: thrust exhaustion (clamp.pine),
                                  bar-level delta divergence and the weekly 80% Rule
                                  (inferred_delta.pine) — any one fires the set
-      • *_comp                 — Set B · CONFLUENCE: ≥2 of 6 direction-matched context
-                                 filters agree (thrust sign, squeeze, value-area edge,
-                                 absorption, CVD, RVOL)
+      • *_comp                 — Set B · CLAMP CROSS: VWM thrust re-enters the clamp
+                                 band (bull = crosses up through the lower clamp,
+                                 bear = crosses down through the upper clamp)
     These add no cross-sectional ranking edge (validated) — they are shown as flow colour,
     never as the rank.
 
@@ -1634,8 +1676,7 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     df['MA_Alignment'] = ma_counts
 
     df = compute_signal_sets(df, high, low, close, opn, vol,
-                             bar_delta, cvd, cvd_ma, cvd_slope,
-                             rel_delta, rel_range, rvol, vah, val)
+                             bar_delta, cvd, cvd_ma)
 
     # ── REVERSION FEATURES (the actual ranking alpha; see engine.py / ARCHITECTURE.md) ──
     # Per-symbol features; the cross-sectional ranking (engine.compute_ranking) runs later
@@ -1674,49 +1715,19 @@ def _rma(x: np.ndarray, length: int) -> np.ndarray:
     return out
 
 
-def _percent_rank(x: np.ndarray, length: int, default: float = 50.0) -> np.ndarray:
-    """Port of ``nz(ta.percentrank(x, length), default)``.
-
-    Percent of the previous ``length`` values (excluding the current bar) that are
-    <= the current value. Emits ``default`` wherever Pine would emit na (warmup,
-    or NaN in the window/current value) — mirroring clamp.pine's ``nz(..., 50)``.
-    """
-    n = x.shape[0]
-    out = np.full(n, default)
-    for i in range(length, n):
-        xi = x[i]
-        if not np.isfinite(xi):
-            continue
-        w = x[i - length:i]
-        if not np.isfinite(w).all():
-            continue
-        out[i] = (w <= xi).mean() * 100.0
-    return out
-
 
 def compute_signal_sets(df: pd.DataFrame,
                         high: pd.Series, low: pd.Series, close: pd.Series,
                         opn: pd.Series, vol: pd.Series,
                         bar_delta: pd.Series, cvd: pd.Series, cvd_ma: pd.Series,
-                        cvd_slope: pd.Series, rel_delta: pd.Series,
-                        rel_range: pd.Series, rvol: pd.Series,
-                        vah: pd.Series, val: pd.Series,
                         # Clamp engine (clamp.pine defaults)
                         thr_length: int = 20, thr_stat_len: int = 60,
                         thr_vol_norm_len: int = 50, base_k: float = 2.0,
-                        use_adaptive_k: bool = True, cool_bars: int = 5,
-                        sq_len: int = 100, sq_pct: float = 15.0,
-                        # Absorption (inferred_delta.pine rawAbsorb)
-                        abs_ratio: float = 1.8, abs_range: float = 0.6,
-                        # Set B selectivity: thrust must clear ±thr_z_min σ (not just
-                        # the sign), CVD must deviate ≥cvd_dev_k band-widths (not a 50/50
-                        # OR), RVOL must clear rvol_min. Gate = ≥conf_min of 6.
-                        thr_z_min: float = 0.5, cvd_dev_k: float = 0.5,
-                        rvol_min: float = 1.3, conf_min: int = 3) -> pd.DataFrame:
-    """LIVE same-bar signal sets: Set A triggers + Set B confluence filters.
+                        use_adaptive_k: bool = True,
+                        cool_bars: int = 5) -> pd.DataFrame:
+    """LIVE same-bar signal sets: Set A triggers + Set B clamp-cross.
 
-    Replaces the delayed pivot-confirmed structural divergences (which fired
-    10-20 bars after the swing) with signals that fire ON the bar they occur.
+    Both fire ON the bar they occur (no pivot-confirmation delay).
 
     Set A — TRIGGERS (something happened NOW; fires when ANY condition hits):
       A1 EXHAUSTION (clamp.pine rawExhSell/rawExhBuy, incl. the same-side
@@ -1738,20 +1749,16 @@ def compute_signal_sets(df: pd.DataFrame,
          finished week's VA re-binned against its final range: 50 bins, 70%);
          on weekly-resampled frames it self-disables (pine: sessionable=false).
 
-    Set B — CONFLUENCE (context agrees; fires when ≥ ``conf_min`` of 6 align).
-    Each filter is deliberately SELECTIVE, not a coin-flip — a mere thrust *sign*,
-    a 50/50 CVD OR, or RVOL>1 each fire ~50-66% of bars, so an unselective ≥2-of-6
-    gate lit up ~73% of the universe (noise, not confluence). The signed/threshold
-    forms below each fire well under half the time:
-      B1 thrust meaningfully one-sided   (bull: thrustZ < −``thr_z_min`` · bear: > +``thr_z_min``)
-      B2 clamp squeeze active/released   (width percentile ≤ ``sq_pct``)
-      B3 price at/beyond the value edge  (bull: close ≤ rolling VAL or prior-week
-                                          VAL · bear: ≥ VAH or prior-week VAH)
-      B4 one-sided absorption against the move (relDelta > ``abs_ratio``,
-                                          relRange < ``abs_range``, delta signed)
-      B5 CVD deviates ≥``cvd_dev_k`` bands from its mean, in-direction
-                                         (bull: cvd − cvd_ma > k·band · bear: < −k·band)
-      B6 real participation              (RVOL > ``rvol_min``)
+    Set B — CLAMP CROSS (VWM thrust re-enters the adaptive clamp band):
+      bull (long_cond_comp)  : vwm crosses UP through the LOWER clamp
+                               (vwm ≤ clamp_lower last bar, > it now) — a
+                               selling-thrust impact absorbed back inside.
+      bear (short_cond_comp) : vwm crosses DOWN through the UPPER clamp
+                               (vwm ≥ clamp_upper last bar, < it now) — a
+                               buying-thrust impact absorbed back inside.
+    Same direction convention as clamp.pine (below-lower = selling = bullish);
+    it is the exhaustion re-entry without the price-still-pushing gate or the
+    cooldown, so it flags every "thrust returned to normal" cross.
 
     Writes long_cond/short_cond (Set A), *_comp (Set B), and the flow Condition.
     """
@@ -1783,9 +1790,6 @@ def compute_signal_sets(df: pd.DataFrame,
     vwm_std   = vwm.rolling(thr_stat_len).std(ddof=0)
     clamp_up  = vwm_mean + dyn_k * vwm_std
     clamp_dn  = vwm_mean - dyn_k * vwm_std
-    thrust_z  = pd.Series(np.where(vwm_std.to_numpy() > 0,
-                                   (vwm - vwm_mean).to_numpy()
-                                   / vwm_std.to_numpy().clip(min=1e-12), 0.0), index=idx)
 
     # ── A1 · exhaustion triggers (clamp.pine trigBuy/trigSell + cooldown) ──
     v, v1   = vwm.to_numpy(), vwm.shift(1).to_numpy()
@@ -1806,14 +1810,6 @@ def compute_signal_sets(df: pd.DataFrame,
         if trig_sell[i] and i - last_sell > cool_bars:
             exh_bull[i] = True
             last_sell = i
-
-    # ── B2 · squeeze: clamp-width percentile ≤ sq_pct, or just released ──
-    band_w = (clamp_up - clamp_dn).to_numpy(dtype=float)
-    width_rank = _percent_rank(band_w, sq_len)
-    sqz_on  = width_rank <= sq_pct
-    sqz_rel = np.zeros(n, dtype=bool)
-    sqz_rel[1:] = sqz_on[:-1] & ~sqz_on[1:]
-    b2 = sqz_on | sqz_rel
 
     # ── A2 · bar-level delta divergence (inferred_delta.pine rawBull/rawBear) ──
     bd  = bar_delta.to_numpy(dtype=float)
@@ -1904,39 +1900,21 @@ def compute_signal_sets(df: pd.DataFrame,
     long_cond  = exh_bull | div_bull | r80_long
     short_cond = exh_bear | div_bear | r80_short
 
-    # ── SET B: ≥ conf_min of 6 direction-matched context filters ──
-    tz      = thrust_z.to_numpy()
-    rd      = rel_delta.to_numpy(dtype=float)
-    rr      = rel_range.to_numpy(dtype=float)
-    rv      = rvol.to_numpy(dtype=float)
-    cvd_a   = cvd.to_numpy(dtype=float)
-    cvdma_a = cvd_ma.to_numpy(dtype=float)
-    cvsl_a  = cvd_slope.to_numpy(dtype=float)
-    vah_a   = vah.to_numpy(dtype=float)
-    val_a   = val.to_numpy(dtype=float)
-    # B5 band: how far CVD sits from its 20-bar mean, scaled by the typical
-    # deviation (same band the flow `Condition` column uses). A signed, threshold
-    # test — not the old 50/50 "cvd>ma OR slope>0" that fired ~66% of bars.
-    cvd_dev  = cvd - cvd_ma
-    cvd_band = cvd_dev.abs().rolling(20).mean().clip(lower=1e-9)
-    cvd_dev_a  = cvd_dev.to_numpy(dtype=float)
-    cvd_band_a = cvd_band.to_numpy(dtype=float)
+    # ── SET B: VWM thrust crossing back INTO the clamp band ──
+    #   bull  = vwm crosses UP through the LOWER clamp (was ≤ lower last bar, now
+    #           above it) → a selling-thrust impact is being absorbed back inside.
+    #   bear  = vwm crosses DOWN through the UPPER clamp (was ≥ upper last bar, now
+    #           below it) → a buying-thrust impact absorbed. Matches clamp.pine's
+    #           direction convention (below-lower = selling = bullish implication),
+    #           i.e. the exhaustion re-entry without the price-still-pushing gate or
+    #           the same-side cooldown — a cleaner "thrust returned to normal" cross.
     with np.errstate(invalid='ignore'):
-        absorb = (rd > abs_ratio) & (rr < abs_range)
-        bull_ct = ((tz < -thr_z_min).astype(int)                                 # B1
-                   + b2.astype(int)                                              # B2
-                   + ((close_a <= val_a) | (close_a <= prev_val_s)).astype(int)  # B3
-                   + (absorb & (bd < 0)).astype(int)                             # B4
-                   + (cvd_dev_a >  cvd_dev_k * cvd_band_a).astype(int)           # B5
-                   + (rv > rvol_min).astype(int))                               # B6
-        bear_ct = ((tz > thr_z_min).astype(int)
-                   + b2.astype(int)
-                   + ((close_a >= vah_a) | (close_a >= prev_vah_s)).astype(int)
-                   + (absorb & (bd > 0)).astype(int)
-                   + (cvd_dev_a < -cvd_dev_k * cvd_band_a).astype(int)
-                   + (rv > rvol_min).astype(int))
-    long_cond_comp  = bull_ct >= conf_min
-    short_cond_comp = bear_ct >= conf_min
+        long_cond_comp  = (v1 <= cd1) & (v > cd)    # cross up through lower clamp
+        short_cond_comp = (v1 >= cu1) & (v < cu)    # cross down through upper clamp
+    long_cond_comp  = np.where(np.isnan(v1) | np.isnan(cd1) | np.isnan(cd),
+                               False, long_cond_comp)
+    short_cond_comp = np.where(np.isnan(v1) | np.isnan(cu1) | np.isnan(cu),
+                               False, short_cond_comp)
 
     df['long_cond']       = long_cond
     df['short_cond']      = short_cond
@@ -2229,7 +2207,7 @@ def run_regime_analysis(df):
 def _classify_signal_type(row) -> str:
     """Return priority-ordered signal type for a single bar row (pandas Series).
 
-    Priority: Set A (trigger) > Set B (confluence context) > flow zone.
+    Priority: Set A (trigger) > Set B (clamp cross) > flow zone.
     Matches the vectorised np.select in the harvest path.
     """
     if row.get('long_cond'):       return "A: Long"
@@ -5336,12 +5314,12 @@ _SIGNAL_TYPE_REFERENCE = [
      "delta at a 3-bar low (bull) / close up on negative delta at a 3-bar high (bear). "
      "(3) The weekly 80% RULE: opened outside the prior week's value area, two closes back "
      "inside — odds favor a traverse to the far VA edge."),
-    ("Set B · Confluence", "violet",
-     "Context filters — fires when ≥3 of 6 SELECTIVE conditions agree with a direction: thrust "
-     "meaningfully one-sided (>½σ) · clamp squeeze active/just released · price at/beyond the "
-     "value-area edge · one-sided absorption against the move · CVD deviating from its mean · "
-     "strong participation (RVOL > 1.3). Each is deliberately selective so Set B marks genuine "
-     "context, not most of the tape. Strongest reads pair a Set A trigger with Set B confluence."),
+    ("Set B · Clamp Cross", "violet",
+     "VWM thrust re-entering its adaptive clamp band (clamp.pine). Bullish when thrust crosses "
+     "UP through the LOWER clamp — a selling-pressure impact being absorbed back to normal; "
+     "bearish when it crosses DOWN through the UPPER clamp — a buying-pressure impact absorbed. "
+     "It marks the moment force returns inside the band, the cleaner cousin of the Set A "
+     "exhaustion trigger. Strongest reads pair a Set A trigger with a Set B cross same-direction."),
 ]
 
 
@@ -5754,7 +5732,7 @@ def main():
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
                         f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
-                        "Triggers (A) · Confluence (B)",
+                        "Triggers (A) · Clamp Cross (B)",
                         icon="zap",
                         accent="amber"
                     )
@@ -5987,14 +5965,13 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
                           and cal_timeframe != current_timeframe)
     mismatch = universe_mismatch or timeframe_mismatch
 
+    t_stat = st.session_state.get("alpha_health_t", res.get("t_stat"))
     if measured:
-        if trailing_ic > 0.01:
-            state_label, card_class = "Edge Active", "success"
-        elif trailing_ic > 0.0:
-            state_label, card_class = "Weak", "warning"
-        else:
-            state_label, card_class = "Dormant", "danger"
-        ic_str     = f"{trailing_ic:+.3f}"
+        # Significance-gated + hysteresis (shared _edge_state, same as the tab).
+        _lbl, card_class, _ = _edge_state(trailing_ic, t_stat)
+        # Compact sidebar label (strip the trailing "— …" descriptor).
+        state_label = _lbl.split(" — ")[0].split(" (")[0]
+        ic_str     = f"{trailing_ic:+.3f}" + (f" · t{t_stat:+.1f}" if t_stat is not None else "")
         health_str = f"{float(health):.2f}×" if isinstance(health, (int, float)) else "—"
     else:
         state_label = "Cold Start"

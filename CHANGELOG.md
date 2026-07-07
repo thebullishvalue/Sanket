@@ -7,6 +7,65 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v4.0.3] · 2026-07-07
+### Set B = Clamp Cross · Honest Edge Badge
+
+**Changed — Set B is now the VWM clamp cross.** Replaced the 6-filter confluence with a
+single, precise event from `clamp.pine`: **bullish when VWM thrust crosses UP through the
+lower clamp** (a selling-thrust impact absorbed back into the band), **bearish when it crosses
+DOWN through the upper clamp** (buying-thrust absorbed). Same direction convention as the pine
+(below-lower = selling = bullish) — it's the Set A exhaustion re-entry without the
+price-still-pushing gate or the cooldown. Fires ~1.5% of bars per side (vs the previous
+selective-confluence ~11% and the original loose ~73%). Verified bit-identical to an
+independent inline clamp reference over 40 seeds. `SignalType` priority unchanged (A > B).
+Removed the now-dead confluence machinery (squeeze percentrank + `_percent_rank`, absorption
+B4, thrust-σ B1, CVD-band B5, RVOL B6, and the `conf_min`/`thr_z_min`/`cvd_dev_k`/`rvol_min`/
+`sq_*`/`abs_*` params); `compute_signal_sets` no longer takes `rel_delta`/`rel_range`/
+`cvd_slope`/`rvol`/`vah`/`val`. Cache tag `rev3`→`rev4`.
+
+**Fixed — the alpha-health "EDGE ACTIVE" badge was knife-edge and oversold noise.** The badge
+flipped ACTIVE↔WEAK at a single `trailing_ic > 0.01` cutoff, so a live reading of **+0.0102
+(t≈1.0, statistically indistinguishable from zero)** rendered a confident green "EDGE ACTIVE".
+An empirical study (210 real F&O names, 4.5y, leak-free) confirmed the current regime is
+marginal/dormant, so the confident badge was misleading — and was the main source of the
+"ranking feels wrong" experience (the contrarian worst-first ranking is *correct* — reversion
+IC positive every full year 2021-2025, momentum backwards — but a barely-positive edge was
+being labeled as strong). Fixes:
+- `_measure_trailing_ic` now also returns a **t-stat** with a 3-bar-overlap significance
+  haircut (Newey-West-lite), threaded into session + `opt_results`.
+- New shared `_edge_state(ic, t)` classifier: "EDGE ACTIVE" requires IC ≥ 0.015 **and**
+  t ≥ 1.5; a positive-but-insignificant IC reads **"MARGINAL — not significant"**, not green.
+  Hysteresis via a wide neutral band so a boundary reading doesn't oscillate. Both the
+  Intelligence tab and sidebar Engine Status card show the IC **with its t-stat**.
+
+The reversion ranking direction and the alpha-health *multiplier* math are unchanged — this
+is a truthfulness fix on how the edge is *labeled*, plus the Set B swap.
+
+---
+
+## [v4.0.2] · 2026-07-07
+### Set B Selectivity — Confluence That Actually Filters
+
+**Fixed:** Set B fired on ~73% of the universe (screenshot showed 205/207 long, 199/203 short
+candidates flagged), making it useless as a "confluence" read. Root cause was structural, not a
+mere threshold: 3 of the 6 filters were direction-labeled coin-flips — B1 tested only the thrust
+*sign* (~50% of bars), B5 was a 50/50 `cvd>ma OR slope>0` OR (~66%), B6 was `RVOL>1` (~50%). With
+three ~50-66% filters the expected count already cleared the `≥2-of-6` gate on most bars.
+
+Made the loose filters selective and raised the gate to `≥3-of-6`:
+- **B1** now requires thrust beyond ±0.5σ (`thr_z_min`), not just a sign.
+- **B5** now requires CVD to deviate ≥0.5 band-widths (`cvd_dev_k`) from its 20-bar mean in the
+  signal's direction — the same deviation band the flow `Condition` column uses — replacing the
+  50/50 OR.
+- **B6** now requires `RVOL > 1.3` (`rvol_min`), not `> 1.0`.
+
+Measured effect on synthetic daily panels: per-side Set B fire rate **73% → ~11% of bars**
+(~20% of names on any given day); Set A unchanged (~6%). Cache tag bumped `rev2`→`rev3` so
+frames computed under the old loose Set B invalidate. All knobs are keyword args on
+`compute_signal_sets` (loosen `conf_min`/`thr_z_min`/`rvol_min` to widen it again).
+
+---
+
 ## [v4.0.1] · 2026-07-07
 ### Fidelity Pass — Regime-Engine Corrections, Pine-Faithful Signal Sets, Honest Copy
 
