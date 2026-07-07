@@ -85,6 +85,17 @@
     --r-md: 10px;
     --r-lg: 14px;
     --r-xl: 20px;
+
+    /* ---- Motion grammar ----
+       One easing curve + three duration tiers. Transitions target an EXPLICIT
+       property set (never `all`) so only compositor-friendly properties animate
+       — animating `all` also animated layout properties (width/padding), causing
+       reflow jank and unintended tweens. --motion-props is the safe default set. */
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --dur-fast: 150ms;
+    --dur-base: 250ms;
+    --dur-slow: 400ms;
+    --motion-props: transform, box-shadow, border-color, background-color, background, color, opacity, filter;
 }
 
 /* ================================================================
@@ -199,7 +210,12 @@ footer {
 .block-container {
     padding-top: var(--sp-8) !important;
     padding-bottom: var(--sp-6) !important;
-    max-width: 98%;
+    /* 98% keeps the dense multi-column layout on normal wide screens; the 2100px
+       cap stops tables sprawling edge-to-edge on ultra-wide monitors (unreadable
+       row scans). The cap only engages past ~2140px, so typical displays are
+       unaffected. */
+    max-width: min(98%, 2100px);
+    margin-inline: auto;
 }
 
 /* ================================================================
@@ -328,7 +344,7 @@ footer {
     flex-shrink: 0;
     margin-top: 1px;
     position: relative;
-    transition: all 400ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-slow) var(--ease);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
@@ -358,7 +374,7 @@ footer {
     height: 16px;
     color: var(--accent);
     stroke: var(--accent);
-    transition: all 400ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-slow) var(--ease);
 }
 
 .section-hdr:hover .icon svg {
@@ -635,7 +651,7 @@ footer {
     border-radius: var(--r-lg);
     padding: var(--sp-6) var(--sp-6) var(--sp-5);
     position: relative;
-    transition: all 400ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-slow) var(--ease);
     overflow: hidden;
     cursor: default;
     height: 100%;
@@ -750,7 +766,7 @@ footer {
     border-radius: var(--r-sm);
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--border);
-    transition: all 400ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-slow) var(--ease);
 }
 
 .system-card:hover h3 svg {
@@ -922,7 +938,7 @@ footer {
     border-radius: var(--r-md);
     padding: var(--sp-5) var(--sp-5);
     position: relative;
-    transition: all 350ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-slow) var(--ease);
     min-height: 120px;
     height: 100%;
     display: flex;
@@ -969,7 +985,7 @@ footer {
     height: 6px;
     border-radius: 50%;
     background: var(--card-accent);
-    transition: all 350ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-slow) var(--ease);
 }
 
 /* Bottom gradient sweep on hover */
@@ -982,7 +998,7 @@ footer {
     height: 0;
     background: linear-gradient(0deg, var(--card-glow) 0%, transparent 100%);
     opacity: 0;
-    transition: all 350ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-slow) var(--ease);
     pointer-events: none;
 }
 
@@ -1212,7 +1228,7 @@ footer {
     opacity: 0;
     visibility: hidden;
     transform: translateY(-4px);
-    transition: all 200ms ease;
+    transition: var(--motion-props) var(--dur-fast) var(--ease);
     z-index: 100;
     pointer-events: none;
 }
@@ -1505,7 +1521,7 @@ footer {
     text-align: center;
     position: relative;
     overflow: hidden;
-    transition: all 300ms ease;
+    transition: var(--motion-props) var(--dur-base) var(--ease);
 }
 
 .regime-badge:hover {
@@ -1675,7 +1691,7 @@ footer {
     letter-spacing: 0.04em;
     border-radius: 8px;
     padding: 0.6rem 1.75rem;
-    transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+    transition: var(--motion-props) var(--dur-fast) var(--ease) !important;
     cursor: pointer;
 }
 
@@ -1721,7 +1737,7 @@ footer {
     font-size: 0.76rem;
     padding: 14px 0;
     border-bottom: 2px solid transparent;
-    transition: all 200ms;
+    transition: var(--motion-props) var(--dur-fast) var(--ease);
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
@@ -1794,13 +1810,29 @@ footer {
     color: var(--ink-primary) !important;
     font-family: var(--data) !important;
     font-size: 0.8rem !important;
-    transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: var(--motion-props) var(--dur-fast) var(--ease);
 }
 
 .stTextInput input:focus,
 .stSelectbox>div>div:focus {
     border-color: var(--amber) !important;
     box-shadow: 0 0 0 1px var(--amber) !important;
+}
+
+/* ---- Keyboard focus ring (accessibility) ----
+   `:focus-visible` shows a ring ONLY for keyboard navigation, never on mouse
+   click — so the resting/pointer visuals are unchanged. Applied to the custom-
+   styled interactive elements (buttons, tabs, radios, checkboxes, expanders)
+   which previously had no visible keyboard focus at all. */
+.stButton>button:focus-visible,
+.stDownloadButton>button:focus-visible,
+.stTabs [data-baseweb="tab"]:focus-visible,
+[data-testid="stExpander"] summary:focus-visible,
+.stRadio label:focus-within,
+.stCheckbox label:focus-within {
+    outline: 2px solid var(--amber) !important;
+    outline-offset: 2px !important;
+    border-radius: var(--r-sm);
 }
 
 /* ================================================================
@@ -1848,7 +1880,7 @@ footer {
     color: var(--ink-primary) !important;
     border-bottom: 1px solid var(--border-subtle) !important;
     padding: var(--sp-3) var(--sp-4) !important;
-    transition: all 200ms ease;
+    transition: var(--motion-props) var(--dur-fast) var(--ease);
 }
 
 [data-testid="stDataFrame"] tr:hover td {
@@ -1907,7 +1939,7 @@ footer {
 /* Data rows */
 .portfolio-table tbody tr {
     border-bottom: 1px solid var(--border-subtle);
-    transition: all 250ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-base) var(--ease);
     position: relative;
 }
 
@@ -1945,7 +1977,7 @@ footer {
     padding: var(--sp-3) var(--sp-4);
     color: var(--ink-primary);
     vertical-align: middle;
-    transition: all 200ms ease;
+    transition: var(--motion-props) var(--dur-fast) var(--ease);
 }
 
 /* Symbol column */
@@ -1997,7 +2029,7 @@ footer {
     padding: var(--sp-4) var(--sp-5);
     position: relative;
     overflow: hidden;
-    transition: all 350ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-slow) var(--ease);
     animation: positionCardIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
@@ -2009,7 +2041,7 @@ footer {
     bottom: 0;
     width: 3px;
     background: var(--ink-tertiary);
-    transition: all 350ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-slow) var(--ease);
 }
 
 .position-card:hover {
@@ -2549,7 +2581,7 @@ footer {
     font-weight: 500;
     border-radius: 8px;
     padding: 0.5rem 1.5rem;
-    transition: all 200ms ease !important;
+    transition: var(--motion-props) var(--dur-fast) var(--ease) !important;
 }
 
 .stDownloadButton>button:hover {
@@ -2781,7 +2813,7 @@ footer {
     color: var(--ink-tertiary);
     opacity: 0;
     transform: translateY(8px);
-    transition: all 200ms ease;
+    transition: var(--motion-props) var(--dur-fast) var(--ease);
     pointer-events: none;
     backdrop-filter: blur(8px);
 }
@@ -2843,7 +2875,7 @@ footer {
 
 .sidebar-hint-arrow {
     color: var(--amber);
-    transition: all 200ms ease;
+    transition: var(--motion-props) var(--dur-fast) var(--ease);
     filter: drop-shadow(0 0 8px var(--amber-glow));
 }
 
@@ -2883,7 +2915,7 @@ footer {
     border: 1px solid var(--border) !important;
     background: transparent !important;
     color: var(--ink-tertiary) !important;
-    transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+    transition: var(--motion-props) var(--dur-fast) var(--ease) !important;
     text-align: center;
 }
 
@@ -3593,7 +3625,7 @@ footer {
    ================================================================ */
 
 .signal-row {
-    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-fast) var(--ease);
     animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
@@ -3625,7 +3657,7 @@ footer {
 }
 
 .signal-pill {
-    transition: all 0.2s ease;
+    transition: var(--motion-props) var(--dur-fast) var(--ease);
 }
 
 .signal-pill.buy:hover {
@@ -3652,7 +3684,7 @@ footer {
 }
 
 .section-hdr .icon {
-    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-base) var(--ease);
 }
 
 .section-hdr:hover .icon {
@@ -3757,7 +3789,7 @@ footer {
 }
 
 .stMarkdown table tbody tr {
-    transition: all 0.2s ease;
+    transition: var(--motion-props) var(--dur-fast) var(--ease);
 }
 
 .stMarkdown table tbody tr:hover {
@@ -3798,7 +3830,7 @@ footer {
    ================================================================ */
 
 .stButton>button {
-    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-base) var(--ease);
     position: relative;
     overflow: hidden;
 }
@@ -3846,7 +3878,7 @@ footer {
 }
 
 .stTabs [data-baseweb="tab"] {
-    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-base) var(--ease);
 }
 
 .stTabs [data-baseweb="tab"]:hover {
@@ -3859,7 +3891,7 @@ footer {
    ================================================================ */
 
 .stDownloadButton>button {
-    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--motion-props) var(--dur-base) var(--ease);
 }
 
 .stDownloadButton>button:hover {
