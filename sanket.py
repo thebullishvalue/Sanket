@@ -30,7 +30,6 @@ import requests
 import io
 import urllib3
 import engine as eng
-import breadth_engine as breadth
 import warnings
 import logging
 import time
@@ -77,7 +76,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v4.0.3"
+VERSION = "v4.0.4"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -188,10 +187,10 @@ def _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
 
     The engine tag invalidates frames cached under a previous signal/feature engine:
     'rev1' = reversion + structural-divergence sets; 'rev2' = LIVE trigger/confluence
-    sets; 'rev3' = selective 6-filter Set B; 'rev4' = Set B is the VWM clamp cross
-    (bull = cross up through lower clamp, bear = cross down through upper clamp).
+    sets; 'rev3' = selective 6-filter Set B; 'rev4' = Set B VWM clamp cross; 'rev5' =
+    Set A is delta divergence gated by the thrust mean axis (vwm vs vwm_mean).
     """
-    return ("rev4", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
+    return ("rev5", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
             tuple(levels), int(wt2_len), str(wt2_type), end_date)
 
 
@@ -329,7 +328,8 @@ def _measure_trailing_ic(ts_data) -> tuple:
 
 
 def _ensure_alpha_health(universe, selected_index, timeframe, analysis_date,
-                         reg_len, wt_n1, wt_n2, levels, wt2_len, wt2_type, calib_settings):
+                         reg_len, wt_n1, wt_n2, levels, wt2_len, wt2_type, calib_settings,
+                         external_progress_slot=None, progress_offset=0, progress_scale=100):
     """Measure the live alpha-health (trailing realized IC) for the active universe.
 
     Harvests a recent lookback panel ending at analysis_date, computes the trailing
@@ -361,7 +361,9 @@ def _ensure_alpha_health(universe, selected_index, timeframe, analysis_date,
     console.detail(f"Alpha-health: {'forced ' if force else ''}measuring — harvesting ~{lookback}d ending {analysis_date}")
     run_timeseries_analysis(universe, selected_index, start, analysis_date,
                             reg_len, wt_n1, wt_n2, levels, timeframe,
-                            wt2_len=wt2_len, wt2_type=wt2_type)
+                            wt2_len=wt2_len, wt2_type=wt2_type,
+                            external_progress_slot=external_progress_slot,
+                            progress_offset=progress_offset, progress_scale=progress_scale)
     ts_data = st.session_state.get("ts_results_df")
 
     trailing_ic, n_dates, t_stat = _measure_trailing_ic(ts_data)
@@ -1572,9 +1574,9 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     Everything else here is DESCRIPTIVE ORDER-FLOW CONTEXT, not the ranking signal: the
     OHLC-proxy inferred delta / CVD / volume profile (ported from `Order Flow.pine`), and
     two LIVE same-bar signal-set overlays surfaced for the trader (compute_signal_sets):
-      • long_cond/short_cond   — Set A · TRIGGERS: thrust exhaustion (clamp.pine),
-                                 bar-level delta divergence and the weekly 80% Rule
-                                 (inferred_delta.pine) — any one fires the set
+      • long_cond/short_cond   — Set A · DELTA DIVERGENCE gated by the thrust mean
+                                 axis: rawBull/rawBear (inferred_delta.pine) with
+                                 vwm on the confirming side of vwm_mean (clamp.pine)
       • *_comp                 — Set B · CLAMP CROSS: VWM thrust re-enters the clamp
                                  band (bull = crosses up through the lower clamp,
                                  bear = crosses down through the upper clamp)
@@ -1588,7 +1590,7 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     """
     reg_len = max(reg_len, 2)
 
-    high, low, close, opn = df['High'], df['Low'], df['Close'], df['Open']
+    high, low, close = df['High'], df['Low'], df['Close']
     vol = df['Volume']
 
     # Institutional Volume Fallback: many index symbols report zero volume. Without it
@@ -1675,7 +1677,7 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
         ma_counts += (close > ema).astype(int)
     df['MA_Alignment'] = ma_counts
 
-    df = compute_signal_sets(df, high, low, close, opn, vol,
+    df = compute_signal_sets(df, high, low, close, vol,
                              bar_delta, cvd, cvd_ma)
 
     # ── REVERSION FEATURES (the actual ranking alpha; see engine.py / ARCHITECTURE.md) ──
@@ -1718,36 +1720,24 @@ def _rma(x: np.ndarray, length: int) -> np.ndarray:
 
 def compute_signal_sets(df: pd.DataFrame,
                         high: pd.Series, low: pd.Series, close: pd.Series,
-                        opn: pd.Series, vol: pd.Series,
+                        vol: pd.Series,
                         bar_delta: pd.Series, cvd: pd.Series, cvd_ma: pd.Series,
                         # Clamp engine (clamp.pine defaults)
                         thr_length: int = 20, thr_stat_len: int = 60,
                         thr_vol_norm_len: int = 50, base_k: float = 2.0,
-                        use_adaptive_k: bool = True,
-                        cool_bars: int = 5) -> pd.DataFrame:
-    """LIVE same-bar signal sets: Set A triggers + Set B clamp-cross.
+                        use_adaptive_k: bool = True) -> pd.DataFrame:
+    """LIVE same-bar signal sets: both fire ON the bar they occur (no delay).
 
-    Both fire ON the bar they occur (no pivot-confirmation delay).
+    Both are built on the clamp.pine thrust engine — vwm = RVOL × %ROC (Relative
+    mode) with an adaptive clamp band (mean ± k·σ, k stretched up to +50% by the
+    volatility regime) and a mean axis (vwm_mean).
 
-    Set A — TRIGGERS (something happened NOW; fires when ANY condition hits):
-      A1 EXHAUSTION (clamp.pine rawExhSell/rawExhBuy, incl. the same-side
-         ``cool_bars`` cooldown — part of the pine signal definition): thrust
-         (vwm = RVOL × %ROC, Relative mode) breached the adaptive clamp
-         (mean ± k·σ, k stretched up to +50% by the volatility regime) last
-         bar, price still pushes in the move's direction, but thrust is
-         absorbed back inside and fading. Selling exhaustion → bullish
-         (long_cond); buying exhaustion → bearish (short_cond). All grades
-         (standard + STRONG) fire.
-      A2 BAR-LEVEL DELTA DIVERGENCE (inferred_delta.pine rawBull/rawBear):
-         bull = close down, inferred delta positive, low at a 3-bar low;
-         bear = close up, delta negative, high at a 3-bar high.
-      A3 80% RULE (inferred_delta.pine): the week opened OUTSIDE the prior
-         week's value area, then two consecutive closes back inside → odds
-         favor a traverse to the far VA edge. Open below prior VAL → long;
-         open above prior VAH → short. Fires once per week. On daily bars the
-         "session" is the ISO week (pine's non-intraday mapping, with the
-         finished week's VA re-binned against its final range: 50 bins, 70%);
-         on weekly-resampled frames it self-disables (pine: sessionable=false).
+    Set A — DELTA DIVERGENCE confirmed by the thrust's side of the mean axis:
+      bull (long_cond)  : rawBull (inferred_delta.pine — close down, inferred
+                          delta positive, low at a 3-bar low) AND vwm > vwm_mean
+                          (net thrust above the mean axis, force turning up).
+      bear (short_cond) : rawBear (close up, delta negative, high at a 3-bar high)
+                          AND vwm < vwm_mean (thrust below the mean axis).
 
     Set B — CLAMP CROSS (VWM thrust re-enters the adaptive clamp band):
       bull (long_cond_comp)  : vwm crosses UP through the LOWER clamp
@@ -1756,9 +1746,7 @@ def compute_signal_sets(df: pd.DataFrame,
       bear (short_cond_comp) : vwm crosses DOWN through the UPPER clamp
                                (vwm ≥ clamp_upper last bar, < it now) — a
                                buying-thrust impact absorbed back inside.
-    Same direction convention as clamp.pine (below-lower = selling = bullish);
-    it is the exhaustion re-entry without the price-still-pushing gate or the
-    cooldown, so it flags every "thrust returned to normal" cross.
+    Same direction convention as clamp.pine (below-lower = selling = bullish).
 
     Writes long_cond/short_cond (Set A), *_comp (Set B), and the flow Condition.
     """
@@ -1768,8 +1756,6 @@ def compute_signal_sets(df: pd.DataFrame,
     high_a  = high.to_numpy(dtype=float)
     low_a   = low.to_numpy(dtype=float)
     close_a = close.to_numpy(dtype=float)
-    opn_a   = opn.to_numpy(dtype=float)
-    vol_a   = vol.to_numpy(dtype=float)
 
     # ══ CLAMP ENGINE (clamp.pine · Relative mode + adaptive k — the defaults) ══
     # ta.atr = RMA of true range; volRank stretches the clamp width in hot tape.
@@ -1791,114 +1777,29 @@ def compute_signal_sets(df: pd.DataFrame,
     clamp_up  = vwm_mean + dyn_k * vwm_std
     clamp_dn  = vwm_mean - dyn_k * vwm_std
 
-    # ── A1 · exhaustion triggers (clamp.pine trigBuy/trigSell + cooldown) ──
+    # Clamp series as numpy (shared by Set A's mean-axis filter and Set B's cross).
     v, v1   = vwm.to_numpy(), vwm.shift(1).to_numpy()
+    vm      = vwm_mean.to_numpy()
     cu, cu1 = clamp_up.to_numpy(), clamp_up.shift(1).to_numpy()
     cd, cd1 = clamp_dn.to_numpy(), clamp_dn.shift(1).to_numpy()
     c1      = pc.to_numpy()
-    with np.errstate(invalid='ignore'):
-        trig_buy  = (v1 > cu1) & (close_a > c1) & (v < cu) & (v < v1)   # buying exh → BEARISH warning
-        trig_sell = (v1 < cd1) & (close_a < c1) & (v > cd) & (v > v1)   # selling exh → BULLISH warning
-    exh_bear = np.zeros(n, dtype=bool)
-    exh_bull = np.zeros(n, dtype=bool)
-    last_buy  = -10 ** 9
-    last_sell = -10 ** 9
-    for i in range(n):
-        if trig_buy[i] and i - last_buy > cool_bars:
-            exh_bear[i] = True
-            last_buy = i
-        if trig_sell[i] and i - last_sell > cool_bars:
-            exh_bull[i] = True
-            last_sell = i
 
-    # ── A2 · bar-level delta divergence (inferred_delta.pine rawBull/rawBear) ──
+    # ── SET A: bar-level delta divergence CONFIRMED by the thrust's side of the mean axis ──
+    #   rawBull (inferred_delta.pine): close down, inferred delta positive, at a 3-bar low.
+    #   rawBear:                       close up,   delta negative,           at a 3-bar high.
+    #   Confirmation (clamp.pine mean axis = vwm_mean): the bull divergence only counts
+    #   when net thrust is ABOVE the mean axis (vwm > vwm_mean, force turning up), the bear
+    #   only when thrust is BELOW it (vwm < vwm_mean, force turning down).
     bd  = bar_delta.to_numpy(dtype=float)
     lo3 = low.rolling(3).min().to_numpy()
     hi3 = high.rolling(3).max().to_numpy()
     with np.errstate(invalid='ignore'):
-        div_bull = (close_a < c1) & (bd > 0) & (low_a <= lo3)
-        div_bear = (close_a > c1) & (bd < 0) & (high_a >= hi3)
-
-    # ── A3 · 80% Rule + prior-week value area (inferred_delta.pine) ──
-    r80_long   = np.zeros(n, dtype=bool)
-    r80_short  = np.zeros(n, dtype=bool)
-    prev_vah_s = np.full(n, np.nan)
-    prev_val_s = np.full(n, np.nan)
-    try:
-        idx_dt = pd.DatetimeIndex(pd.to_datetime(idx))
-        _gaps = (np.diff(idx_dt.values).astype('timedelta64[h]').astype(float)
-                 if n > 1 else np.array([24.0]))
-        sessionable = n > 1 and float(np.median(_gaps)) < 6 * 24.0
-    except (TypeError, ValueError):
-        sessionable = False
-    if sessionable:
-        SESS_BINS = 50
-        iso = idx_dt.isocalendar()
-        week_id = (iso['year'].to_numpy().astype(np.int64) * 100
-                   + iso['week'].to_numpy().astype(np.int64))
-        new_sess = np.zeros(n, dtype=bool)
-        new_sess[1:] = week_id[1:] != week_id[:-1]
-        cur_start = 0
-        prev_vah = prev_val = np.nan
-        r80_dir = 0
-        r80_done = False
-        inside_prev = False
-        for i in range(n):
-            if new_sess[i]:
-                # Finished week = bars [cur_start, i-1]: exact VA re-bin against
-                # the week's FINAL range (inferred_delta.pine session boundary).
-                wh = high_a[cur_start:i]
-                wl = low_a[cur_start:i]
-                cur_sh = np.nanmax(wh) if wh.size else np.nan
-                cur_sl = np.nanmin(wl) if wl.size else np.nan
-                if np.isfinite(cur_sh) and np.isfinite(cur_sl) and cur_sh > cur_sl:
-                    step = (cur_sh - cur_sl) / SESS_BINS
-                    hist = np.zeros(SESS_BINS)
-                    for o in range(cur_start, i):
-                        if not (np.isfinite(low_a[o]) and np.isfinite(high_a[o])):
-                            continue
-                        b0 = int(min(SESS_BINS - 1, max(0.0, np.floor((low_a[o] - cur_sl) / step))))
-                        b1 = int(min(SESS_BINS - 1, max(0.0, np.floor((high_a[o] - cur_sl) / step))))
-                        hist[b0:b1 + 1] += (vol_a[o] if np.isfinite(vol_a[o]) else 0.0) / (b1 - b0 + 1)
-                    tot = hist.sum()
-                    if tot > 0:
-                        p = int(hist.argmax())
-                        acc = hist[p]
-                        la = lb = p
-                        tgt = tot * 0.70
-                        while acc < tgt and (lb > 0 or la < SESS_BINS - 1):
-                            va_ = hist[la + 1] if la < SESS_BINS - 1 else -1.0
-                            vb_ = hist[lb - 1] if lb > 0 else -1.0
-                            if va_ >= vb_:
-                                la += 1
-                                acc += va_
-                            else:
-                                lb -= 1
-                                acc += vb_
-                        prev_vah = cur_sl + (la + 1) * step
-                        prev_val = cur_sl + lb * step
-                cur_start = i
-                r80_done = False
-                r80_dir = 0
-                if np.isfinite(prev_vah) and np.isfinite(prev_val) and np.isfinite(opn_a[i]):
-                    r80_dir = 1 if opn_a[i] < prev_val else (-1 if opn_a[i] > prev_vah else 0)
-            prev_vah_s[i] = prev_vah
-            prev_val_s[i] = prev_val
-            inside = bool(np.isfinite(prev_vah) and np.isfinite(prev_val)
-                          and np.isfinite(close_a[i])
-                          and prev_val <= close_a[i] <= prev_vah)
-            if (r80_dir != 0 and not r80_done and inside and inside_prev
-                    and not new_sess[i]):
-                r80_done = True
-                if r80_dir > 0:
-                    r80_long[i] = True
-                else:
-                    r80_short[i] = True
-            inside_prev = inside
-
-    # ── SET A: any trigger fires ──
-    long_cond  = exh_bull | div_bull | r80_long
-    short_cond = exh_bear | div_bear | r80_short
+        raw_bull = (close_a < c1) & (bd > 0) & (low_a <= lo3)
+        raw_bear = (close_a > c1) & (bd < 0) & (high_a >= hi3)
+        long_cond  = raw_bull & (v > vm)
+        short_cond = raw_bear & (v < vm)
+    long_cond  = np.where(np.isnan(v) | np.isnan(vm), False, long_cond)
+    short_cond = np.where(np.isnan(v) | np.isnan(vm), False, short_cond)
 
     # ── SET B: VWM thrust crossing back INTO the clamp band ──
     #   bull  = vwm crosses UP through the LOWER clamp (was ≤ lower last bar, now
@@ -2207,7 +2108,7 @@ def run_regime_analysis(df):
 def _classify_signal_type(row) -> str:
     """Return priority-ordered signal type for a single bar row (pandas Series).
 
-    Priority: Set A (trigger) > Set B (clamp cross) > flow zone.
+    Priority: Set A (delta divergence) > Set B (clamp cross) > flow zone.
     Matches the vectorised np.select in the harvest path.
     """
     if row.get('long_cond'):       return "A: Long"
@@ -2586,7 +2487,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (5 * progress_scale / 100)
-        progress_bar(progress_slot, pct_val, "Initializing reversion engine", f"Universe: {universe}")
+        progress_bar(progress_slot, pct_val, "Initializing Reversion Engine", f"Universe: {universe}")
     
     console.start_phase("DATA ACQUISITION", 1, 2)
     console.section("Universe Configuration")
@@ -2622,7 +2523,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.section("Market Data Fetch")
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (15 * progress_scale / 100)
-        progress_bar(progress_slot, pct_val, "Fetching Market Data", f"{len(stock_list)} stocks")
+        progress_bar(progress_slot, pct_val, "Fetching Market Data", f"{len(stock_list)} Stocks")
     # Anchor the fetch at analysis_date (not today): the screener snaps to the
     # analysis_date bar for all signal/ranking reads (the only post-date read is the
     # display-only "% Chng Since" column, which uses the few buffer days after it),
@@ -2639,16 +2540,6 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     console.success(f"Successfully downloaded data for {len(data_dict)} stocks")
 
-    # ── Breadth Engine (Paths A/B/C) — built once from the universe panel ──
-    # Same data_dict the screener ranks, so zero new fetch. Universe breadth
-    # drives the Path-A regime tilt + Path-B confidence feature; sector-relative
-    # breadth (India only) drives the Path-C F8 factor. Attached per stock below.
-    _sector_map = breadth.build_sector_map(universe, selected_index, get_index_stock_list)
-    _breadth_panel = breadth.build_breadth_panel(data_dict, sector_map=_sector_map)
-    if _breadth_panel.available:
-        _bnow = _breadth_panel.universe.dropna()
-        console.item("Market Breadth", f"{_bnow.iloc[-1]:.3f}" if len(_bnow) else "n/a")
-        console.item("Sectors mapped", f"{len(_breadth_panel.sector_rel)}" if _sector_map else "0 (Path C off)")
     console.end_phase("DATA ACQUISITION")
 
     console.start_phase("REVERSION RANKING", 2, 2)
@@ -2661,7 +2552,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (20 * progress_scale / 100)
-        progress_bar(progress_slot, pct_val, "Ranking cross-section", f"{len(data_dict)} stocks")
+        progress_bar(progress_slot, pct_val, "Ranking Cross-Section", f"{len(data_dict)} Stocks")
 
     results = []
     _failed_symbols = []
@@ -2683,7 +2574,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         try:
             pct = int(progress_offset + (20 + (i + 1) / len(data_dict) * 75) * progress_scale / 100)
             if show_progress or external_progress_slot is not None:
-                progress_bar(progress_slot, pct, "Analyzing instruments", f"{i + 1}/{len(data_dict)} stocks")
+                progress_bar(progress_slot, pct, "Analyzing Instruments", f"{i + 1} / {len(data_dict)} Stocks")
 
             _cached = _analyzed_cache_get(ticker, _cache_sig)
             if _cached is not None:
@@ -2707,10 +2598,6 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 df = run_full_analysis(df, reg_len, wt_n1, wt_n2, obLevel1, obLevel2, osLevel1, osLevel2,
                                        wt2_len=wt2_len, wt2_type=wt2_type)
                 df = run_regime_analysis(df)        # adds HMM_Bull/Bear, Vol_Regime, Change_Point, Regime_Confidence
-
-            # Breadth columns (Universe_Breadth / Breadth_Momentum / Sector_Rel_Breadth).
-            # Re-attached on cache hits too so the columns track this run's panel.
-            df = _breadth_panel.attach(df, ticker)
 
             # Sample at analysis_date — snap to the correct historical bar.
             # Weekly resampling re-labels bars to week-start Mondays, so an exact
@@ -2744,8 +2631,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             _win_cols = ['HMM_Bull', 'HMM_Bear', 'Vol_Regime', 'Regime_Confidence',
                          'Change_Point', 'long_cond', 'short_cond',
                          'long_cond_comp', 'short_cond_comp',
-                         'F1_PriceMom', 'CVD', 'CVD_Slope', 'Delta_Z', 'Close',
-                         'Universe_Breadth']
+                         'F1_PriceMom', 'CVD', 'CVD_Slope', 'Delta_Z', 'Close']
             _win = df.iloc[max(0, idx_pos - 4): idx_pos + 1]
             intel_windows[ticker] = _win[[c for c in _win_cols if c in _win.columns]].copy()
             # Recent daily-return volatility — the asset-agnostic scale for the
@@ -2810,11 +2696,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "_rev_dist10":   last_row.get('_rev_dist10'),
                 "_rev_rngpos":   last_row.get('_rev_rngpos'),
                 "ATR_Pct":       last_row.get('ATR_Pct'),
-                # Breadth (Paths A/B/C) — market-wide tape + sector participation.
-                "Universe_Breadth":   float(last_row.get('Universe_Breadth', breadth.BREADTH_NEUTRAL)),
-                "Breadth_Momentum":   float(last_row.get('Breadth_Momentum', 0.0)),
-                "Sector_Rel_Breadth": float(last_row.get('Sector_Rel_Breadth', 0.0)),
-                # Set A: Momentum — legacy L_/S_ alias of LA_/SA_ below
+                # Set A · legacy L_/S_ alias of LA_/SA_ below
                 # (kept for Range Study compat; reads the same long_cond column).
                 "L_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
                 "L_1d": "●" if sample_range.iloc[-2]['long_cond'] else "—",
@@ -2827,25 +2709,25 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "S_2d": "●" if sample_range.iloc[-3]['short_cond'] else "—",
                 "S_3d": "●" if sample_range.iloc[-4]['short_cond'] else "—",
                 "S_5d": "●" if sample_range.tail(5)['short_cond'].any() else "—",
-                # Set A: Momentum — Historical Long Signals
+                # Set A · Delta Divergence — Historical Long Signals
                 "LA_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
                 "LA_1d": "●" if sample_range.iloc[-2]['long_cond'] else "—",
                 "LA_2d": "●" if sample_range.iloc[-3]['long_cond'] else "—",
                 "LA_3d": "●" if sample_range.iloc[-4]['long_cond'] else "—",
                 "LA_5d": "●" if sample_range.tail(5)['long_cond'].any() else "—",
-                # Set A: Momentum — Historical Short Signals
+                # Set A · Delta Divergence — Historical Short Signals
                 "SA_Today": "●" if sample_range.iloc[-1]['short_cond'] else "—",
                 "SA_1d": "●" if sample_range.iloc[-2]['short_cond'] else "—",
                 "SA_2d": "●" if sample_range.iloc[-3]['short_cond'] else "—",
                 "SA_3d": "●" if sample_range.iloc[-4]['short_cond'] else "—",
                 "SA_5d": "●" if sample_range.tail(5)['short_cond'].any() else "—",
-                # Set B: Crossover — Historical Long Signals
+                # Set B · Clamp Cross — Historical Long Signals
                 "LB_Today": "●" if sample_range.iloc[-1]['long_cond_comp'] else "—",
                 "LB_1d": "●" if sample_range.iloc[-2]['long_cond_comp'] else "—",
                 "LB_2d": "●" if sample_range.iloc[-3]['long_cond_comp'] else "—",
                 "LB_3d": "●" if sample_range.iloc[-4]['long_cond_comp'] else "—",
                 "LB_5d": "●" if sample_range.tail(5)['long_cond_comp'].any() else "—",
-                # Set B: Crossover — Historical Short Signals
+                # Set B · Clamp Cross — Historical Short Signals
                 "SB_Today": "●" if sample_range.iloc[-1]['short_cond_comp'] else "—",
                 "SB_1d": "●" if sample_range.iloc[-2]['short_cond_comp'] else "—",
                 "SB_2d": "●" if sample_range.iloc[-3]['short_cond_comp'] else "—",
@@ -2894,8 +2776,11 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.line('═', 70)
     
     if show_progress or external_progress_slot is not None:
-        pct_val = progress_offset + (95 * progress_scale / 100) if external_progress_slot else 100
-        progress_bar(progress_slot, pct_val, "Analysis Complete", f"{len(results)} stocks analyzed")
+        # If this run owns the tail of the bar (offset+scale reaches 100), show a
+        # clean 100%; otherwise cap at 95% of the slice for a following phase.
+        _tail = (progress_offset + progress_scale) >= 100
+        pct_val = 100 if (external_progress_slot is None or _tail) else int(progress_offset + 95 * progress_scale / 100)
+        progress_bar(progress_slot, pct_val, "Analysis Complete", f"{len(results)} Stocks Analyzed")
         if show_progress and external_progress_slot is None:
             progress_slot.empty()
 
@@ -2937,7 +2822,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     return results_df
 
 
-def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe, wt2_len=20, wt2_type="ALMA"):
+def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe, wt2_len=20, wt2_type="ALMA",
+                            external_progress_slot=None, progress_offset=0, progress_scale=100):
     """Compute the per-(date, symbol) factor frame for a date range.
 
     Pure compute path: fetches history, runs full / regime / divergence analyses on
@@ -2945,9 +2831,17 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     ts_meta in ``st.session_state``. **Does not render UI.** The dashboard is
     rendered separately by ``render_timeseries_dashboard()`` so it survives sidebar
     interactions / reruns.
+
+    When ``external_progress_slot`` is supplied (the Single-Date alpha-health
+    pre-pass), progress renders into that shared bar over
+    [offset, offset+scale], so the whole run shows ONE continuous progress bar
+    instead of a separate harvest bar followed by the screener bar.
     """
-    progress_slot = st.empty()
-    progress_bar(progress_slot, 5, "Fetching Historical Depth", f"Date range: {start_date} to {end_date}")
+    _own_slot = external_progress_slot is None
+    progress_slot = st.empty() if _own_slot else external_progress_slot
+    def _p(pct, label, sub):
+        progress_bar(progress_slot, int(progress_offset + pct * progress_scale / 100), label, sub)
+    _p(5, "Fetching Historical Depth", f"{start_date} to {end_date}")
 
     console.start_phase("HISTORICAL ACQUISITION", 1, 2)
     console.section("Range Configuration")
@@ -2993,16 +2887,11 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
     console.success(f"Downloaded depth for {len(data_dict)} entities")
 
-    # ── Breadth Engine (Paths A/B/C) — identical construction to the live
-    # screener so the harvested training features match apply bar-for-bar. ──
-    _sector_map = breadth.build_sector_map(universe, selected_index, get_index_stock_list)
-    _breadth_panel = breadth.build_breadth_panel(data_dict, sector_map=_sector_map)
-
     # Start Unified Harvesting Phase
     console.start_phase("EDGE MEASUREMENT", 2, 2)
     start_harvest = time.time()
 
-    progress_bar(progress_slot, 15, "Measuring historical edge", f"{len(data_dict)} stocks")
+    _p(15, "Measuring Live Edge", f"{len(data_dict)} Stocks")
     all_results = []
 
     # Analyzed-frame cache for this run — lets the screener that follows skip
@@ -3018,15 +2907,14 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
             remaining = avg_time * (len(data_dict) - (i + 1))
             eta_str = time.strftime("%M:%S", time.gmtime(remaining))
 
-            # Global progress scale: 15% -> 85% for harvesting
-            pct = int(15 + (i + 1) / len(data_dict) * 70)
-            progress_bar(progress_slot, pct, "Edge-measurement harvest", f"Processing {i + 1}/{len(data_dict)} Symbols | ETA: {eta_str}")
+            # Local 15% -> 85% band for the per-symbol harvest loop.
+            pct = 15 + (i + 1) / len(data_dict) * 70
+            _p(pct, "Measuring Live Edge", f"{i + 1} / {len(data_dict)} Symbols · ETA {eta_str}")
             if timeframe == "Weekly":
                 df = resample_to_weekly(df)
             df = run_full_analysis(df, reg_len, wt_n1, wt_n2, *levels,
                                    wt2_len=wt2_len, wt2_type=wt2_type)
             df = run_regime_analysis(df)
-            df = _breadth_panel.attach(df, ticker)   # breadth columns (Paths A/B/C)
             # Cache the analyzed frame so run_screener_analysis can reuse it instead
             # of recomputing. Stored by reference — the harvest-only columns appended
             # below (Ret_*, SignalType) are harmless extras; the screener copies on read.
@@ -3036,7 +2924,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
             for h in eng.HOLD_HORIZONS:
                 df[f'Ret_{h}b'] = df['Close'].shift(-h) / df['Close'] - 1
 
-            # Vectorized SignalType per bar (priority: A trigger > B confluence > Zone)
+            # Vectorized SignalType per bar (priority: A divergence > B clamp-cross > Zone)
             df['SignalType'] = np.select(
                 [
                     df['long_cond'],      df['short_cond'],
@@ -3066,7 +2954,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'Zone': row['Condition'],
                     'LongSignal': row['long_cond'],
                     'ShortSignal': row['short_cond'],
-                    # Set A (triangle) + Set B (diamond) booleans — Layer-2 features
+                    # Set A + Set B live-signal booleans (delta-divergence / clamp-cross)
                     'long_cond': row['long_cond'],
                     'short_cond': row['short_cond'],
                     'long_cond_comp': row['long_cond_comp'],
@@ -3098,11 +2986,6 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     '_rev_rngpos': row.get('_rev_rngpos'),
                     'ATR_Pct':     row.get('ATR_Pct'),
                     'Close':       row.get('Close'),
-                    # Breadth (Paths A/B/C) — must mirror the live screener row so
-                    # the tuner (F8) and Layer-2 (breadth_align) train on apply-identical features.
-                    'Universe_Breadth': row.get('Universe_Breadth', breadth.BREADTH_NEUTRAL),
-                    'Breadth_Momentum': row.get('Breadth_Momentum', 0.0),
-                    'Sector_Rel_Breadth': row.get('Sector_Rel_Breadth', 0.0),
                 })
             
         except Exception as e:
@@ -3112,8 +2995,9 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     console.success(f"Successfully processed {len(data_dict)} symbols for historical depth")
     console.end_phase("EDGE MEASUREMENT")
 
-    progress_slot.empty()
     if not all_results:
+        if _own_slot:
+            progress_slot.empty()
         st.error("No results generated for the selected timeframe.")
         return
 
@@ -3150,7 +3034,10 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         "timeframe":      timeframe,
     }
 
-    progress_slot.empty()
+    # Only clear our OWN bar. When sharing the Single-Date bar, the screener that
+    # follows keeps rendering into it (the 40→100% phase).
+    if _own_slot:
+        progress_slot.empty()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3473,8 +3360,8 @@ def render_timeseries_dashboard():
             display_ts, width='stretch', hide_index=True,
             column_config={
                 'Date':         st.column_config.TextColumn(help="Trading day (YYYY-MM-DD)."),
-                'Long Sig':     st.column_config.NumberColumn(help="Daily count of symbols firing a Set A bullish trigger (selling exhaustion / bullish delta divergence / 80% rule up)."),
-                'Short Sig':    st.column_config.NumberColumn(help="Daily count of symbols firing a Set A bearish trigger (buying exhaustion / bearish delta divergence / 80% rule down)."),
+                'Long Sig':     st.column_config.NumberColumn(help="Daily count of symbols firing a Set A bullish signal (delta divergence with thrust above the mean axis)."),
+                'Short Sig':    st.column_config.NumberColumn(help="Daily count of symbols firing a Set A bearish signal (delta divergence with thrust below the mean axis)."),
                 'Avg Signal':   st.column_config.NumberColumn(help="Cross-sectional mean of Delta_Z (signed delta z-score, clipped ±5) on this day. The daily mean concentrates near 0; ±0.25 is already a strongly one-sided tape."),
                 'Distribution %': st.column_config.NumberColumn(help="Percent of universe in Distribution / Distribution+ flow zones (net selling flow)."),
                 'Accumulation %': st.column_config.NumberColumn(help="Percent of universe in Accumulation / Accumulation+ flow zones (net buying flow)."),
@@ -3724,10 +3611,13 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             _corr_levels = (80, 40, -80, -40)
             _corr_wt2_len, _corr_wt2_type = 20, "ALMA"
             _calib = st.session_state.get("_calib_settings") or {}
+            # Share the correlation bar: alpha-health harvest (if any) → 60-75%,
+            # screener → 75-90%. No separate harvest bar.
             _ensure_alpha_health(
                 universe, selected_index, timeframe, analysis_date,
                 _corr_reg_len, _corr_n1, _corr_n2, _corr_levels,
                 _corr_wt2_len, _corr_wt2_type, _calib,
+                external_progress_slot=progress_slot, progress_offset=60, progress_scale=15,
             )
             wrci_results = run_screener_analysis(
                 universe, selected_index, analysis_date,
@@ -4207,7 +4097,7 @@ def render_correlation_results(corr_data: dict) -> None:
     with tab2:
         ui.render_section_header(
             "Trade Intelligence",
-            "Confluence: Correlation × Momentum Signals",
+            "Confluence: Correlation × Reversion Rank",
             icon="zap",
             accent="cyan"
         )
@@ -4661,7 +4551,7 @@ def _fire_bar_metrics(window, side: str, condition_set: str, offset: int, row) -
 def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'A', timeframe: str = 'Daily') -> dict:
     """Bucket signals by age (Today, 1d, 2d, 3d, 5d) with stats for timeline display.
 
-    condition_set: 'A' = Momentum (LA_/SA_), 'B' = Crossover (LB_/SB_)
+    condition_set: 'A' = Delta Divergence (LA_/SA_), 'B' = Clamp Cross (LB_/SB_)
     timeframe: 'Daily' or 'Weekly' — determines age label names
     """
     if condition_set == 'A':
@@ -5306,20 +5196,18 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
 
 
 _SIGNAL_TYPE_REFERENCE = [
-    ("Set A · Triggers",   "amber",
-     "Live, same-bar timing events — any one fires the set. (1) Thrust EXHAUSTION "
-     "(clamp.pine): momentum breached its adaptive clamp, price still pushes, but thrust is "
-     "absorbed back inside — a selling climax is bullish, a buying climax bearish. "
-     "(2) Bar-level DELTA DIVERGENCE (inferred_delta.pine): close down on positive inferred "
-     "delta at a 3-bar low (bull) / close up on negative delta at a 3-bar high (bear). "
-     "(3) The weekly 80% RULE: opened outside the prior week's value area, two closes back "
-     "inside — odds favor a traverse to the far VA edge."),
+    ("Set A · Delta Divergence",   "amber",
+     "A bar-level inferred-delta divergence (inferred_delta.pine) confirmed by the thrust's "
+     "side of its mean axis (clamp.pine). Bullish: close down on POSITIVE inferred delta at a "
+     "3-bar low, while net thrust (VWM) sits ABOVE the mean axis — sellers pushed price down "
+     "but flow is turning up. Bearish: close up on NEGATIVE delta at a 3-bar high, with thrust "
+     "BELOW the mean axis. The mean-axis gate keeps only divergences the force is confirming."),
     ("Set B · Clamp Cross", "violet",
      "VWM thrust re-entering its adaptive clamp band (clamp.pine). Bullish when thrust crosses "
      "UP through the LOWER clamp — a selling-pressure impact being absorbed back to normal; "
      "bearish when it crosses DOWN through the UPPER clamp — a buying-pressure impact absorbed. "
-     "It marks the moment force returns inside the band, the cleaner cousin of the Set A "
-     "exhaustion trigger. Strongest reads pair a Set A trigger with a Set B cross same-direction."),
+     "It marks the moment force returns inside the band. Strongest reads pair a Set A "
+     "divergence with a Set B cross in the same direction."),
 ]
 
 
@@ -5440,7 +5328,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     # ── Signal Type Reference ─────────────────────────────────────────────
     ui.render_section_header(
         "Signal Type Reference",
-        "Three signal classes used across screens — A · B · C",
+        "The two order-flow signal sets — Set A · Set B",
         icon="info", accent="amber",
     )
     # One column per reference card so the three cards widen equally and fill the
@@ -5555,17 +5443,26 @@ def main():
                 "Universe": universe, "Index": selected_index, "Timeframe": timeframe,
                 "Target Date": analysis_date, "Mode": mode,
             })
-            # Alpha-health, in one pass: reuse today's reading or harvest+measure inline,
-            # so the screen below scales conviction by the live realized edge.
+            # ONE progress bar for the whole run. If a fresh edge measurement is
+            # needed it harvests into the first 40% ("Measuring Live Edge"), then the
+            # screener renders 40→100% ("Screening") into the SAME bar — no second bar.
+            # When the reading is cached (no harvest), the screener owns the full 0→100%.
+            _run_slot = st.empty()
             _calib_status = _ensure_alpha_health(
                 universe, selected_index, timeframe, analysis_date,
                 reg_len, wt_n1, wt_n2, levels, wt2_len, wt2_type, calib_settings,
+                external_progress_slot=_run_slot, progress_offset=0, progress_scale=40,
             )
+            _harvested = _calib_status in ("measured", "harvest_empty")
             results_df = run_screener_analysis(
                 universe, selected_index, analysis_date,
                 reg_len, wt_n1, wt_n2, levels, timeframe,
                 wt2_len=wt2_len, wt2_type=wt2_type,
+                external_progress_slot=_run_slot,
+                progress_offset=(40 if _harvested else 0),
+                progress_scale=(60 if _harvested else 100),
             )
+            _run_slot.empty()
             if results_df is None:
                 st.session_state["run_error"] = f"Failed to fetch constituents for '{selected_index}'."
             st.session_state["results_df"] = results_df
@@ -5732,7 +5629,7 @@ def main():
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
                         f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
-                        "Triggers (A) · Clamp Cross (B)",
+                        "Delta Divergence (A) · Clamp Cross (B)",
                         icon="zap",
                         accent="amber"
                     )

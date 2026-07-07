@@ -7,6 +7,44 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v4.0.4] · 2026-07-07
+### Set A = Mean-Axis-Confirmed Divergence · Unified Progress Bar · UI Polish
+
+**Changed — Set A is now a delta divergence confirmed by the thrust's side of the mean axis.**
+Dropped the three-way trigger (exhaustion + delta divergence + weekly 80% rule) in favor of a
+single, cleaner condition: **bullish = rawBull** (inferred_delta.pine — close down on positive
+inferred delta at a 3-bar low) **AND vwm > vwm_mean** (net thrust above the clamp.pine mean
+axis, force turning up); **bearish = rawBear AND vwm < vwm_mean**. The mean-axis gate keeps
+only divergences the thrust is confirming. Fires ~1.5% of bars per side; verified bit-identical
+to an independent inline reference over 40 seeds. Removed the now-dead exhaustion, cooldown, and
+80%-rule / prior-week-VA machinery (~90 lines) and the `cool_bars` param; `compute_signal_sets`
+no longer takes `opn`. Cache tag `rev4`→`rev5`.
+
+**Fixed — one continuous progress bar per run.** A Single-Date run previously showed TWO
+sequential bars: the alpha-health harvest ran its own 0→100% bar, then the screener ran a second
+0→100% bar. Now the harvest renders into the first 40% ("Measuring Live Edge") and the screener
+into 40→100% ("Screening") of a SINGLE shared bar (cached-edge runs give the screener the full
+0→100%). Same fix applied to Correlation mode (the harvest was spawning a second bar mid-run).
+`run_timeseries_analysis` / `_ensure_alpha_health` gained `external_progress_slot` + offset/scale
+so a caller can own the bar. All progress headers are now Title Case.
+
+**UI/UX polish (no fidelity or thesis change).**
+- **Motion grammar unified.** Replaced all 28 `transition: all` declarations — which animated
+  every property including layout (width/padding), causing reflow jank and unintended tweens —
+  with an explicit compositor-safe property set (`--motion-props`) on one easing curve
+  (`--ease`) and three duration tiers (`--dur-fast/base/slow`). Visible animations unchanged.
+- **Keyboard focus rings.** Added `:focus-visible` outlines on buttons, tabs, radios,
+  checkboxes, and expanders (previously no visible keyboard focus at all). Shows only for
+  keyboard nav, never on mouse click — resting/pointer visuals unchanged.
+- **Ultra-wide cap.** `.block-container` max-width is now `min(98%, 2100px)` so data tables stop
+  sprawling edge-to-edge on ultra-wide monitors; typical displays (≤~2140px) are unaffected.
+
+**Docs / copy.** Purged remaining stale signal vocabulary (Momentum/Crossover/triangle-diamond
+comments, "three signal classes A·B·C", "Correlation × Momentum" confluence subtitle) to reflect
+the Delta-Divergence (A) / Clamp-Cross (B) sets.
+
+---
+
 ## [v4.0.3] · 2026-07-07
 ### Set B = Clamp Cross · Honest Edge Badge
 
