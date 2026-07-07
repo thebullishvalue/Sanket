@@ -7,6 +7,24 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v4.0.5] · 2026-07-07
+### Removed the Dead Breadth Engine
+
+**Removed `breadth_engine.py`.** It ran on every screener and harvest — fetching NSE sector-index
+membership (a network round-trip per sector) and attaching three columns (`Universe_Breadth`,
+`Breadth_Momentum`, `Sector_Rel_Breadth`) to every symbol — but **nothing consumed its output**.
+The ranking engine (`engine.py`) never referenced any breadth column, and no table or chart
+displayed them; the columns were carried into the results/harvest dicts and dropped. Its old
+consumers — the "Path-A/B/C" tuner factor (F8) and the Layer-2 `breadth_align` feature — were
+deleted with the WRCI/intelligence stack in v4.0.0, orphaning the computation. Removed the module,
+its import, both build/attach call sites, the three columns from the live + harvest row dicts, the
+`Universe_Breadth` entry in the fire-bar feature window, and the market-breadth console line.
+No behavior change (nothing read it); saves a per-run sector-map fetch and per-symbol attach. The
+flow-zone "Distribution / Accumulation Breadth" charts are unrelated (they count the `Condition`
+column) and are unaffected.
+
+---
+
 ## [v4.0.4] · 2026-07-07
 ### Set A = Mean-Axis-Confirmed Divergence · Unified Progress Bar · UI Polish
 

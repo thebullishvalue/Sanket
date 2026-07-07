@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Cross-Sectional Reversion Ranker · Obsidian Quant · Pragyam Family · `v4.0.4`
+### Cross-Sectional Reversion Ranker · Obsidian Quant · Pragyam Family · `v4.0.5`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -152,7 +152,6 @@ Per name, on each run:
 ```
 sanket.py            ← Streamlit entry point: UI, data fetch, per-symbol features, screen routing
 engine.py            ← THE ranking engine: reversion score + conviction + alpha-health monitor
-breadth_engine.py    ← Market & sector advance/decline breadth (regime/risk context)
 logger.py            ← Structured terminal logging (ANSI color, phase timing, run IDs)
 ARCHITECTURE.md      ← Thesis, validation, and design rationale (read this)
 ui/
@@ -262,4 +261,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v4.0.4 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v4.0.5 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
