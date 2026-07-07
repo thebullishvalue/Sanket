@@ -77,7 +77,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v4.0.1"
+VERSION = "v4.0.2"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -187,10 +187,11 @@ def _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
     """Identity of an analyzed frame — everything that changes its computed values.
 
     The engine tag invalidates frames cached under a previous signal/feature engine:
-    'rev1' = reversion features + structural-divergence sets; 'rev2' = reversion
-    features + LIVE trigger/confluence sets (exhaustion, delta divergence, 80% rule).
+    'rev1' = reversion features + structural-divergence sets; 'rev2' = LIVE
+    trigger/confluence sets; 'rev3' = same, with the selective (non-coin-flip)
+    Set B filters + ≥3-of-6 gate.
     """
-    return ("rev2", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
+    return ("rev3", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
             tuple(levels), int(wt2_len), str(wt2_type), end_date)
 
 
@@ -1707,8 +1708,11 @@ def compute_signal_sets(df: pd.DataFrame,
                         sq_len: int = 100, sq_pct: float = 15.0,
                         # Absorption (inferred_delta.pine rawAbsorb)
                         abs_ratio: float = 1.8, abs_range: float = 0.6,
-                        # Confluence gate: minimum agreeing Set B context filters
-                        conf_min: int = 2) -> pd.DataFrame:
+                        # Set B selectivity: thrust must clear ±thr_z_min σ (not just
+                        # the sign), CVD must deviate ≥cvd_dev_k band-widths (not a 50/50
+                        # OR), RVOL must clear rvol_min. Gate = ≥conf_min of 6.
+                        thr_z_min: float = 0.5, cvd_dev_k: float = 0.5,
+                        rvol_min: float = 1.3, conf_min: int = 3) -> pd.DataFrame:
     """LIVE same-bar signal sets: Set A triggers + Set B confluence filters.
 
     Replaces the delayed pivot-confirmed structural divergences (which fired
@@ -1734,15 +1738,20 @@ def compute_signal_sets(df: pd.DataFrame,
          finished week's VA re-binned against its final range: 50 bins, 70%);
          on weekly-resampled frames it self-disables (pine: sessionable=false).
 
-    Set B — CONFLUENCE (context agrees; fires when ≥ ``conf_min`` of 6 align):
-      B1 thrust has room to exhaust     (bull: thrustZ < 0 · bear: thrustZ > 0)
-      B2 clamp squeeze active/released  (width percentile ≤ ``sq_pct``)
-      B3 price at/beyond the value edge (bull: close ≤ rolling VAL or prior-week
-                                         VAL · bear: ≥ VAH or prior-week VAH)
+    Set B — CONFLUENCE (context agrees; fires when ≥ ``conf_min`` of 6 align).
+    Each filter is deliberately SELECTIVE, not a coin-flip — a mere thrust *sign*,
+    a 50/50 CVD OR, or RVOL>1 each fire ~50-66% of bars, so an unselective ≥2-of-6
+    gate lit up ~73% of the universe (noise, not confluence). The signed/threshold
+    forms below each fire well under half the time:
+      B1 thrust meaningfully one-sided   (bull: thrustZ < −``thr_z_min`` · bear: > +``thr_z_min``)
+      B2 clamp squeeze active/released   (width percentile ≤ ``sq_pct``)
+      B3 price at/beyond the value edge  (bull: close ≤ rolling VAL or prior-week
+                                          VAL · bear: ≥ VAH or prior-week VAH)
       B4 one-sided absorption against the move (relDelta > ``abs_ratio``,
-                                         relRange < ``abs_range``, delta signed)
-      B5 CVD agrees                     (bull: cvd > cvd_ma or slope > 0 · mirrored)
-      B6 real participation             (RVOL > 1.0)
+                                          relRange < ``abs_range``, delta signed)
+      B5 CVD deviates ≥``cvd_dev_k`` bands from its mean, in-direction
+                                         (bull: cvd − cvd_ma > k·band · bear: < −k·band)
+      B6 real participation              (RVOL > ``rvol_min``)
 
     Writes long_cond/short_cond (Set A), *_comp (Set B), and the flow Condition.
     """
@@ -1905,20 +1914,27 @@ def compute_signal_sets(df: pd.DataFrame,
     cvsl_a  = cvd_slope.to_numpy(dtype=float)
     vah_a   = vah.to_numpy(dtype=float)
     val_a   = val.to_numpy(dtype=float)
+    # B5 band: how far CVD sits from its 20-bar mean, scaled by the typical
+    # deviation (same band the flow `Condition` column uses). A signed, threshold
+    # test — not the old 50/50 "cvd>ma OR slope>0" that fired ~66% of bars.
+    cvd_dev  = cvd - cvd_ma
+    cvd_band = cvd_dev.abs().rolling(20).mean().clip(lower=1e-9)
+    cvd_dev_a  = cvd_dev.to_numpy(dtype=float)
+    cvd_band_a = cvd_band.to_numpy(dtype=float)
     with np.errstate(invalid='ignore'):
         absorb = (rd > abs_ratio) & (rr < abs_range)
-        bull_ct = ((tz < 0).astype(int)                                          # B1
+        bull_ct = ((tz < -thr_z_min).astype(int)                                 # B1
                    + b2.astype(int)                                              # B2
                    + ((close_a <= val_a) | (close_a <= prev_val_s)).astype(int)  # B3
                    + (absorb & (bd < 0)).astype(int)                             # B4
-                   + ((cvd_a > cvdma_a) | (cvsl_a > 0)).astype(int)              # B5
-                   + (rv > 1.0).astype(int))                                     # B6
-        bear_ct = ((tz > 0).astype(int)
+                   + (cvd_dev_a >  cvd_dev_k * cvd_band_a).astype(int)           # B5
+                   + (rv > rvol_min).astype(int))                               # B6
+        bear_ct = ((tz > thr_z_min).astype(int)
                    + b2.astype(int)
                    + ((close_a >= vah_a) | (close_a >= prev_vah_s)).astype(int)
                    + (absorb & (bd > 0)).astype(int)
-                   + ((cvd_a < cvdma_a) | (cvsl_a < 0)).astype(int)
-                   + (rv > 1.0).astype(int))
+                   + (cvd_dev_a < -cvd_dev_k * cvd_band_a).astype(int)
+                   + (rv > rvol_min).astype(int))
     long_cond_comp  = bull_ct >= conf_min
     short_cond_comp = bear_ct >= conf_min
 
@@ -5321,10 +5337,11 @@ _SIGNAL_TYPE_REFERENCE = [
      "(3) The weekly 80% RULE: opened outside the prior week's value area, two closes back "
      "inside — odds favor a traverse to the far VA edge."),
     ("Set B · Confluence", "violet",
-     "Context filters — fires when ≥2 of 6 agree with a direction: thrust sign has room to "
-     "exhaust · clamp squeeze active/just released · price at/beyond the value-area edge · "
-     "one-sided absorption against the move · CVD agreement · real participation (RVOL > 1). "
-     "Strongest reads pair a Set A trigger with Set B confluence in the same direction."),
+     "Context filters — fires when ≥3 of 6 SELECTIVE conditions agree with a direction: thrust "
+     "meaningfully one-sided (>½σ) · clamp squeeze active/just released · price at/beyond the "
+     "value-area edge · one-sided absorption against the move · CVD deviating from its mean · "
+     "strong participation (RVOL > 1.3). Each is deliberately selective so Set B marks genuine "
+     "context, not most of the tape. Strongest reads pair a Set A trigger with Set B confluence."),
 ]
 
 
