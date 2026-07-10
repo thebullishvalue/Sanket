@@ -7,6 +7,17 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v4.0.6] · 2026-07-11
+### TATTVA — PV Momentum Clamp v2 Synchronization
+
+**Updated the clamp engine in `sanket.py`** to mathematically sync 1-to-1 with the new `clamp.pine` v2 script.
+- **Net Fractional Volume**: Migrated from gross relative volume to pseudo order flow, filtering non-directional churn.
+- **Discrete Markov Volatility States**: Swapped the linear ATR multiplier with a state machine (High, Normal, Low) based on ATR moving averages to stabilize the clamp multiplier across varying macro regimes.
+- **Asymmetric MAD Envelopes (Causal Robust Normalization)**: Completely replaced standard deviation with upside and downside Median Absolute Deviations (MAD), applying a 1.4826 consistency constant. This maps the leverage effect, ensuring wider lower clamps during panic selling and tighter upper clamps during bullish trends.
+- **Mean Axis**: Validated that `vwm_median` is used for the axis alignment filter on both `Set A` and `Set B` signals.
+
+---
+
 ## [v4.0.5] · 2026-07-07
 ### Removed the Dead Breadth Engine
 
