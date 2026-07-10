@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Cross-Sectional Reversion Ranker · Obsidian Quant · Pragyam Family · `v4.0.5`
+### Cross-Sectional Reversion Ranker · Obsidian Quant · Pragyam Family · `v4.0.6`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
