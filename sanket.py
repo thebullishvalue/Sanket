@@ -76,7 +76,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v4.0.6"
+VERSION = "v4.0.5"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -1766,93 +1766,29 @@ def compute_signal_sets(df: pd.DataFrame,
     low_a   = low.to_numpy(dtype=float)
     close_a = close.to_numpy(dtype=float)
 
-    # ══ CLAMP ENGINE v2 (clamp.pine · Net Fractional Volume + Asymmetric MAD + Markov States) ══
+    # ══ CLAMP ENGINE (clamp.pine · Relative mode + adaptive k — the defaults) ══
+    # ta.atr = RMA of true range; volRank stretches the clamp width in hot tape.
     pc  = close.shift(1)
     tr  = pd.concat([(high - low), (high - pc).abs(), (low - pc).abs()], axis=1).max(axis=1)
     atr_c  = pd.Series(_rma(tr.to_numpy(dtype=float), 14), index=idx)
     atr_ma = atr_c.rolling(50).mean()
+    vol_rank = ((atr_c - atr_ma * 0.7) / (atr_ma * 0.8).clip(lower=1e-10)).clip(0.0, 1.0)
+    dyn_k = base_k * (1.0 + 0.5 * vol_rank) if use_adaptive_k else pd.Series(base_k, index=idx)
 
-    # Discrete Markov Volatility States
-    atr_ratio = (atr_c / atr_ma).to_numpy()
-    vol_state = np.zeros(n, dtype=int)
-    curr_state = 0
-    for i in range(n):
-        r = atr_ratio[i]
-        if np.isnan(r):
-            pass
-        elif r > 1.3:
-            curr_state = 1
-        elif curr_state == 1 and r < 1.05:
-            curr_state = 0
-        elif r < 0.75:
-            curr_state = -1
-        elif curr_state == -1 and r > 0.9:
-            curr_state = 0
-        vol_state[i] = curr_state
-
-    if use_adaptive_k:
-        dyn_k_vals = np.where(vol_state == 1, base_k * 1.3,
-                     np.where(vol_state == -1, base_k * 0.9, base_k))
-    else:
-        dyn_k_vals = np.full(n, base_k)
-    dyn_k = pd.Series(dyn_k_vals, index=idx)
-
-    # Net Fractional Volume (Pseudo Order Flow)
-    chg       = close - close.shift(thr_length)
+    chg       = close - close.shift(thr_length)                              # ta.change
     close_lag = close.shift(thr_length)
     velocity  = pd.Series(np.where(close_lag.to_numpy() != 0,
                                    (chg / close_lag * 100.0), 0.0), index=idx)
-    
-    h_l_a = high_a - low_a
-    vol_a = vol.to_numpy(dtype=float)
-    v_buy = vol_a * np.where(h_l_a != 0, (close_a - low_a) / h_l_a, 0.0)
-    v_sell = vol_a * np.where(h_l_a != 0, (high_a - close_a) / h_l_a, 0.0)
-    netDirVol = pd.Series(np.abs(v_buy - v_sell), index=idx)
-    netDirVolSMA = netDirVol.rolling(thr_vol_norm_len).mean()
-    rNetVol = netDirVol / netDirVolSMA.clip(lower=1e-10)
-    
-    # mass = Net Fractional Volume
-    vwm = rNetVol * velocity
-    
-    # Causal Robust Normalization (Asymmetric MAD Envelopes)
-    vwm_median = vwm.rolling(thr_stat_len).median()
-    vwm_a = vwm.to_numpy()
-    vwm_med_a = vwm_median.to_numpy()
-    
-    mad_up = np.zeros(n)
-    mad_dn = np.zeros(n)
-    
-    for i in range(n):
-        if i < thr_stat_len - 1 or np.isnan(vwm_med_a[i]):
-            mad_up[i] = 0.0
-            mad_dn[i] = 0.0
-            continue
-        
-        start_idx = max(0, i - thr_stat_len + 1)
-        window = vwm_a[start_idx : i + 1]
-        med = vwm_med_a[i]
-        
-        up_devs = []
-        dn_devs = []
-        for val in window:
-            if val > med:
-                up_devs.append(abs(val - med))
-            elif val < med:
-                dn_devs.append(abs(val - med))
-                
-        mad_up[i] = np.median(up_devs) if len(up_devs) > 0 else 0.0
-        mad_dn[i] = np.median(dn_devs) if len(dn_devs) > 0 else 0.0
-
-    CONSISTENCY_CONST = 1.4826
-    mad_up_s = pd.Series(mad_up, index=idx)
-    mad_dn_s = pd.Series(mad_dn, index=idx)
-    
-    clamp_up = vwm_median + (dyn_k * CONSISTENCY_CONST * mad_up_s.clip(lower=1e-10))
-    clamp_dn = vwm_median - (dyn_k * CONSISTENCY_CONST * mad_dn_s.clip(lower=1e-10))
+    rvol_thr  = vol / vol.rolling(thr_vol_norm_len).mean().clip(lower=1e-10)
+    vwm       = rvol_thr * velocity
+    vwm_mean  = vwm.rolling(thr_stat_len).mean()
+    vwm_std   = vwm.rolling(thr_stat_len).std(ddof=0)
+    clamp_up  = vwm_mean + dyn_k * vwm_std
+    clamp_dn  = vwm_mean - dyn_k * vwm_std
 
     # Clamp series as numpy (shared by Set A's mean-axis filter and Set B's cross).
     v, v1   = vwm.to_numpy(), vwm.shift(1).to_numpy()
-    vm      = vwm_median.to_numpy()  # Set A confirmation now uses vwm_median axis
+    vm      = vwm_mean.to_numpy()
     cu, cu1 = clamp_up.to_numpy(), clamp_up.shift(1).to_numpy()
     cd, cd1 = clamp_dn.to_numpy(), clamp_dn.shift(1).to_numpy()
     c1      = pc.to_numpy()
