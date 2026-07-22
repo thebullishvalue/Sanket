@@ -63,10 +63,13 @@ REV_RETURN_LAGS = (2, 5)
 REV_MA_WINDOWS  = (5, 10)
 REV_RANGE_WIN   = 10
 
-# Vol-regime suitability for MOMENTUM. Flipped vs the old reversion map: momentum crashes in
-# high-vol turning points, so damp it there; it earns cleanest in LOW/NORMAL tape. A prior
-# from the 2020 & 2024–26 momentum decays + the general momentum-crash literature, not a fit.
-VOL_REGIME_MOM = {'LOW': 1.10, 'NORMAL': 1.05, 'HIGH': 0.85, 'EXTREME': 0.55}
+# Per-name vol-regime suitability for MOMENTUM. CALIBRATED (not a prior): a data study of
+# momentum-top-tercile forward returns by the name's own vol regime showed high-vol names
+# return MORE, not less — that is BETA, not edge, and per-name vol does NOT predict the
+# cross-sectional momentum edge. So this weight is now near-NEUTRAL, with only a mild EXTREME
+# trim for blow-up risk. The real edge-timing (momentum IC +0.056 calm vs +0.007 turbulent
+# MARKETS) is owned by the alpha-health monitor, not by this per-name weight.
+VOL_REGIME_MOM = {'LOW': 1.00, 'NORMAL': 1.00, 'HIGH': 1.00, 'EXTREME': 0.85}
 
 # Surface a name as an actionable tail only past this conviction; below it, context only.
 SIDE_CONVICTION_MIN = 0.55
