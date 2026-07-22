@@ -1,9 +1,58 @@
 # CHANGELOG
-### Sanket — Cross-Sectional Reversion Ranker
+### Sanket — Cross-Sectional Momentum Ranker
 
 All notable changes to the **Sanket** platform are documented here. Sanket is part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/thebullishvalue).
 
 Format: `[version] · date — release title`
+
+---
+
+## [v5.0.0] · 2026-07-23
+### Thesis Replacement — Reversion → 12-1 Momentum, and a Reproducible Research Harness
+
+**The core edge changed, because a new harness proved the old one wasn't tradeable.** The prior
+core (cross-sectional reversion) was accepted on a docstring; nothing in the repo could reproduce
+its claimed IC. This release makes evidence a first-class artifact and follows it wherever it led.
+
+**Added — `research.py`, a reproducible point-in-time research harness.** Pulls corporate-action-
+adjusted OHLCV, builds candidate cross-sectional signals under a strict no-lookahead contract, and
+reports rank-IC + t-stat, IC decay across horizons, cost-aware **non-overlapping** quantile
+backtests, turnover, per-year stability, and a **shuffled-null control** (which returns IC ≈ 0,
+confirming the harness doesn't manufacture edge). Run `python research.py` to regenerate every
+number in the docs. This is the permanent spine — no more edges-in-docstrings.
+
+**Finding — reversion is a cost trap.** On 100 NIFTY-100 names, 2016–2026 (adjusted): reversion
+rank-IC is real (+0.029…+0.031 @1–2d, t ≈ 7, positive every year) but its edge lives at a 1–2 day
+horizon with ~80% turnover, so after realistic costs the L/S book is **net negative** (≈ −23%/yr at
+25 bps). It predicts; it cannot be harvested.
+
+**Finding — 12-1 momentum survives costs.** The same harness found the edge: momentum IC *grows*
+with horizon (+0.025 @5d → +0.032 @21d → +0.048 @63d), so a monthly long-only book turns slowly
+(~21%) and clears costs — **~+6%/yr excess over the equal-weight universe, excess Sharpe ~0.6**,
+robust to 25 bps. Caveats stated everywhere: the ~30% absolute is mostly beta (abs Sharpe 1.34 ≈
+benchmark 1.29), momentum **decayed 2024–2026**, and the current-constituent universe inflates it
+(survivorship). The old engine had deleted momentum for "anti-predicting" — a horizon error; it was
+measured at short horizons where reversion dominates.
+
+**Changed — `engine.py` rebuilt around momentum.** `add_alpha_features` (12-1 + 6-1 momentum;
+`add_reversion_features` kept as an alias) and a `compute_ranking` that ranks on the robust-z of
+momentum. Reversion is demoted to an `Entry_Timing` overlay (favour momentum longs that have pulled
+back; ±10% conviction nudge, never the rank). `VOL_REGIME_MOM` **damps** momentum in HIGH/EXTREME
+vol (where it crashes) — the inverse of the old reversion regime map. The **output-column contract
+is unchanged**, so the UI renders without edits (`Rev_Score` now carries the momentum score).
+
+**Changed — `sanket.py` wiring.** `_MAX_DAYS_BACK` 500 → 900 (12-1 momentum needs ~273 bars of
+warmup); the `_mom_12_1` / `_mom_6_1` features flow through the live results dict **and** the
+alpha-health harvest panel; `HOLD_HORIZONS` → `[5,10,21,42,63]`; the alpha-health monitor now reads
+`Ret_5b` with a horizon-correct overlap haircut. All user-facing copy (Alpha-Health tab, engine
+card, tooltips) updated from reversion to momentum.
+
+**Validated end-to-end on real data.** Engine `Priority_Long` IC vs forward return: +0.025 (5d) /
++0.032 (21d) / +0.048 (63d). Alpha-health monitor functional and, on a mid-2026 check, correctly
+read trailing IC ≈ −0.005 → floored conviction at 0.35, detecting the live momentum dormancy.
+
+**Docs.** `ARCHITECTURE.md` and `README.md` rewritten to the momentum thesis using only
+harness-reproducible numbers; version → v5.0.0.
 
 ---
 

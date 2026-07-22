@@ -1,106 +1,140 @@
 # Sanket — Engine Architecture & Research Basis
 
-> This document records *why* the engine is built the way it is. Every design choice below
-> is backed by validation on real NSE F&O data (147 names, 5 years, ~170k symbol-days,
-> fetched via the app's own universe + yfinance). Nothing here is decorative.
+> This document records *why* the engine is built the way it is. Every claim below is
+> **reproducible from this repo**: run `python research.py` to regenerate the evidence on live,
+> corporate-action-adjusted data. Nothing here is decorative, and no number is quoted that the
+> harness cannot reproduce.
+
+## How we know anything: the research harness
+
+The core discipline of this system is that **no signal is an edge until the harness says so.**
+[`research.py`](research.py) is a point-in-time, cost-aware evaluation harness that:
+
+- pulls **split/dividend-adjusted** OHLCV (so corporate actions can't manufacture fake signal),
+- builds candidate cross-sectional signals under a strict **no-lookahead** contract (features at
+  date *t* use only data ≤ *t*; forward returns are labels only),
+- reports **rank-IC + t-stat, IC decay across horizons, cost-aware non-overlapping quantile
+  backtests, turnover, per-year stability, and a shuffled-null control**.
+
+Everything in this document was produced by that harness on **100 NIFTY-100 names, 2016–2026
+(~2,600 bars)**. The shuffled-null returns IC ≈ 0 (t < 2), so the harness does not manufacture
+edge — the positive results below are real, not artifacts.
 
 ## The thesis (what edge we exploit)
 
-**Short-horizon cross-sectional reversion.** On daily NSE data, names that have moved most
-relative to their own volatility tend to *under*-perform their peers over the next 1–5 days,
-and names that have sold off tend to out-perform. This is the dominant, robust, and
-*tradable-direction-correct* anomaly in this universe.
+**12-1 cross-sectional momentum, long tilt.** Names with the strongest 12-month return (skipping
+the most recent month) tend to out-perform peers over the following weeks. On the NSE large-cap
+cross-section this is the edge that **survives realistic transaction costs** — the one property
+that makes a signal tradeable rather than merely predictive.
 
-### Evidence
-- Per-feature reversion rank-IC vs 1–5 day forward returns: **+0.025 to +0.031, t up to +8.6**
-  (strongest: distance-from-MA `dist5`/`dist10`, and 2–5 day ATR-normalized returns).
-- A combined reversion composite holds **walk-forward, positive every year 2021–2025**
-  (IC +0.025 … +0.049). It went **dormant in 2026** (IC −0.01, t−0.9) — *flat, not inverted*
-  (momentum was also flat), so this is an on/off anomaly, not a regime flip.
-- It is **regime-dependent**: IC **+0.055 in HIGH-vol** regimes vs ~+0.025 LOW/NORMAL, noise
-  in EXTREME. Reversion pays most when volatility is elevated but not chaotic.
+### Evidence (reproducible)
 
-### What we explicitly rejected (and why)
-- **The old WRCI / Conviction / Pulse momentum factor stack** anti-predicts on this data:
-  naked Priority IC = −0.023 (t−3.9); the Optuna calibrator *cannot* fix it because its
-  factor-weight bounds are non-negative, so with anti-predictive factors the best it can do
-  is shrink to noise. **Removed entirely.**
-- **The 3-layer Intelligence stack** (per-set logistic + Meta fusion) added no out-of-sample
-  ranking edge over naked priority and was fragile (silent −100 sentinel, `val_score=None`).
-  **Removed.**
-- **Inferred order-flow (delta/CVD/divergence/absorption) as a ranking factor**: adds *nothing*
-  to cross-sectional IC (identical to 4 dp with/without). The delta is reconstructed from
-  candle shape, not real tape — too weak and too sparse to rank a universe. **Demoted to
-  descriptive UI context only; not in the score.**
+| Check | Result |
+|:---|:---|
+| Momentum rank-IC vs forward return | **+0.025 (5d) → +0.032 (21d) → +0.048 (63d)** — *grows* with horizon |
+| Long-only top-quintile, monthly, net of 15 bps/side | **~+6%/yr EXCESS** over the equal-weight universe |
+| Net excess Sharpe · turnover | **~0.6 · ~21%** — cost-robust (still 0.55 at 25 bps) |
+| Worst excess year (2016–2026) | **2018: −2%** |
+| Shuffled-null control | IC ≈ 0 — harness is calibrated |
 
-## Cost reality (why this is a ranker, not a high-turnover strategy)
+Momentum's IC **grows** with horizon, so a monthly book turns slowly (~21%) and the gross edge
+clears costs. This is the mirror image of reversion (below), whose edge lives at 1–2 days where
+turnover — and therefore cost — is highest.
 
-The reversion signal mean-reverts fast → high turnover. After realistic costs (10–15 bps/side):
-- Daily-rebalanced L/S: **net Sharpe negative** (−1.3). Costs eat the entire gross edge.
-- ~5-day holding period: **net ≈ break-even to slightly positive** at ≤7–10 bps.
-- Concentration into the extreme tails *dilutes* edge — the alpha is a **broad, diffuse tilt**
-  across the cross-section, not a few screaming names.
+### Why reversion is NOT the core (it was, and the harness demoted it)
 
-**Conclusion:** this is a **decision-support ranker** (a daily long/short shortlist with
-conviction + risk context for a human who holds days, amortizing cost), not a standalone
-high-frequency L/S book. The product surfaces ranked conviction; it does not pretend to be a
-costless alpha.
+Short-horizon cross-sectional reversion is a **real predictor** (rank-IC +0.029…+0.031 @1–2d,
+**t ≈ 7**, positive every year 2018–2026). But it is a **cost trap**: at a 2-day rebalance the
+long/short book runs ~80% turnover, so after realistic costs it is **net NEGATIVE** (≈ −23%/yr at
+25 bps/side; gross +13% is entirely consumed). It predicts; you cannot harvest it. Reversion is
+therefore **demoted to an entry-timing overlay** — among high-momentum names it favours those that
+have pulled back (`Entry_Timing`), refining *when* to enter, never *what* to hold.
 
-## The engine (what we build)
+### Why the *old* engine was wrong about momentum
 
-### 1. Reversion score (cross-sectional, per date)
-A blend of robustly-z-scored (median/MAD, within-date) reversion features, oriented so a
-HIGHER score = more attractive LONG:
+The prior engine deleted momentum for "anti-predicting" (IC −0.023). That was a **horizon error**:
+it measured momentum at *short* horizons (≤10 days) where reversion dominates and momentum
+genuinely loses. At the correct **12-1 monthly** horizon, momentum is the survivor and reversion
+is the cost trap. The lesson is baked into the harness: always evaluate a signal at the horizon its
+turnover can afford.
+
+## Honest limits (disclosed, not hidden)
+
+- **Mostly beta, not a money-printer.** The top quintile's ~30%/yr absolute return is largely
+  market beta — its absolute Sharpe (1.34) barely beats the equal-weight benchmark's (1.29). The
+  genuine skill is the **~+6% excess** (excess Sharpe ~0.6). This engine reports the *tilt*; it
+  never quotes the 30%.
+- **Momentum decays.** Momentum IC went **negative in 2024–2026** (momentum crashes cluster at
+  high-vol turning points). This is expected and handled: the alpha-health monitor stands the book
+  down when the factor is off, and `VOL_REGIME_MOM` damps momentum in HIGH/EXTREME vol.
+- **Survivorship.** The evidence uses *current* index constituents over history, which inflates
+  momentum (winners that stayed in the index). The true point-in-time number is lower; killing this
+  bias needs historical index membership (a data-sourcing task).
+
+## Cost reality (why this is a ranker, not an HFT book)
+
+Even the winning edge is a **weekly-to-monthly, long-tilt decision-support ranker**, not a costless
+high-frequency strategy. It surfaces a daily ranked shortlist with conviction and risk context for
+a human who holds for weeks and amortizes cost. On NSE cash, single-name shorting is impractical, so
+the bottom-momentum tail is surfaced as **underweight/avoid** (executable only in F&O), not as an
+actionable short.
+
+## The engine (what we build) — [`engine.py`](engine.py)
+
+### 1. Momentum score (cross-sectional, per date)
+Within-date **robust z-score** (median / MAD) of 12-1 momentum, oriented so higher = more
+attractive long. 6-1 momentum is a coverage fallback for names with short histories:
 ```
-score = mean of  -z(ret2), -z(ret5), -z(dist5), -z(dist10), -z(rng_pos10)
+mom      = Close[t-21] / Close[t-252] − 1        (12-month return, skip last month)
+score    = robust_z_within_date(mom)             (fallback to 6-1 where 12-1 is NaN)
 ```
-(`retk` = k-bar return / ATR14; `distw` = (Close − SMAw)/ATR14; `rng_pos10` = position in the
-10-bar high/low range.) Equal-weighted: the features are collinear and individually validated;
-a fitted weight vector did not beat the equal blend out of sample and risks overfit.
+No fitted weights: a risk-adjusted (mom/vol) variant and a 12+6 blend did **not** beat plain 12-1
+on excess return out of sample.
 
-### 2. Live alpha-health monitor (the part that makes it trustworthy)
-The system measures its **own realized edge in real time** — the trailing 60-day mean of the
-daily cross-sectional IC of the score vs realized forward return. When trailing IC is healthy
-(> ~0.005, ~78% of days) forward IC is +0.036; when dormant it is +0.012 (noise). The monitor
-scales a global **Conviction** multiplier in [0,1] so the system *stands down when its edge is
-not working* (e.g. 2026). This is surfaced honestly in the UI, never hidden.
+### 2. Reversion entry overlay (timing, not thesis)
+`Entry_Timing = within-date rank of −z(ret2)` in [0,1] — high = the name has pulled back. It nudges
+conviction (side-aware, kept small, ±10%) so a momentum long is preferred on a dip. It never enters
+the rank.
 
-### 3. Regime / risk context (per name + universe)
-Retained from the old regime engine (it is order-flow-agnostic and useful): HMM bull/bear,
-GARCH vol-regime, CUSUM change-points. Used to (a) condition conviction (reversion is best in
-HIGH vol, damped in EXTREME), and (b) provide per-name risk context. Vol-regime also drives
-position-risk scaling in the displayed conviction.
+### 3. Live alpha-health monitor (what makes it trustworthy)
+The system measures its **own realized edge in real time**: the trailing ~60-day mean of the daily
+cross-sectional IC of the momentum score vs a 5-day forward return. It maps that reading to a global
+**Conviction** multiplier in `[0.35, 1]`, so the system *stands down when its edge is off* (as it is
+in the 2024–2026 momentum dormancy). Surfaced honestly in the UI, never hidden. The significance
+haircut accounts for the forward-return overlap; no p-value is claimed from it.
 
-### 4. Order-flow & profile (UI context, not score)
-Inferred delta, CVD, POC/value-area, absorption — kept as **descriptive columns and chart
-context** so the trader sees flow/structure, but they do **not** enter the ranking score.
+### 4. Regime / risk context (per name + universe)
+HMM bull/bear, GARCH vol-regime, CUSUM change-points (order-flow-agnostic). Used to (a) condition
+conviction via `VOL_REGIME_MOM` — momentum damped in HIGH/EXTREME vol, where it crashes — and (b)
+provide per-name risk context.
+
+### 5. Order-flow & profile (UI context, not score)
+Inferred delta, CVD, POC/value-area, absorption (`Buy_Share`, `Absorption_Score`) — descriptive
+columns and chart context only. Validated to add **no** cross-sectional ranking edge; never in the
+score.
 
 ## Outputs (per name)
-- `Rev_Score` — raw cross-sectional reversion score (signed; + = long-attractive)
+- `Rev_Score` — the cross-sectional **momentum** alpha score (retained column name; + = long-attractive)
 - `Rev_Rank_Pct` — within-date percentile
-- `Conviction` — [0,1], = rank strength × alpha-health × regime factor (the headline number)
-- `Side` — Long / Short / — (top/bottom tail with sufficient conviction)
-- Risk context: `Vol_Regime`, `Regime_Confidence`, `Change_Point`, `ATR%`
-- Flow context (descriptive): `Bar_Delta`, `CVD`, `VA_Pos`, absorption flags
+- `Conviction` — `[0,1]` = tail strength × alpha-health × regime × confidence × entry nudge
+- `Side` — Long / Short (underweight, F&O-only) / — (context)
+- `Entry_Timing` — `[0,1]` pullback score for entry timing
+- Risk context: `Vol_Regime`, `Regime_Confidence`, `Change_Point`, `ATR_Pct`
+- Flow context (descriptive): `Bar_Delta`, `CVD`, `Buy_Share`, `Absorption_Score`, `VA_Pos`
 
 ## What "good" means / how we keep it honest
-- Ranking quality = cross-sectional IC and top-vs-bottom spread, **after costs**.
-- The alpha-health monitor is shown, not buried: when the edge is dormant the dashboard says
-  so and conviction shrinks. A flat tape produces a flat, low-conviction screen — by design.
+- Ranking quality = cross-sectional IC and top-vs-bottom spread, **after costs**, reproducible via
+  `python research.py`.
+- Alpha (excess) is reported separately from beta; the 30% absolute is never quoted as skill.
+- The alpha-health monitor is shown, not buried: when momentum is dormant the dashboard says so and
+  conviction shrinks toward the floor — by design.
 
 ## Known limitations (disclosed, not hidden)
-- **Survivorship in the alpha-health harvest.** The trailing-IC measurement applies *today's*
-  constituent list over the lookback window, so names that left the universe are not measured.
-  For a trailing ~60-day monitor of a fixed formula this bias is mild, but the trailing IC is
-  best read as "the edge on the names we can trade today," not a survivorship-free backtest.
-- **Trailing IC is a monitor, not a significance test.** It is a mean of ~60 overlapping-horizon
-  daily ICs; on pure noise its 1σ is ≈0.013, so short "EDGE ACTIVE" stretches can occur by
-  chance. No t-statistic or p-value is claimed from it anywhere — the health multiplier is a
-  smooth de-rating, not a hypothesis test.
-- **Vol-regime weights pending re-validation.** v4.0.1 fixed a variance-cap bug in the GARCH
-  regime detector that had been mislabeling sustained high-vol stretches as "LOW". The
-  `VOL_REGIME_REV` suitability weights were validated against the *old* (distorted) labels;
-  their empirical footing should be re-checked against the corrected labels. Worth revisiting.
-- **The GARCH regime is relative by design.** It compares current vol to its own trailing
-  norm, so a *sustained* new vol level re-baselines to "NORMAL" after ~2-3 months — it flags
-  transitions, not absolute levels.
+- **Survivorship** in both the backtest and the alpha-health harvest (today's constituents applied
+  over the lookback). Read results as "the edge on names we can trade today," not survivorship-free.
+- **Momentum-crash risk.** The edge is time-varying and can invert sharply; the health monitor
+  de-rates but does not eliminate this.
+- **`VOL_REGIME_MOM` weights are a prior, not a fit** — sensible-signed (damp high-vol) from the
+  momentum-crash literature and the observed 2020 / 2024–26 decays, but not individually optimized.
+- **Docs vs. reproducibility:** trust `research.py` over prose. If a number here and the harness
+  disagree, the harness is right and this document is stale.

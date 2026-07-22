@@ -1,19 +1,21 @@
 # SANKET — Institutional Market Signal Terminal
-### Cross-Sectional Reversion Ranker · Obsidian Quant · Pragyam Family · `v4.0.5`
+### Cross-Sectional Momentum Ranker · Obsidian Quant · Pragyam Family · `v5.0.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
 Sanket is a quantitative market-screening terminal that ranks a universe of stocks by a
-**single, validated edge**: short-horizon **cross-sectional mean-reversion**. It produces a daily
-ranked long/short shortlist with a conviction read and an honest, live measurement of *whether
-its own edge is currently working*.
+**single, reproducibly-validated edge**: **12-1 cross-sectional momentum** (long tilt). It produces
+a daily ranked shortlist with a conviction read and an honest, live measurement of *whether its own
+edge is currently working* — and it ships the harness ([`research.py`](research.py)) that
+regenerates every claim below from live data.
 
 Part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/thebullishvalue).
 
-> **Read this first.** Sanket is **decision-support**, not a turnkey trading strategy. The edge it
-> exploits is real but modest (validated rank-IC ≈ +0.03) and, after realistic transaction costs,
-> only survives at multi-day holding periods. The terminal ranks and contextualizes; *you* decide,
-> size, and execute. Signals are not financial advice.
+> **Read this first.** Sanket is **decision-support**, not a turnkey trading strategy. The edge is
+> real but modest: ~**+6%/yr excess** over the universe at ~0.6 excess Sharpe — and *mostly the
+> return is market beta, not skill*. It also **decays** (momentum was dormant 2024–2026, and the
+> system says so itself). The terminal ranks and contextualizes; *you* decide, size, and execute.
+> Signals are not financial advice.
 
 ---
 
@@ -37,98 +39,108 @@ Part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/
 
 ## What Sanket Does
 
-Most screeners rank stocks by momentum, RSI, or a stack of overlapping indicators. Sanket does
-the opposite of momentum, and it does **one** thing, deliberately: it ranks the cross-section by
-**how overextended each name is relative to its own volatility**, and surfaces the oversold tail
-as longs and the overbought tail as shorts — because on this universe, that is what predicts the
-next few days of *relative* returns.
+Most screeners rank stocks by a stack of overlapping indicators. Sanket does **one** thing,
+deliberately, and only because a cost-aware harness proved it survives: it ranks the cross-section
+by **12-1 momentum** — 12-month return skipping the most recent month — and surfaces the strongest
+trending names as longs, entered on short-horizon pullbacks. Reversion (its old core) is real but
+net-negative after costs, so it was demoted to entry timing.
 
-The core question Sanket answers: **which names are most likely to revert toward their peers over
-the next 1–5 days, and how much should I trust that read right now?**
+The core question Sanket answers: **which names carry the strongest relative trend right now, how
+should I time entry, and how much should I trust that read given the edge's current health?**
 
 ---
 
 ## The Thesis (and the evidence)
 
-**Short-horizon cross-sectional reversion.** Names that have moved most relative to their own ATR
-tend to *under*-perform peers over the next 1–5 days; names that have sold off tend to
-out-perform. This is a well-documented equity anomaly, and it is the dominant, direction-correct
-edge in the NSE F&O cross-section.
+**12-1 cross-sectional momentum (long tilt).** Names with the strongest 12-month return (skipping
+the most recent month) tend to out-perform peers over the following weeks. It is the edge that
+**survives realistic costs** — because momentum's predictive power *grows* with horizon, a monthly
+book turns slowly and the gross edge clears fees.
 
-Validated on real data (147 NSE F&O names, 5 years, ~170k symbol-days, fetched via the app's own
-universe + yfinance):
+Validated by the in-repo harness ([`research.py`](research.py)) on **100 NIFTY-100 names,
+2016–2026 (~2,600 bars), corporate-action-adjusted** — reproduce it with `python research.py`:
 
 | Check | Result |
 |:---|:---|
-| Per-feature reversion rank-IC (1–5d fwd) | **+0.025 … +0.031, t up to +8.6** |
-| Walk-forward by year (2021–2025) | **Positive every year** (+0.025 … +0.049) |
-| Regime dependence | **+0.055 in HIGH vol**, ~+0.025 LOW/NORMAL, noise in EXTREME |
-| Combined composite, cross-sectional | **+0.028 … +0.031, t ≈ +8** |
+| Momentum rank-IC vs fwd return | **+0.025 (5d) → +0.032 (21d) → +0.048 (63d)** — grows with horizon |
+| Long-only top quintile, monthly, net 15 bps/side | **~+6%/yr excess** over the equal-weight universe |
+| Net excess Sharpe · turnover | **~0.6 · ~21%** (cost-robust to 25 bps) |
+| Shuffled-null control | IC ≈ 0 — the harness doesn't manufacture edge |
 
-What was **rejected** (and why), all on the same data:
+**Honest caveats, stated up front:** the ~30%/yr *absolute* is mostly market beta (absolute Sharpe
+1.34 ≈ the benchmark's 1.29); the real skill is the ~+6% *excess*. And momentum **decayed 2024–2026**
+(IC negative) — the alpha-health monitor exists precisely to stand the book down then.
 
-- The legacy **WRCI / Conviction / Pulse** momentum factor stack: naked Priority IC = **−0.023**
-  (t −3.9) — it ranked *backwards*. The Optuna calibrator could not flip it (non-negative weight
-  bounds), so it shrank factors to noise. Removed.
-- The **3-layer self-tuning Intelligence stack**: no out-of-sample ranking edge over naked
-  Priority; fragile. Removed.
-- **Inferred order-flow** (delta / CVD / divergence / absorption) as a *ranking* factor: adds
-  **zero** cross-sectional IC (the delta is reconstructed from candle shape, not real tape).
-  Demoted to descriptive context.
+What was **rejected / demoted** (reproducible on the same harness):
 
-Full detail, including the cost analysis, is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+- **Reversion** (the old core): real predictor (IC +0.03, t ≈ 7) but **net-negative after cost**
+  (≈ −23%/yr at 25 bps, ~80% turnover) — the edge lives at 1–2 days where costs are highest.
+  **Demoted to an entry-timing overlay.**
+- The legacy **WRCI / Conviction / Pulse / Intelligence** stacks: anti-predicted or added no
+  out-of-sample edge. **Removed.**
+- **Inferred order-flow** (delta / CVD / absorption) as a *ranking* factor: adds **zero**
+  cross-sectional IC (delta is reconstructed from candle shape, not real tape). **Descriptive
+  context only.**
+
+Full detail, including the cost frontier, is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 
 ## The Engine
 
 `engine.py` is the entire ranking core. It is **fixed and validated** — there are no weights to
-calibrate, no Optuna, no per-symbol models.
+calibrate, no Optuna, no per-symbol models. Every claim it makes is reproducible via `research.py`.
 
-### 1. Reversion score (cross-sectional, per date)
-An equal blend of within-date **robustly z-scored** (median / MAD) and **sign-flipped** reversion
-features, oriented so a higher score = a more attractive long:
+### 1. Momentum score (cross-sectional, per date)
+Within-date **robust z-score** (median / MAD) of 12-1 momentum, oriented so higher = more attractive
+long. 6-1 momentum is a coverage fallback for shorter histories:
 
 ```
-score = mean of  -z(ret2), -z(ret5), -z(dist5), -z(dist10), -z(rng_pos10)
+mom   = Close[t-21] / Close[t-252] − 1        (12-month return, skip last month)
+score = robust_z_within_date(mom)             (fallback to 6-1 where 12-1 is NaN)
 ```
 
-- `retk` — k-bar return ÷ ATR14 (the recent move to fade)
-- `distw` — (Close − SMAw) ÷ ATR14 (distance from short MA = overextension)
-- `rng_pos10` — position within the 10-bar high/low range
+No fitted weights: a risk-adjusted (mom/vol) variant and a 12+6 blend did **not** beat plain 12-1
+on excess return out of sample.
 
-Equal-weighted on purpose: the features are collinear and individually validated, and a fitted
-weight vector did not beat the equal blend out of sample (it just invites overfit).
+### 2. Reversion entry overlay
+`Entry_Timing` = within-date rank of `−z(ret2)` in `[0,1]` — high = the name has pulled back. It
+nudges conviction (side-aware, ±10%) so a momentum long is preferred *on a dip*. It never enters the
+rank — reversion is timing, not thesis.
 
-### 2. Conviction
+### 3. Conviction
 A single `[0, 1]` headline per name:
 
 ```
-Conviction = tail_strength × alpha_health × regime_suitability × regime_confidence
+Conviction = tail_strength × alpha_health × regime_suitability × regime_confidence × entry_nudge
 ```
 
 - **tail_strength** — distance from the cross-sectional median (0 at the middle, → 1 at the tails)
 - **alpha_health** — the live edge multiplier (see below)
-- **regime_suitability** — vol-regime weight (reversion best in HIGH vol, damped in EXTREME)
+- **regime_suitability** — vol-regime weight (momentum damped in HIGH / EXTREME vol, where it crashes)
+- **entry_nudge** — the `Entry_Timing` pullback bonus
 
-### 3. Side
-Top cross-sectional tail → **Long**, bottom tail → **Short**, the muddy middle → context-only.
-Side is assigned by **rank** (not conviction), so the shortlist is never empty — on a dormant day
-it simply carries low conviction.
+### 4. Side
+Top cross-sectional tail → **Long**, bottom tail → **Short** (underweight / F&O-only — NSE cash
+can't short single names), the muddy middle → context-only. Side is assigned by **rank**, so the
+shortlist is never empty — on a dormant day it simply carries low conviction.
 
 ---
 
 ## Alpha-Health Monitor
 
 The feature that makes Sanket trustworthy. The system measures its **own realized edge in real
-time**: the trailing ~60-day mean of the daily cross-sectional IC of its score vs forward returns.
+time**: the trailing ~60-day mean of the daily cross-sectional IC of the momentum score vs a 5-day
+forward return, mapped to a conviction multiplier in `[0.35, 1]`.
 
-- On **healthy** days (~78% of history) forward IC ≈ **+0.036**; on **dormant** days ≈ +0.012
-  (noise). The monitor maps the trailing IC to a conviction multiplier in `[0.35, 1]`.
-- When the edge is **off** — as it was in 2026 — Sanket **stands down**: it still ranks the
-  universe, but conviction shrinks toward the floor and the dashboard says so plainly.
+- When momentum is **working**, the screen runs at full conviction; when it goes **dormant** —
+  as it did in **2024–2026** — Sanket **stands down**: it still ranks the universe, but conviction
+  shrinks toward the floor and the dashboard says so plainly. (On a live check in mid-2026 the
+  monitor read trailing IC ≈ −0.005 and floored conviction at 0.35 — the feature working.)
+- The significance haircut accounts for the forward-return overlap; **no p-value is claimed** — the
+  multiplier is a smooth de-rating, not a hypothesis test.
 
-A flat tape produces a flat, low-conviction screen **by design**. The system will not scream
+A dormant factor produces a flat, low-conviction screen **by design**. The system will not scream
 conviction into a dead regime.
 
 ---
@@ -137,13 +149,14 @@ conviction into a dead regime.
 
 Per name, on each run:
 
-- `Rev_Score` — the cross-sectional reversion score (+ = long-attractive)
+- `Rev_Score` — the cross-sectional **momentum** alpha score (retained column name; + = long-attractive)
 - `Rev_Rank_Pct` — standing within today's universe (0–100)
 - `Conviction` — the headline `[0, 1]` (= `Intel_Confidence` in the tables)
-- `Side` — Long / Short / — (context)
+- `Side` — Long / Short (underweight, F&O-only) / — (context)
+- `Entry_Timing` — `[0,1]` pullback score for entry timing
 - `Meta_Score` / `Meta_Tier` — fused rank × conviction (0–3 tier)
 - Risk context — `Vol_Regime`, `Regime_Confidence`, `Change_Point`, `ATR_Pct`
-- Flow context (descriptive) — `Bar_Delta`, `CVD`, `VA_Pos`, absorption flags
+- Flow context (descriptive) — `Bar_Delta`, `CVD`, `Buy_Share`, `Absorption_Score`, `VA_Pos`
 
 ---
 
@@ -151,7 +164,8 @@ Per name, on each run:
 
 ```
 sanket.py            ← Streamlit entry point: UI, data fetch, per-symbol features, screen routing
-engine.py            ← THE ranking engine: reversion score + conviction + alpha-health monitor
+engine.py            ← THE ranking engine: momentum score + entry overlay + conviction + alpha-health
+research.py          ← Reproducible point-in-time cost-aware harness (regenerates all evidence)
 logger.py            ← Structured terminal logging (ANSI color, phase timing, run IDs)
 ARCHITECTURE.md      ← Thesis, validation, and design rationale (read this)
 ui/
@@ -169,12 +183,12 @@ the rank.
 
 ## Analysis Modes
 
-1. **Single Date Screener** — fetch the universe on a date, compute reversion + regime + flow
-   context, measure live alpha-health, and return a ranked long/short shortlist with conviction.
+1. **Single Date Screener** — fetch the universe on a date, compute momentum + regime + flow
+   context, measure live alpha-health, and return a ranked shortlist with conviction.
    Tabs: Action Dashboard · Signal Strength · **Alpha-Health Monitor** · System Data.
 2. **Historical Range** — bulk time-series harvest used both to display history and to measure the
    trailing realized IC (the alpha-health reading). Exportable.
-3. **Correlation Analysis** — cross-asset correlation + confluence, weighted by reversion rank.
+3. **Correlation Analysis** — cross-asset correlation + confluence, weighted by momentum rank.
 4. **Pulse Narrative** — a per-name narrative/strength view over the same ranked screen.
 
 ---
@@ -226,15 +240,17 @@ day harvests a lookback window, later runs reuse it).
 
 ---
 
-## What Changed in v4.0.0
+## What Changed in v5.0.0
 
-A **complete scoring-engine replacement** — see [`CHANGELOG.md`](CHANGELOG.md) for the full entry.
-In short: the WRCI/Pulse/Intelligence/order-flow ranking machinery was validated on real data,
-found to anti-predict or add no edge, and **removed**; the system was rebuilt around the one
-edge that survived walk-forward + cost testing (cross-sectional reversion), with a live
-alpha-health monitor that scales conviction by realized edge. `priority_engine.py`,
-`intelligence.py`, and the three `.pine` indicators were deleted; `optuna` / `numba` / `filelock`
-dropped. The UI identity is preserved; copy was made honest.
+A **thesis replacement, driven by a new reproducible harness** — see [`CHANGELOG.md`](CHANGELOG.md)
+for the full entry. In short: [`research.py`](research.py) (point-in-time, cost-aware) was built to
+regenerate evidence on demand, and it showed the prior core — cross-sectional reversion — is a
+**cost trap** (real IC, but net-negative after fees at its 1–2 day horizon). The same harness found
+the edge that *survives* costs: **12-1 cross-sectional momentum**, long tilt, monthly. `engine.py`
+was rebuilt around it (reversion demoted to an `Entry_Timing` overlay; `VOL_REGIME_MOM` damps
+momentum in high vol; alpha-health retuned to momentum), and the data window was widened so 12-month
+formation has runway. The output-column contract and UI identity are preserved; the copy was made
+honest about beta-vs-alpha and the 2024–2026 decay.
 
 ---
 
@@ -261,4 +277,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v4.0.5 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v5.0.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

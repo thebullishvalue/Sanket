@@ -102,7 +102,10 @@ def _today_ist() -> datetime.date:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _REGISTRY_KEY  = "data_registry"
-_MAX_DAYS_BACK = 500  # fetch the maximum once; all modes slice what they need
+_MAX_DAYS_BACK = 900  # fetch the maximum once; all modes slice what they need.
+# 900 calendar days ≈ ~620 trading days. The 12-1 momentum alpha (engine.py) needs
+# ~273 bars of warmup (252 formation + 21 skip); 620 leaves ~350 valid-momentum dates,
+# enough for both the live cross-section and the trailing-IC alpha-health harvest.
 # Bound the L1 registry so cycling through indices (or stock_list variations from
 # transient fetch failures) can't accumulate stale 500-day universe DataFrames in
 # session_state until the tab closes. Keep only the N most-recently-used universes;
@@ -278,13 +281,13 @@ if _REGISTRY_KEY not in st.session_state:
 # ──────────────────────────────────────────────────────────────────────────────
 # Alpha-health monitor — the reversion engine has no weights to calibrate. Instead
 # it measures its OWN live edge: the trailing mean of daily cross-sectional IC of
-# the reversion score vs realized forward return. Conviction auto-scales by this so
+# the momentum score vs realized forward return. Conviction auto-scales by this so
 # the screen stands down when the edge is dormant. Measured once/day per universe.
 # ──────────────────────────────────────────────────────────────────────────────
 def _measure_trailing_ic(ts_data) -> tuple:
-    """Compute the trailing daily cross-sectional IC of the reversion score from a
+    """Compute the trailing daily cross-sectional IC of the momentum score from a
     harvested panel. Re-ranks each date's cross-section with engine.compute_ranking,
-    then correlates the reversion score vs a forward-return column.
+    then correlates the momentum score vs a forward-return column.
 
     Returns (trailing_ic, n_dates, t_stat). trailing_ic / t_stat are None when the
     panel is too thin. t_stat carries the 3-bar-overlap significance haircut so the
@@ -297,7 +300,11 @@ def _measure_trailing_ic(ts_data) -> tuple:
     ret_cols = [c for c in df.columns if c.startswith("Ret_")]
     if not ret_cols:
         return None, 0, None
-    fwd_col = "Ret_3b" if "Ret_3b" in ret_cols else ret_cols[0]
+    # Prefer a short forward horizon: responsive to regime change and, with a ~60-day
+    # window, enough near-independent observations for a stable trailing IC. (Momentum's
+    # edge is cleaner at monthly horizons, but a 21d forward over a 60d window leaves only
+    # ~3 independent obs — too thin to gauge live health.)
+    fwd_col = "Ret_5b" if "Ret_5b" in ret_cols else ret_cols[0]
     ics = []
     for _date, day in df.groupby("Date"):
         try:
@@ -316,14 +323,15 @@ def _measure_trailing_ic(ts_data) -> tuple:
         return None, 0, None
     window = np.asarray(ics[-60:], dtype=float)   # last ~60 daily ICs
     trailing_ic = float(window.mean())
-    # Significance of the trailing mean IC. The daily ICs use a 3-bar-forward
-    # return, so consecutive days overlap → the naive t overstates significance.
-    # Haircut the effective sample size by the horizon (Newey-West-lite): a +0.010
-    # IC at t≈1 is statistically indistinguishable from zero and must NOT read as a
-    # confident "edge active". t is None when the window is too thin to be meaningful.
+    # Significance of the trailing mean IC. The daily ICs use an h-bar-forward return
+    # (h parsed from fwd_col), so consecutive days overlap → the naive t overstates
+    # significance. Haircut the effective sample size by that horizon (Newey-West-lite):
+    # a +0.010 IC at t≈1 is statistically indistinguishable from zero and must NOT read as
+    # a confident "edge active". t is None when the window is too thin to be meaningful.
+    h_fwd = max(int("".join(ch for ch in fwd_col if ch.isdigit()) or 5), 1)
     t_stat = None
     if len(window) >= 10 and window.std(ddof=1) > 0:
-        eff_n = max(len(window) / 3.0, 1.0)
+        eff_n = max(len(window) / h_fwd, 1.0)
         t_stat = float(trailing_ic / (window.std(ddof=1) / np.sqrt(eff_n)))
     return trailing_ic, len(ics), t_stat
 
@@ -334,7 +342,7 @@ def _ensure_alpha_health(universe, selected_index, timeframe, analysis_date,
     """Measure the live alpha-health (trailing realized IC) for the active universe.
 
     Harvests a recent lookback panel ending at analysis_date, computes the trailing
-    cross-sectional IC of the reversion score vs forward return, maps it to a [0,1]
+    cross-sectional IC of the momentum score vs forward return, maps it to a [0,1]
     conviction multiplier (engine.alpha_health), and stores both in session so the
     screener compute block scales conviction and the Intelligence tab / Engine Status
     panel can render from it.
@@ -443,10 +451,10 @@ def _edge_state(trailing_ic, t_stat):
 def _render_intelligence_tab(universe, selected_index, timeframe):
     """Single-Date 'Intelligence' tab — the Alpha-Health Monitor.
 
-    The ranker is a fixed, validated cross-sectional reversion model — there are no
-    factor weights to calibrate. What it DOES measure live is its own realized edge:
-    the trailing mean of daily cross-sectional IC of the reversion score vs forward
-    return. Conviction auto-scales by that health. Rendered from the active reading
+    The ranker is a fixed, validated cross-sectional 12-1 MOMENTUM model (long tilt) —
+    there are no factor weights to calibrate. What it DOES measure live is its own
+    realized edge: the trailing mean of daily cross-sectional IC of the momentum score
+    vs forward return. Conviction auto-scales by that health. Rendered from the active reading
     (opt_results / alpha_health_*); the measurement itself runs inline on the screener
     click, so there is no button here."""
     res = st.session_state.get("opt_results") or {}
@@ -458,7 +466,7 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
 
     ui.render_section_header(
         "Alpha-Health Monitor",
-        "Is the reversion edge working right now? — the system measures its own realized edge.",
+        "Is the momentum edge working right now? — the system measures its own realized edge.",
         icon="brain", accent="violet",
     )
 
@@ -495,10 +503,11 @@ def _render_intelligence_tab(universe, selected_index, timeframe):
     st.markdown(
         '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
         'padding:0.9rem 0 0.1rem 0; line-height:1.6;">'
-        'The ranker is a fixed, validated <b>cross-sectional short-horizon reversion</b> model — it '
-        'fades over-extended names and buys over-sold ones across the universe. It has no weights to '
+        'The ranker is a fixed, validated <b>cross-sectional 12-1 momentum</b> model (long tilt) — it '
+        'holds the strongest trending names across the universe and uses a short-horizon reversion '
+        'overlay to favour those that have pulled back for entry. It has no weights to '
         'tune; instead it watches its <b>own realized edge</b>, the trailing mean daily cross-sectional '
-        'IC of the reversion score against forward returns. Conviction <b>auto-scales by that health</b>: '
+        'IC of the momentum score against forward returns. Conviction <b>auto-scales by that health</b>: '
         'when the edge is active the screen runs at full conviction, and when it goes '
         '<b style="color:var(--ink-secondary);">dormant</b> the screen intentionally steps down to '
         'low conviction rather than forcing trades into a market the edge is not currently working in.'
@@ -1474,6 +1483,8 @@ def to_excel(df):
                 "CVD_Slope",
                 "Delta_Z",
                 "Abs_Strength",
+                "Buy_Share",
+                "Absorption_Score",
                 "Regime_Confidence",
                 "Vol_Regime",
                 "Change_Point"
@@ -1486,6 +1497,8 @@ def to_excel(df):
                 "3-bar change in CVD — flow building (+) or draining (−).",
                 "Signed z-score of Bar_Delta vs its 20-bar distribution.",
                 "Absorption strength: |Bar_Delta| ÷ its 20-bar average (order-flow context).",
+                "Rolling 20-bar inferred buy share ∈ [0,1] (0.5 = balanced) — volume-normalized, cross-sectionally comparable flow bias.",
+                "Absorption context ∈ [0,1]: high delta soaked by a small range; >0.25 ≈ inferred_delta.pine rawAbsorb (relDelta>1.8 & relRange<0.6).",
                 "Statistical probability (0.0 - 1.0) of the detected HMM regime.",
                 "Volatility regime classification (Low/Normal/High) via GARCH analysis.",
                 "Structural change point detection (CUSUM) identifying regime shifts."
@@ -1566,11 +1579,13 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     """Per-symbol feature engine — reversion features (the ranking alpha) plus order-flow
     context (inferred delta, CVD, volume profile).
 
-    The RANKING alpha is cross-sectional reversion (see engine.py / ARCHITECTURE.md);
-    its per-symbol inputs are attached here via ``eng.add_reversion_features`` and ranked
-    later across the universe by ``eng.compute_ranking``. The legacy WRCI / Conviction /
-    Pulse / Liquidity / HCI / AutoTune engines and the momentum factor stack were removed
-    (they anti-predicted on real data).
+    The RANKING alpha is cross-sectional 12-1 MOMENTUM (see engine.py / research.py); its
+    per-symbol inputs are attached here via ``eng.add_alpha_features`` and ranked later across
+    the universe by ``eng.compute_ranking``. Reversion was demoted to an entry-timing overlay
+    after the research harness showed it is net-negative post-cost; momentum is the edge that
+    survives costs (~+6%/yr excess, Sharpe_exc ~0.6, ~21% turnover — beta-heavy, decays, so the
+    alpha-health monitor gates it). The legacy WRCI / Conviction / Pulse / Liquidity / HCI /
+    AutoTune engines were removed.
 
     Everything else here is DESCRIPTIVE ORDER-FLOW CONTEXT, not the ranking signal: the
     OHLC-proxy inferred delta / CVD / volume profile (ported from `Order Flow.pine`), and
@@ -1635,6 +1650,33 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     # ── Participation (RVOL) — measured participation gauge (UI context) ──
     rvol = (vol / vol.rolling(20).mean().clip(lower=1e-9)).fillna(1.0)
 
+    # ── Rolling buy share (inferred_delta.pine winBuy/winSell · L372-373) ───────
+    # Bar_Delta is signed VOLUME and CVD is a cumsum from the first fetched bar, so
+    # across the universe neither is comparable: Bar_Delta scales with the symbol's
+    # absolute volume, and CVD's level is an artifact of how much history was pulled.
+    # This windowed buy share is the cross-sectionally-safe read the Pine already
+    # carries (dashboard "Rolling 20-bar inferred buy share", L1590) but the port
+    # dropped — the volume-weighted fraction of inferred buying over 20 bars, bounded
+    # [0,1] (0.5 = balanced), baseline-invariant (windowed, not cumulative). Verified:
+    # identical for two symbols of identical bar shape at 1× vs 100× volume, where
+    # Bar_Delta/CVD differ 100×. Smoother than the per-bar Delta_Z. Context only.
+    win_buy   = buy_vol.rolling(20).sum()
+    win_vol   = vol.rolling(20).sum().clip(lower=1e-12)
+    buy_share = (win_buy / win_vol).clip(0.0, 1.0).fillna(0.5)
+
+    # ── Absorption score — smooth [0,1] fusion of rel_delta × rel_range ─────────
+    # inferred_delta.pine flags rawAbsorb = relDelta > 1.8 AND relRange < 0.6 (large
+    # delta soaked by a small range = passive limit absorption). The port kept only
+    # the two magnitudes as separate columns, so an absorbed bar can't be sorted for
+    # without cross-referencing both. This fuses them via a logistic gate on each
+    # Pine threshold; the score's 0.25 iso-contour reproduces the Pine boundary
+    # (verified: 96% grid agreement off the thin boundary band), 1 = deep absorption.
+    # Context only — NOT a ranking input (order-flow signals add no cross-sectional
+    # edge here, validated), surfaced as flow colour.
+    g_delta  = 1.0 / (1.0 + np.exp(-3.0 * (rel_delta - 1.8)))
+    g_range  = 1.0 / (1.0 + np.exp(-8.0 * (0.6 - rel_range)))
+    absorption_score = (g_delta * g_range).fillna(0.0)
+
     # ── Rolling volume profile — POC (fair value) + value-area edges (VAH/VAL) ──
     poc, vah, val = _rolling_volume_profile(high, low, vol, win=20, va_pct=0.70)
     # Position within the value area: 0 = at VAL (cheap), 1 = at VAH (rich). UI context.
@@ -1665,6 +1707,8 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     df['Delta_Z']      = delta_z
     df['Abs_Strength'] = rel_delta
     df['Rel_Range']    = rel_range
+    df['Buy_Share']        = buy_share          # rolling 20-bar inferred buy fraction ∈ [0,1]
+    df['Absorption_Score'] = absorption_score   # smooth [0,1] absorption context
     df['RVOL']         = rvol
     df['POC']          = poc
     df['VAH']          = vah
@@ -1681,10 +1725,12 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     df = compute_signal_sets(df, high, low, close, vol,
                              bar_delta, cvd, cvd_ma)
 
-    # ── REVERSION FEATURES (the actual ranking alpha; see engine.py / ARCHITECTURE.md) ──
-    # Per-symbol features; the cross-sectional ranking (engine.compute_ranking) runs later
-    # once the whole universe is assembled. Order-flow columns above are context only.
-    df = eng.add_reversion_features(df)
+    # ── ALPHA FEATURES (12-1 momentum ranking edge + reversion entry overlay; see engine.py) ──
+    # Momentum is the validated cost-survivable edge (research.py); reversion was demoted to
+    # entry-timing after it proved net-negative post-cost. The cross-sectional ranking
+    # (engine.compute_ranking) runs later once the universe is assembled. Order-flow above is
+    # context only.
+    df = eng.add_alpha_features(df)
 
     return df
 
@@ -2170,14 +2216,14 @@ def render_landing_page():
         <div class='system-card portfolio'>
             <h3>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                REVERSION ENGINE
+                MOMENTUM ENGINE
             </h3>
-            <p>Sanket ranks the universe by short-horizon cross-sectional mean-reversion — names overextended against their own volatility tend to revert relative to peers.</p>
+            <p>Sanket ranks the universe by 12-1 cross-sectional momentum (long tilt) — the strongest trending names relative to peers, entered on short-horizon pullbacks. It's the edge that survives costs; reversion (real but net-negative post-cost) is demoted to entry timing.</p>
             <div class='spec'>
-                <span>Primary:</span> ATR-normalized reversion (ret · dist-from-MA)<br>
-                <span>Method:</span> Within-date robust z-score blend<br>
-                <span>Validated:</span> IC ≈ +0.03 (t ≈ +8), walk-forward<br>
-                <span>Sorting:</span> Rank by reversion score
+                <span>Primary:</span> 12-month return, skip last month (robust-z)<br>
+                <span>Method:</span> Within-date robust z-score, long-only monthly<br>
+                <span>Validated:</span> excess ~+6%/yr, Sharpe_exc ~0.6, ~21% turnover (research.py)<br>
+                <span>Sorting:</span> Rank by momentum score
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -2689,6 +2735,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "CVD_Slope": round(last_row['CVD_Slope'], 2) if not pd.isna(last_row['CVD_Slope']) else 0.0,
                 "Delta_Z": round(last_row['Delta_Z'], 2) if not pd.isna(last_row['Delta_Z']) else 0.0,
                 "Abs_Strength": round(last_row.get('Abs_Strength', 0), 2) if not pd.isna(last_row.get('Abs_Strength', 0)) else 0.0,
+                "Buy_Share": round(last_row.get('Buy_Share', 0.5), 3) if not pd.isna(last_row.get('Buy_Share', 0.5)) else 0.5,
+                "Absorption_Score": round(last_row.get('Absorption_Score', 0.0), 3) if not pd.isna(last_row.get('Absorption_Score', 0.0)) else 0.0,
                 "Zone": last_row['Condition'],
                 "SignalType": signal_type,
                 "Price": round(last_row['Close'], 2),
@@ -2702,8 +2750,11 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "Regime_Confidence": float(last_row.get('Regime_Confidence', 0.0)),
                 "F1_PriceMom":   float(last_row.get('F1_PriceMom', 0)),
                 "F2_VolQual":    float(last_row.get('F2_VolQual', 0)),
-                # Reversion features — the actual ranking inputs (engine.compute_ranking
-                # consumes these cross-sectionally to produce Rev_Score / Conviction / Side).
+                # Alpha inputs consumed cross-sectionally by engine.compute_ranking:
+                #   _mom_* = the 12-1 momentum RANKING edge (primary); _rev_* = the reversion
+                #   entry-timing overlay (weak conviction nudge, never the rank).
+                "_mom_12_1":     last_row.get('_mom_12_1'),
+                "_mom_6_1":      last_row.get('_mom_6_1'),
                 "_rev_ret2":     last_row.get('_rev_ret2'),
                 "_rev_ret5":     last_row.get('_rev_ret5'),
                 "_rev_dist5":    last_row.get('_rev_dist5'),
@@ -2815,7 +2866,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             )
         # Return empty DataFrame with expected columns to prevent downstream KeyErrors
         expected_cols = [
-            "Symbol", "DisplayName", "SimpleName", "Signal", "Bar_Delta", "CVD", "CVD_Slope", "Delta_Z", "Zone", "SignalType", "Price", "PctChange",
+            "Symbol", "DisplayName", "SimpleName", "Signal", "Bar_Delta", "CVD", "CVD_Slope", "Delta_Z", "Buy_Share", "Absorption_Score", "Zone", "SignalType", "Price", "PctChange",
             "L_Today", "L_1d", "L_2d", "L_3d", "L_5d", "S_Today", "S_1d", "S_2d", "S_3d", "S_5d",
             "LA_Today", "LA_1d", "LA_2d", "LA_3d", "LA_5d", "SA_Today", "SA_1d", "SA_2d", "SA_3d", "SA_5d",
             "LB_Today", "LB_1d", "LB_2d", "LB_3d", "LB_5d", "SB_Today", "SB_1d", "SB_2d", "SB_3d", "SB_5d",
@@ -2825,10 +2876,11 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     results_df = pd.DataFrame(results)
 
-    # Global ranking via the cross-sectional REVERSION engine (engine.py). The reversion
-    # composite is the validated alpha; conviction is scaled by the live alpha-health monitor
-    # (is the edge currently working?) and per-name vol-regime suitability. This single call
-    # emits the full UI contract (Priority_*, Intel_Confidence, Meta_*) — see engine.py.
+    # Global ranking via the cross-sectional MOMENTUM engine (engine.py). The 12-1 momentum
+    # score is the validated cost-survivable alpha; conviction is scaled by the live alpha-health
+    # monitor (is the edge currently working?) and per-name vol-regime suitability, and nudged by
+    # the reversion entry-timing overlay. This single call emits the full UI contract
+    # (Priority_*, Intel_Confidence, Meta_*) — see engine.py.
     if not results_df.empty:
         health = float(st.session_state.get("alpha_health_mult", 1.0))
         results_df = eng.compute_ranking(results_df, alpha_health_mult=health)
@@ -2981,18 +3033,20 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'Vol_Regime': row.get('Vol_Regime', 'NORMAL'),
                     'Change_Point': row.get('Change_Point', False),
                     'Regime_Confidence': row.get('Regime_Confidence', 0),
-                    # Forward Returns for self-training
-                    'Ret_2b': row.get('Ret_2b', 0),
-                    'Ret_3b': row.get('Ret_3b', 0),
-                    'Ret_5b': row.get('Ret_5b', 0),
-                    'Ret_8b': row.get('Ret_8b', 0),
-                    'Ret_13b': row.get('Ret_13b', 0),
+                    # Forward Returns for self-training (horizons = engine.HOLD_HORIZONS)
+                    'Ret_5b':  row.get('Ret_5b', 0),
+                    'Ret_10b': row.get('Ret_10b', 0),
+                    'Ret_21b': row.get('Ret_21b', 0),
+                    'Ret_42b': row.get('Ret_42b', 0),
+                    'Ret_63b': row.get('Ret_63b', 0),
                     # Optimization factors
                     'F1_PriceMom': row.get('F1_PriceMom', 0),
                     'F2_VolQual': row.get('F2_VolQual', 0),
-                    # Reversion features (engine.compute_ranking inputs) — let the
-                    # alpha-health monitor re-rank each harvested cross-section to
-                    # measure trailing realized IC. Mirrors the live screener row.
+                    # Alpha inputs (engine.compute_ranking) — the 12-1 MOMENTUM ranking edge plus
+                    # the reversion entry overlay. The alpha-health monitor re-ranks each harvested
+                    # cross-section to measure trailing realized IC. Mirrors the live screener row.
+                    '_mom_12_1':   row.get('_mom_12_1'),
+                    '_mom_6_1':    row.get('_mom_6_1'),
                     '_rev_ret2':   row.get('_rev_ret2'),
                     '_rev_ret5':   row.get('_rev_ret5'),
                     '_rev_dist5':  row.get('_rev_dist5'),
@@ -3738,7 +3792,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         # ── Confluence score ──────────────────────────────────────────────
         # |Corr| × normalized max(|Priority_Long|, |Priority_Short|), where the
-        # priorities are the cross-sectional reversion scores (engine.py) — so
+        # priorities are the cross-sectional momentum scores (engine.py) — so
         # the confluence ranking carries the live, alpha-health-scaled read.
         # If Priority columns are missing entirely (defensive), drop back to
         # the legacy Delta_Z-based formula.
@@ -5557,7 +5611,7 @@ def main():
                     _pn_date    = analysis_date.strftime("%d %b %Y") if hasattr(analysis_date, "strftime") else str(analysis_date)
                     ui.render_section_header(
                         f"Pulse Narrative — {timeframe} Universe State",
-                        f"{_pn_n} / {_pn_total} symbols · {_pn_date} · Full universe ranking by reversion score",
+                        f"{_pn_n} / {_pn_total} symbols · {_pn_date} · Full universe ranking by momentum score",
                         icon="zap", accent="amber"
                     )
                     avg_delta = results_df['Delta_Z'].mean()
