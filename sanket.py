@@ -1587,17 +1587,17 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     alpha-health monitor gates it). The legacy WRCI / Conviction / Pulse / Liquidity / HCI /
     AutoTune engines were removed.
 
-    Everything else here is DESCRIPTIVE ORDER-FLOW CONTEXT, not the ranking signal: the
-    OHLC-proxy inferred delta / CVD / volume profile (ported from `Order Flow.pine`), and
-    two LIVE same-bar signal-set overlays surfaced for the trader (compute_signal_sets):
-      • long_cond/short_cond   — Set A · DELTA DIVERGENCE gated by the thrust mean
-                                 axis: rawBull/rawBear (inferred_delta.pine) with
-                                 vwm on the confirming side of vwm_mean (clamp.pine)
-      • *_comp                 — Set B · CLAMP CROSS: VWM thrust re-enters the clamp
-                                 band (bull = crosses up through the lower clamp,
-                                 bear = crosses down through the upper clamp)
-    These add no cross-sectional ranking edge (validated) — they are shown as flow colour,
-    never as the rank.
+    The inferred delta / CVD / volume profile are DESCRIPTIVE ORDER-FLOW CONTEXT (OHLC proxy;
+    validated to add no cross-sectional ranking edge). Alongside them, two LIVE same-bar
+    LONG-ONLY entry screeners are surfaced (compute_signal_sets), each validated on an
+    out-of-sample edge sweep as a better-than-baseline ENTRY timer on uptrending names:
+      • long_cond (short_cond=False) — Set A · MOMENTUM PULLBACK-RESUMPTION: an established
+                                       uptrend (Close>SMA200, mom_12_1>0.10) that dipped
+                                       below SMA20 and closed back above it (buy the dip)
+      • long_cond_comp (*_comp=False) — Set B · VOLUME-SURGE CONTINUATION: an uptrend with
+                                        RVOL_20>2× on an up-close (volume-confirmed continuation)
+    They are ENTRY-ODDS screeners for the trader, not ranking inputs and not standalone
+    portfolio alpha — the momentum engine (engine.py) is the rank.
 
     The unused WRCI-era params (n1/n2/obLevel*/osLevel*/wt2_*/hci_*) are retained in the
     signature only so existing call sites keep working; `reg_len` still drives the ATR
@@ -1773,109 +1773,56 @@ def compute_signal_sets(df: pd.DataFrame,
                         thr_length: int = 20, thr_stat_len: int = 60,
                         thr_vol_norm_len: int = 50, base_k: float = 2.0,
                         use_adaptive_k: bool = True) -> pd.DataFrame:
-    """LIVE same-bar signal sets: both fire ON the bar they occur (no delay).
+    """LIVE same-bar LONG-ONLY entry screeners (both fire ON the bar, no delay).
 
-    Both are built on the clamp.pine thrust engine — vwm = RVOL × %ROC (Relative
-    mode) with an adaptive clamp band (mean ± k·σ, k stretched up to +50% by the
-    volatility regime) and a mean axis (vwm_mean).
+    Rebuilt (v5.1) from a 40-candidate out-of-sample edge sweep (see research.py /
+    ARCHITECTURE.md). The prior delta-divergence (Set A) and clamp-cross (Set B) signals
+    were validated to carry NO tradeable edge and are retired; the short side of every
+    tested variant ANTI-predicted on this universe, so both screeners are LONG-ONLY.
 
-    Volatility gate (shared by Set A & Set B):
-      ATR(14) / Close < 0.05 — filters out high-volatility names where the daily
-      average true range exceeds 5% of the close price.
+    Both flag better-than-baseline ENTRY timing on names already in an uptrend — entry-odds
+    screeners for a discretionary trader, NOT standalone portfolio alpha (overweighting a
+    momentum book that already holds these names does not raise its Sharpe).
 
-    Set A — DELTA DIVERGENCE confirmed by the thrust's side of the mean axis:
-      bull (long_cond)  : rawBull (inferred_delta.pine — close down, inferred
-                          delta positive, low at a 3-bar low) AND vwm > vwm_mean
-                          (net thrust above the mean axis, force turning up)
-                          AND ATR(14)/Close < 0.05.
-      bear (short_cond) : rawBear (close up, delta negative, high at a 3-bar high)
-                          AND vwm < vwm_mean (thrust below the mean axis)
-                          AND ATR(14)/Close < 0.05.
+    Shared trend gate: Close > SMA200 AND 12-1 momentum positive — an established uptrend.
+    (This absolute per-symbol gate stands in for the cross-sectional momentum rank, which is
+    not visible here; verified to preserve the edge.)
 
-    Set B — CLAMP CROSS (VWM thrust re-enters the adaptive clamp band):
-      bull (long_cond_comp)  : vwm crosses UP through the LOWER clamp
-                               (vwm ≤ clamp_lower last bar, > it now) — a
-                               selling-thrust impact absorbed back inside
-                               AND ATR(14)/Close < 0.05.
-      bear (short_cond_comp) : vwm crosses DOWN through the UPPER clamp
-                               (vwm ≥ clamp_upper last bar, < it now) — a
-                               buying-thrust impact absorbed back inside
-                               AND ATR(14)/Close < 0.05.
-    Same direction convention as clamp.pine (below-lower = selling = bullish).
+    Set A — MOMENTUM PULLBACK-RESUMPTION (long_cond):
+      strong uptrend (mom_12_1 > 0.10) that dipped below its SMA20 and closed back above it.
+      "Buy the dip that resumed." Validated ~+0.26% vs universe / +0.17% vs the momentum
+      top-tercile at 5d, positive in BOTH 2016-21 and 2022-26 halves (overlap-t ~2.0).
 
-    Writes long_cond/short_cond (Set A), *_comp (Set B), and the flow Condition.
+    Set B — VOLUME-SURGE CONTINUATION (long_cond_comp):
+      uptrend (mom_12_1 > 0) with a volume surge (RVOL_20 > 2×) on an up-close — a
+      volume-confirmed continuation. Validated ~+0.41% vs universe / +0.32% vs momentum
+      top-tercile at 5d (more durable to 10d), positive in both OOS halves (overlap-t ~2.1).
+      Near-orthogonal to Set A (co-fires on ~6% of bars).
+
+    short_cond / short_cond_comp are retained as all-False for LA_/SA_/LB_/SB_ column
+    compatibility — the screeners are long-only. Also writes the flow Condition (context).
     """
     n = len(df)
-    idx = df.index
 
-    high_a  = high.to_numpy(dtype=float)
-    low_a   = low.to_numpy(dtype=float)
-    close_a = close.to_numpy(dtype=float)
+    # ── Per-symbol trend + entry primitives ────────────────────────────────────
+    sma20    = close.rolling(20).mean()
+    sma200   = close.rolling(200).mean()
+    mom_12_1 = close.shift(21) / close.shift(252) - 1.0          # 12-month return, skip last month
+    rvol20   = vol / vol.rolling(20).mean().clip(lower=1e-9)
+    pc       = close.shift(1)
+    uptrend  = close > sma200
 
-    # ══ CLAMP ENGINE (clamp.pine · Relative mode + adaptive k — the defaults) ══
-    # ta.atr = RMA of true range; volRank stretches the clamp width in hot tape.
-    pc  = close.shift(1)
-    tr  = pd.concat([(high - low), (high - pc).abs(), (low - pc).abs()], axis=1).max(axis=1)
-    atr_c  = pd.Series(_rma(tr.to_numpy(dtype=float), 14), index=idx)
-    atr_ma = atr_c.rolling(50).mean()
-    vol_rank = ((atr_c - atr_ma * 0.7) / (atr_ma * 0.8).clip(lower=1e-10)).clip(0.0, 1.0)
-    dyn_k = base_k * (1.0 + 0.5 * vol_rank) if use_adaptive_k else pd.Series(base_k, index=idx)
+    # ── SET A — momentum pullback-resumption (long-only) ──
+    long_cond = (uptrend & (mom_12_1 > 0.10)
+                 & (pc < sma20.shift(1)) & (close > sma20)).to_numpy(dtype=bool)
+    # ── SET B — volume-surge continuation (long-only) ──
+    long_cond_comp = (uptrend & (mom_12_1 > 0.0)
+                      & (rvol20 > 2.0) & (close > pc)).to_numpy(dtype=bool)
 
-    chg       = close - close.shift(thr_length)                              # ta.change
-    close_lag = close.shift(thr_length)
-    velocity  = pd.Series(np.where(close_lag.to_numpy() != 0,
-                                   (chg / close_lag * 100.0), 0.0), index=idx)
-    rvol_thr  = vol / vol.rolling(thr_vol_norm_len).mean().clip(lower=1e-10)
-    vwm       = rvol_thr * velocity
-    vwm_mean  = vwm.rolling(thr_stat_len).mean()
-    vwm_std   = vwm.rolling(thr_stat_len).std(ddof=0)
-    clamp_up  = vwm_mean + dyn_k * vwm_std
-    clamp_dn  = vwm_mean - dyn_k * vwm_std
-
-    # Clamp series as numpy (shared by Set A's mean-axis filter and Set B's cross).
-    v, v1   = vwm.to_numpy(), vwm.shift(1).to_numpy()
-    vm      = vwm_mean.to_numpy()
-    cu, cu1 = clamp_up.to_numpy(), clamp_up.shift(1).to_numpy()
-    cd, cd1 = clamp_dn.to_numpy(), clamp_dn.shift(1).to_numpy()
-    c1      = pc.to_numpy()
-
-    # ── VOLATILITY GATE: ATR(14) / Close < 0.05 — shared by Set A & Set B ──────
-    # Filters out high-volatility names where daily ATR exceeds 5% of the close.
-    atr_pct = (atr_c / close.clip(lower=1e-10)).to_numpy(dtype=float)
-    low_vol_ok = atr_pct < 0.05
-
-    # ── SET A: bar-level delta divergence CONFIRMED by the thrust's side of the mean axis ──
-    #   rawBull (inferred_delta.pine): close down, inferred delta positive, at a 3-bar low.
-    #   rawBear:                       close up,   delta negative,           at a 3-bar high.
-    #   Confirmation (clamp.pine mean axis = vwm_mean): the bull divergence only counts
-    #   when net thrust is ABOVE the mean axis (vwm > vwm_mean, force turning up), the bear
-    #   only when thrust is BELOW it (vwm < vwm_mean, force turning down).
-    bd  = bar_delta.to_numpy(dtype=float)
-    lo3 = low.rolling(3).min().to_numpy()
-    hi3 = high.rolling(3).max().to_numpy()
-    with np.errstate(invalid='ignore'):
-        raw_bull = (close_a < c1) & (bd > 0) & (low_a <= lo3)
-        raw_bear = (close_a > c1) & (bd < 0) & (high_a >= hi3)
-        long_cond  = raw_bull & (v > vm) & low_vol_ok
-        short_cond = raw_bear & (v < vm) & low_vol_ok
-    long_cond  = np.where(np.isnan(v) | np.isnan(vm) | np.isnan(atr_pct), False, long_cond)
-    short_cond = np.where(np.isnan(v) | np.isnan(vm) | np.isnan(atr_pct), False, short_cond)
-
-    # ── SET B: VWM thrust crossing back INTO the clamp band ──
-    #   bull  = vwm crosses UP through the LOWER clamp (was ≤ lower last bar, now
-    #           above it) → a selling-thrust impact is being absorbed back inside.
-    #   bear  = vwm crosses DOWN through the UPPER clamp (was ≥ upper last bar, now
-    #           below it) → a buying-thrust impact absorbed. Matches clamp.pine's
-    #           direction convention (below-lower = selling = bullish implication),
-    #           i.e. the exhaustion re-entry without the price-still-pushing gate or
-    #           the same-side cooldown — a cleaner "thrust returned to normal" cross.
-    with np.errstate(invalid='ignore'):
-        long_cond_comp  = (v1 <= cd1) & (v > cd) & low_vol_ok    # cross up through lower clamp
-        short_cond_comp = (v1 >= cu1) & (v < cu) & low_vol_ok    # cross down through upper clamp
-    long_cond_comp  = np.where(np.isnan(v1) | np.isnan(cd1) | np.isnan(cd) | np.isnan(atr_pct),
-                               False, long_cond_comp)
-    short_cond_comp = np.where(np.isnan(v1) | np.isnan(cu1) | np.isnan(cu) | np.isnan(atr_pct),
-                               False, short_cond_comp)
+    # Long-only: the short side of these events anti-predicts (validated). Kept all-False
+    # for LA_/SA_/LB_/SB_ column compatibility.
+    short_cond      = np.zeros(n, dtype=bool)
+    short_cond_comp = np.zeros(n, dtype=bool)
 
     df['long_cond']       = long_cond
     df['short_cond']      = short_cond
@@ -2168,7 +2115,7 @@ def run_regime_analysis(df):
 def _classify_signal_type(row) -> str:
     """Return priority-ordered signal type for a single bar row (pandas Series).
 
-    Priority: Set A (delta divergence) > Set B (clamp cross) > flow zone.
+    Priority: Set A (pullback-resumption) > Set B (volume-surge continuation) > flow zone.
     Matches the vectorised np.select in the harvest path.
     """
     if row.get('long_cond'):       return "A: Long"
@@ -2774,25 +2721,25 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "S_2d": "●" if sample_range.iloc[-3]['short_cond'] else "—",
                 "S_3d": "●" if sample_range.iloc[-4]['short_cond'] else "—",
                 "S_5d": "●" if sample_range.tail(5)['short_cond'].any() else "—",
-                # Set A · Delta Divergence — Historical Long Signals
+                # Set A · Pullback-Resumption — Historical Long Signals
                 "LA_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
                 "LA_1d": "●" if sample_range.iloc[-2]['long_cond'] else "—",
                 "LA_2d": "●" if sample_range.iloc[-3]['long_cond'] else "—",
                 "LA_3d": "●" if sample_range.iloc[-4]['long_cond'] else "—",
                 "LA_5d": "●" if sample_range.tail(5)['long_cond'].any() else "—",
-                # Set A · Delta Divergence — Historical Short Signals
+                # Set A · Short side RETIRED (long-only screeners) — always "—"
                 "SA_Today": "●" if sample_range.iloc[-1]['short_cond'] else "—",
                 "SA_1d": "●" if sample_range.iloc[-2]['short_cond'] else "—",
                 "SA_2d": "●" if sample_range.iloc[-3]['short_cond'] else "—",
                 "SA_3d": "●" if sample_range.iloc[-4]['short_cond'] else "—",
                 "SA_5d": "●" if sample_range.tail(5)['short_cond'].any() else "—",
-                # Set B · Clamp Cross — Historical Long Signals
+                # Set B · Volume-Surge Continuation — Historical Long Signals
                 "LB_Today": "●" if sample_range.iloc[-1]['long_cond_comp'] else "—",
                 "LB_1d": "●" if sample_range.iloc[-2]['long_cond_comp'] else "—",
                 "LB_2d": "●" if sample_range.iloc[-3]['long_cond_comp'] else "—",
                 "LB_3d": "●" if sample_range.iloc[-4]['long_cond_comp'] else "—",
                 "LB_5d": "●" if sample_range.tail(5)['long_cond_comp'].any() else "—",
-                # Set B · Clamp Cross — Historical Short Signals
+                # Set B · Short side RETIRED (long-only screeners) — always "—"
                 "SB_Today": "●" if sample_range.iloc[-1]['short_cond_comp'] else "—",
                 "SB_1d": "●" if sample_range.iloc[-2]['short_cond_comp'] else "—",
                 "SB_2d": "●" if sample_range.iloc[-3]['short_cond_comp'] else "—",
@@ -2990,7 +2937,8 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
             for h in eng.HOLD_HORIZONS:
                 df[f'Ret_{h}b'] = df['Close'].shift(-h) / df['Close'] - 1
 
-            # Vectorized SignalType per bar (priority: A divergence > B clamp-cross > Zone)
+            # Vectorized SignalType per bar (priority: A pullback-resume > B vol-surge > Zone;
+            # short_cond/*_comp are always False now — long-only screeners)
             df['SignalType'] = np.select(
                 [
                     df['long_cond'],      df['short_cond'],
@@ -3020,7 +2968,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'Zone': row['Condition'],
                     'LongSignal': row['long_cond'],
                     'ShortSignal': row['short_cond'],
-                    # Set A + Set B live-signal booleans (delta-divergence / clamp-cross)
+                    # Set A + Set B live-signal booleans (pullback-resume / volume-surge; long-only)
                     'long_cond': row['long_cond'],
                     'short_cond': row['short_cond'],
                     'long_cond_comp': row['long_cond_comp'],
@@ -3428,8 +3376,8 @@ def render_timeseries_dashboard():
             display_ts, width='stretch', hide_index=True,
             column_config={
                 'Date':         st.column_config.TextColumn(help="Trading day (YYYY-MM-DD)."),
-                'Long Sig':     st.column_config.NumberColumn(help="Daily count of symbols firing a Set A bullish signal (delta divergence with thrust above the mean axis)."),
-                'Short Sig':    st.column_config.NumberColumn(help="Daily count of symbols firing a Set A bearish signal (delta divergence with thrust below the mean axis)."),
+                'Long Sig':     st.column_config.NumberColumn(help="Daily count of symbols firing the Set A long entry (momentum pullback-resumption: uptrend dips below SMA20 then closes back above)."),
+                'Short Sig':    st.column_config.NumberColumn(help="Retired — the screeners are long-only (the short side of these events anti-predicts). Always 0."),
                 'Avg Signal':   st.column_config.NumberColumn(help="Cross-sectional mean of Delta_Z (signed delta z-score, clipped ±5) on this day. The daily mean concentrates near 0; ±0.25 is already a strongly one-sided tape."),
                 'Distribution %': st.column_config.NumberColumn(help="Percent of universe in Distribution / Distribution+ flow zones (net selling flow)."),
                 'Accumulation %': st.column_config.NumberColumn(help="Percent of universe in Accumulation / Accumulation+ flow zones (net buying flow)."),
@@ -5264,18 +5212,18 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
 
 
 _SIGNAL_TYPE_REFERENCE = [
-    ("Set A · Delta Divergence",   "amber",
-     "A bar-level inferred-delta divergence (inferred_delta.pine) confirmed by the thrust's "
-     "side of its mean axis (clamp.pine). Bullish: close down on POSITIVE inferred delta at a "
-     "3-bar low, while net thrust (VWM) sits ABOVE the mean axis — sellers pushed price down "
-     "but flow is turning up. Bearish: close up on NEGATIVE delta at a 3-bar high, with thrust "
-     "BELOW the mean axis. The mean-axis gate keeps only divergences the force is confirming."),
-    ("Set B · Clamp Cross", "violet",
-     "VWM thrust re-entering its adaptive clamp band (clamp.pine). Bullish when thrust crosses "
-     "UP through the LOWER clamp — a selling-pressure impact being absorbed back to normal; "
-     "bearish when it crosses DOWN through the UPPER clamp — a buying-pressure impact absorbed. "
-     "It marks the moment force returns inside the band. Strongest reads pair a Set A "
-     "divergence with a Set B cross in the same direction."),
+    ("Set A · Momentum Pullback-Resumption",   "amber",
+     "A LONG-ONLY entry timer, validated on an out-of-sample edge sweep (research.py). Fires when "
+     "an established uptrend (Close > 200-day MA, 12-1 momentum > 10%) dips below its 20-day MA and "
+     "then closes back above it — 'buy the dip that resumed'. Flagged names beat the momentum "
+     "top-tercile by ~+0.17% over the next 5 days, positive in both 2016-21 and 2022-26. It times "
+     "ENTRY on names you'd already hold; it is not a portfolio alpha on its own."),
+    ("Set B · Volume-Surge Continuation", "violet",
+     "A LONG-ONLY entry timer (research.py sweep). Fires when an uptrend (Close > 200-day MA, 12-1 "
+     "momentum positive) posts an up-close on a volume surge (RVOL > 2× its 20-day average) — a "
+     "volume-confirmed continuation. Flagged names beat the momentum top-tercile by ~+0.32% at 5d "
+     "(more durable to 10d). Near-orthogonal to Set A, so the two rarely fire on the same bar; "
+     "both are long-only (the short side of these events anti-predicts)."),
 ]
 
 
@@ -5718,11 +5666,13 @@ def main():
                             unsafe_allow_html=True,
                         )
 
-                    # Cross-set veto inputs: any Set B fire (either side) in the window.
+                    # Cross-set veto inputs. Both screeners are now LONG-ONLY bullish continuation
+                    # signals, so the short (SB) side never fires and the opposite-side veto below is
+                    # inert — a Set A long is no longer vetoed by anything. Kept for column compat.
                     has_bullish_crossover = (results_df[['LB_Today', 'LB_1d', 'LB_2d', 'LB_3d', 'LB_5d']] != "—").any(axis=1)
                     has_bearish_crossover = (results_df[['SB_Today', 'SB_1d', 'SB_2d', 'SB_3d', 'SB_5d']] != "—").any(axis=1)
 
-                    # Set A fires, vetoed by an opposite-side Set B fire in the window.
+                    # Set A fires (short side retired → shorts_a_df is always empty).
                     longs_a_df = results_df[(results_df['LA_5d'] != "—") & ~has_bearish_crossover].copy().sort_values('Priority_Long', ascending=False)
                     shorts_a_df = results_df[(results_df['SA_5d'] != "—") & ~has_bullish_crossover].copy().sort_values('Priority_Short', ascending=False)
 
