@@ -65,8 +65,9 @@ turnover can afford.
   genuine skill is the **~+6% excess** (excess Sharpe ~0.6). This engine reports the *tilt*; it
   never quotes the 30%.
 - **Momentum decays.** Momentum IC went **negative in 2024–2026** (momentum crashes cluster at
-  high-vol turning points). This is expected and handled: the alpha-health monitor stands the book
-  down when the factor is off, and `VOL_REGIME_MOM` damps momentum in HIGH/EXTREME vol.
+  high-vol turning points). This is expected and handled by the alpha-health monitor, which stands
+  the book down when the factor is off — the mechanism validated by the calm-vs-turbulent IC split
+  (+0.056 vs +0.007).
 - **Survivorship.** The evidence uses *current* index constituents over history, which inflates
   momentum (winners that stayed in the index). The true point-in-time number is lower; killing this
   bias needs historical index membership (a data-sourcing task).
@@ -104,14 +105,31 @@ in the 2024–2026 momentum dormancy). Surfaced honestly in the UI, never hidden
 haircut accounts for the forward-return overlap; no p-value is claimed from it.
 
 ### 4. Regime / risk context (per name + universe)
-HMM bull/bear, GARCH vol-regime, CUSUM change-points (order-flow-agnostic). Used to (a) condition
-conviction via `VOL_REGIME_MOM` — momentum damped in HIGH/EXTREME vol, where it crashes — and (b)
-provide per-name risk context.
+HMM bull/bear, GARCH vol-regime, CUSUM change-points (order-flow-agnostic). `VOL_REGIME_MOM` is now
+**data-calibrated to near-neutral** (`{LOW 1.0, NORMAL 1.0, HIGH 1.0, EXTREME 0.85}`): a study of
+momentum-top-tercile forward returns by the name's own vol regime showed high-vol names return
+*more*, not less — that is **beta, not edge**, and per-name vol does not predict the cross-sectional
+momentum edge, so this weight barely tilts conviction (only a mild EXTREME trim for blow-up risk).
+The real edge-timing is **market-wide** (momentum IC +0.056 on calm dates vs +0.007 turbulent) and
+is owned by the alpha-health monitor, not this per-name weight. HMM/CUSUM are per-name risk *context*
+and never enter the rank.
 
-### 5. Order-flow & profile (UI context, not score)
+### 5. Entry screeners — Set A / Set B (long-only)
+Two live, same-bar entry timers surfaced alongside the rank (never *in* it), each validated on an
+out-of-sample condition sweep as a better-than-baseline entry on already-trending names:
+- **Set A · Momentum Pullback-Resumption** — uptrend (Close>SMA200, 12-1 mom>10%) dips below SMA20,
+  closes back above. +0.25% vs universe @5d, both OOS halves positive.
+- **Set B · Gap-and-Go Continuation** — uptrend gaps up ≥1.5%, holds it (Close>Open), finishes near
+  its 20-day high. **+0.99% vs universe @5d, t~2.2, 9/11 years** — strongest signal, orthogonal to A.
+
+Both long-only (the short side of every tested event anti-predicted). They time *when* to enter, not
+*what* to hold; not standalone portfolio alpha. Chosen from ~130 candidate conditions across two
+sweeps — momentum-ignition beat accumulation, and every inferred-delta condition failed.
+
+### 6. Order-flow & profile (UI context, not score)
 Inferred delta, CVD, POC/value-area, absorption (`Buy_Share`, `Absorption_Score`) — descriptive
-columns and chart context only. Validated to add **no** cross-sectional ranking edge; never in the
-score.
+columns and chart context only. Validated (three times) to add **no** ranking or entry edge; never
+in the score.
 
 ## Outputs (per name)
 - `Rev_Score` — the cross-sectional **momentum** alpha score (retained column name; + = long-attractive)
@@ -134,7 +152,10 @@ score.
   over the lookback). Read results as "the edge on names we can trade today," not survivorship-free.
 - **Momentum-crash risk.** The edge is time-varying and can invert sharply; the health monitor
   de-rates but does not eliminate this.
-- **`VOL_REGIME_MOM` weights are a prior, not a fit** — sensible-signed (damp high-vol) from the
-  momentum-crash literature and the observed 2020 / 2024–26 decays, but not individually optimized.
+- **`VOL_REGIME_MOM` is calibrated but coarse** — set near-neutral from the vol-regime return study
+  (per-name vol ≈ beta, not edge). It intentionally does little; the alpha-health monitor carries the
+  real regime-timing. The mild EXTREME trim is risk control, not a fitted alpha weight.
+- **The Set A/B entry edges are modest and screener-level** — ~+0.25–0.99% per signal, validated as
+  entry odds, *not* portfolio alpha (overweighting a book that already holds the names doesn't help).
 - **Docs vs. reproducibility:** trust `research.py` over prose. If a number here and the harness
   disagree, the harness is right and this document is stale.

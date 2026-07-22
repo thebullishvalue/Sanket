@@ -1,9 +1,10 @@
 """
 Sanket - Market Signal Screener | A Pragyam Product Family Member
-Cross-Sectional Reversion Ranker · Quantitative Signal Screener Terminal
+Cross-Sectional Momentum Ranker · Quantitative Signal Screener Terminal
 
-Engine: cross-sectional short-horizon mean-reversion with a live alpha-health monitor.
-See engine.py and ARCHITECTURE.md for the thesis, validation, and design rationale.
+Engine: 12-1 cross-sectional momentum (long tilt) with a live alpha-health monitor, plus two
+long-only entry screeners (Set A pullback-resumption · Set B gap-and-go). See engine.py,
+research.py, and ARCHITECTURE.md for the thesis, validation, and design rationale.
 """
 
 import os
@@ -76,7 +77,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v4.0.5"
+VERSION = "v5.1.0"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -188,13 +189,13 @@ def _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
                          wt2_len, wt2_type, end_date) -> tuple:
     """Identity of an analyzed frame — everything that changes its computed values.
 
-    The engine tag invalidates frames cached under a previous signal/feature engine:
-    'rev1' = reversion + structural-divergence sets; 'rev2' = LIVE trigger/confluence
-    sets; 'rev3' = selective 6-filter Set B; 'rev4' = Set B VWM clamp cross; 'rev5' =
-    Set A is delta divergence gated by the thrust mean axis (vwm vs vwm_mean); 'rev6' =
-    ATR(14)/Close < 0.05 volatility gate on both Set A & Set B.
+    The engine tag invalidates frames cached under a previous signal/feature engine.
+    History: 'rev1'–'rev6' = the retired reversion-ranker + delta-divergence/clamp-cross
+    signal sets; 'mom1' (v5.0) = 12-1 momentum rank + reversion entry overlay; 'mom2'
+    (v5.1) = long-only Set A pullback-resumption + Set B gap-and-go screeners, and the
+    data-calibrated near-neutral VOL_REGIME_MOM.
     """
-    return ("rev6", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
+    return ("mom2", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
             tuple(levels), int(wt2_len), str(wt2_type), end_date)
 
 
@@ -279,7 +280,7 @@ if _REGISTRY_KEY not in st.session_state:
     st.session_state[_REGISTRY_KEY] = {}
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Alpha-health monitor — the reversion engine has no weights to calibrate. Instead
+# Alpha-health monitor — the momentum engine has no weights to calibrate. Instead
 # it measures its OWN live edge: the trailing mean of daily cross-sectional IC of
 # the momentum score vs realized forward return. Conviction auto-scales by this so
 # the screen stands down when the edge is dormant. Measured once/day per universe.
@@ -311,7 +312,7 @@ def _measure_trailing_ic(ts_data) -> tuple:
             ranked = eng.compute_ranking(day, alpha_health_mult=1.0)
         except Exception:
             continue
-        # Score column: the reversion Priority_Long (or Rev_Score fallback).
+        # Score column: the momentum Priority_Long (or Rev_Score fallback).
         score_col = "Priority_Long" if "Priority_Long" in ranked.columns else (
             "Rev_Score" if "Rev_Score" in ranked.columns else None)
         if score_col is None or fwd_col not in ranked.columns:
@@ -1576,8 +1577,8 @@ def _rolling_volume_profile(high, low, vol, win=20, bins=24, va_pct=0.70):
 def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40,
                       wt2_len=20, wt2_type="ALMA",
                       hci_thres=0.25, hci_look=102, hci_sig_len=53, hci_sig_type="SMA", hci_roc_len=15):
-    """Per-symbol feature engine — reversion features (the ranking alpha) plus order-flow
-    context (inferred delta, CVD, volume profile).
+    """Per-symbol feature engine — 12-1 momentum features (the ranking alpha) + the two
+    long-only entry screeners (Set A/B) plus order-flow context (inferred delta, CVD, profile).
 
     The RANKING alpha is cross-sectional 12-1 MOMENTUM (see engine.py / research.py); its
     per-symbol inputs are attached here via ``eng.add_alpha_features`` and ranked later across
@@ -2187,7 +2188,7 @@ def render_landing_page():
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
                 CONVICTION & EDGE
             </h3>
-            <p>Conviction scales by a live alpha-health monitor — the system measures its own realized edge and stands down when reversion is dormant.</p>
+            <p>Conviction scales by a live alpha-health monitor — the system measures its own realized edge and stands down when momentum is dormant.</p>
             <div class='spec'>
                 <span>Sides:</span> Long (oversold) / Short (overbought) tails<br>
                 <span>Conviction:</span> Tail strength × alpha-health × regime<br>
@@ -2224,7 +2225,7 @@ def render_landing_page():
         </h4>
         <p>Configure via the <strong>Sidebar</strong>: select <strong>Universe</strong>, <strong>Timeframe</strong>, <strong>Analysis Mode</strong>, and any mode-specific settings.<br>
            Click the <strong>RUN</strong> button — its label adapts to the active mode (Screener · Pulse · Harvest · Correlation).<br>
-           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will rank the cross-section by mean-reversion · scale conviction by live alpha-health · surface order-flow context</span></p>
+           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will rank the cross-section by 12-1 momentum · scale conviction by live alpha-health · surface long-only entry screeners + order-flow context</span></p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -2401,7 +2402,7 @@ def render_sidebar() -> SidebarState:
         # When the (universe, selected_index, timeframe) triple changes — including the
         # click that triggered THIS rerun — clear the stale trailing-IC reading so the
         # alpha-health re-measures for the new universe on the next screener run. The
-        # reversion engine has no per-universe profiles on disk to load.
+        # momentum engine has no per-universe profiles on disk to load.
         _current_uni_key = (universe, selected_index, timeframe)
         _previous_uni_key = st.session_state.get("_last_universe_key")
         if _previous_uni_key != _current_uni_key:
@@ -2481,11 +2482,12 @@ def render_sidebar() -> SidebarState:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True, external_progress_slot=None, progress_offset=0, progress_scale=100, wt2_len=20, wt2_type="ALMA"):
-    """Execute the cross-sectional reversion screen and return ranked signals.
+    """Execute the cross-sectional momentum screen and return ranked signals.
 
-    Fetches market data for the universe, computes per-symbol reversion features +
-    order-flow/regime context, then ranks the whole cross-section by the reversion
-    score (engine.compute_ranking), scaling conviction by the live alpha-health read.
+    Fetches market data for the universe, computes per-symbol momentum features + the two
+    long-only entry screeners + order-flow/regime context, then ranks the whole cross-section
+    by the 12-1 momentum score (engine.compute_ranking), scaling conviction by the live
+    alpha-health read.
 
     Args:
         external_progress_slot: Optional Streamlit container for external progress tracking (e.g., from correlation analysis)
@@ -2499,7 +2501,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (5 * progress_scale / 100)
-        progress_bar(progress_slot, pct_val, "Initializing Reversion Engine", f"Universe: {universe}")
+        progress_bar(progress_slot, pct_val, "Initializing Momentum Engine", f"Universe: {universe}")
     
     console.start_phase("DATA ACQUISITION", 1, 2)
     console.section("Universe Configuration")
@@ -2554,12 +2556,12 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     console.end_phase("DATA ACQUISITION")
 
-    console.start_phase("REVERSION RANKING", 2, 2)
+    console.start_phase("MOMENTUM RANKING", 2, 2)
 
     console.section("Engine Parameters")
-    console.item("Engine", "Cross-Sectional Reversion v1")
+    console.item("Engine", "Cross-Sectional Momentum v5.1")
     console.item("Timeframe", timeframe)
-    console.item("Reversion lookbacks", f"ret{eng.REV_RETURN_LAGS}  dist{eng.REV_MA_WINDOWS}")
+    console.item("Momentum formation", f"{eng.MOM_FORM}d − skip {eng.MOM_SKIP}d (12-1)")
     console.item("Alpha-health", f"{st.session_state.get('alpha_health_mult', 1.0):.2f}× (live edge scaling)")
     console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
     if show_progress or external_progress_slot is not None:
@@ -2763,7 +2765,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             _failed_symbols.append(ticker)
             continue
 
-    console.end_phase("REVERSION RANKING")
+    console.end_phase("MOMENTUM RANKING")
     if _cache_hits:
         console.detail(f"Analyzed-frame cache: reused {_cache_hits}/{len(data_dict)} frames from the edge-measurement harvest (skipped re-analysis)")
     # One-shot cache — release the harvested frames now that the screener has consumed them.
@@ -3026,7 +3028,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     ts_df['Date'] = pd.to_datetime(ts_df['Date'])
     ts_df = ts_df.sort_values('Date')
 
-    # The reversion engine has no per-row confidence model — the historical dashboard's
+    # The momentum engine has no per-row confidence model — the historical dashboard's
     # Avg_Intel aggregation degrades gracefully when Intel_Confidence is absent (see
     # _aggregate_timeseries). The trailing realized IC is measured separately by the
     # alpha-health monitor (_measure_trailing_ic) from this same harvested panel.
@@ -3418,7 +3420,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
     """Execute correlation analysis between universe constituents and a target asset.
 
     Returns a dict with correlation data, rolling correlations, prices, and returns,
-    plus a confluence score (|correlation| × reversion rank strength × conviction).
+    plus a confluence score (|correlation| × momentum rank strength × conviction).
     """
     if analysis_date is None:
         analysis_date = _today_ist()
@@ -3676,7 +3678,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 target_change = np.nan
 
             # Get WRCI data if available — pull priorities from the screener's
-            # already-computed reversion ranking output so Correlation Analysis
+            # already-computed momentum ranking output so Correlation Analysis
             # benefits from the live edge-scaled conviction.
             wrci_signal = np.nan
             wrci_zone = "—"
@@ -3757,7 +3759,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             pri_norm = abs_pri / max(abs_pri.max(), 1e-6)        # [0, 1]
             corr_df['Priority_Strength'] = pri_norm
             corr_df['Confluence_Score'] = (corr_df['Corr_Current'].abs() * pri_norm).clip(0.0, 1.0)
-            console.item("Confluence formula", "|Corr| × reversion rank strength")
+            console.item("Confluence formula", "|Corr| × momentum rank strength")
 
             # ── Conviction penalty ───────────────────────────────────────────
             # A high-correlation, high-priority name still deserves less weight when
@@ -3773,7 +3775,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 corr_df['Confluence_Raw'] = corr_df['Confluence_Score']
                 corr_df['Confluence_Score'] = (corr_df['Confluence_Score'] * _factor).clip(0.0, 1.0)
                 _n_penalized = int((_intel.notna() & (_intel < 0.5)).sum())
-                console.item("Confluence formula", "|Corr| × reversion rank × (0.5 + 0.5·Conviction)")
+                console.item("Confluence formula", "|Corr| × momentum rank × (0.5 + 0.5·Conviction)")
                 console.item("Low-conviction signals", f"{_n_penalized} candidate(s) below 0.50 conviction")
         else:
             # Normalise by the 95th-percentile absolute oscillator value so the
@@ -4118,7 +4120,7 @@ def render_correlation_results(corr_data: dict) -> None:
     with tab2:
         ui.render_section_header(
             "Trade Intelligence",
-            "Confluence: Correlation × Reversion Rank",
+            "Confluence: Correlation × Momentum Rank",
             icon="zap",
             accent="cyan"
         )
@@ -4521,14 +4523,14 @@ def _entry_status(window, side: str, offset: int, row):
 
 
 def _active_model_sig() -> str:
-    """Cheap signature of the active confidence model — the reversion engine has none."""
+    """Cheap signature of the active confidence model — the momentum engine has none."""
     return 'heuristic'
 
 
 def _cached_conf_series(symbol, window, side: str, condition_set: str):
     """Per-bar confidence for (symbol, side, set), memoized for the current screener run.
 
-    The reversion engine has no per-bar confidence model, so there is no fire-bar
+    The momentum engine has no per-bar confidence model, so there is no fire-bar
     confidence series to recompute — return empty arrays. Callers fall back to the
     row's own snapshot Intel_Confidence / Conviction. Kept memoized for API parity;
     the cache is cleared when a new screener run replaces intel_windows.
@@ -4572,7 +4574,7 @@ def _fire_bar_metrics(window, side: str, condition_set: str, offset: int, row) -
 def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'A', timeframe: str = 'Daily') -> dict:
     """Bucket signals by age (Today, 1d, 2d, 3d, 5d) with stats for timeline display.
 
-    condition_set: 'A' = Delta Divergence (LA_/SA_), 'B' = Clamp Cross (LB_/SB_)
+    condition_set: 'A' = Pullback-Resumption (LA_/SA_), 'B' = Gap-and-Go (LB_/SB_)
     timeframe: 'Daily' or 'Weekly' — determines age label names
     """
     if condition_set == 'A':
@@ -4619,7 +4621,7 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
             # FILTER decision value (drives Hide here + Dim styling in the table) — the
             # Meta score on fired signals (rank × edge-scaled conviction), else the
             # fire-bar Intel for aged signals. The old "probation" gate keyed off a
-            # Meta_Active column the removed fused model emitted; the reversion engine
+            # Meta_Active column the removed fused model emitted; the momentum engine
             # never emits it, so gating Hide on it made Hide silently inert — the
             # engine's Meta score is always the live conviction fusion and may hide.
             _mv = r.get('Meta_Score')
@@ -4872,7 +4874,7 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                     <th class="numeric">Δ-Z</th>
                     <th class="numeric">Absorp</th>
                     <th class="numeric">Intel</th>
-                    <th class="numeric" title="Fused score · reversion rank × conviction">Meta</th>
+                    <th class="numeric" title="Fused score · momentum rank × conviction">Meta</th>
                     <th class="numeric">Context</th>
                     <th class="numeric">Entry</th>
                 </tr>
@@ -5013,7 +5015,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
                     <th class="numeric">Δ-Z</th>
                     <th class="numeric">Absorp</th>
                     <th class="numeric">Intel</th>
-                    <th class="numeric" title="Fused score · reversion rank × conviction">Meta</th>
+                    <th class="numeric" title="Fused score · momentum rank × conviction">Meta</th>
                 </tr>
             </thead>
             <tbody>
@@ -5029,11 +5031,11 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
 
 
 def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> str:
-    """Build ranked HTML table for top reversion candidates by conviction.
+    """Build ranked HTML table for top momentum candidates by conviction.
 
     Creates styled HTML table with colored accent for side (long=green, short=red),
     displaying symbol, price, signal magnitude, trend direction, and zone status.
-    Prioritizes conviction (reversion tail strength × alpha-health) as the ranking metric.
+    Prioritizes conviction (momentum tail strength × alpha-health) as the ranking metric.
 
     Returns: Complete HTML document string ready for st.components.v1.html().
     """
@@ -5200,7 +5202,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                     <th class="numeric">Vol</th>
                     <th class="numeric">Absorp</th>
                     <th class="numeric">Intel</th>
-                    <th class="numeric" title="Fused score · reversion rank × conviction">Meta</th>
+                    <th class="numeric" title="Fused score · momentum rank × conviction">Meta</th>
                 </tr>
             </thead>
             <tbody>
@@ -5413,7 +5415,7 @@ def main():
     if is_first_render:
         console.header("SANKET TERMINAL — Session Start", VERSION)
         console.item("Started", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        console.item("Ranking engine", "Cross-Sectional Reversion v1 (alpha-health monitored)")
+        console.item("Ranking engine", "Cross-Sectional Momentum v5.1 (alpha-health monitored)")
 
     # Render sidebar and get parameters + run button state
     sb = render_sidebar()
@@ -5534,7 +5536,7 @@ def main():
         show_landing = True
 
     if show_landing:
-        ui.render_header("Sanket", "Market Signal Screener · Cross-Sectional Reversion Engine")
+        ui.render_header("Sanket", "Market Signal Screener · Cross-Sectional Momentum Engine")
         if st.session_state.get("run_error"):
             st.error(st.session_state["run_error"])
         render_landing_page()
@@ -5589,7 +5591,7 @@ def main():
                 with tab_strength:
                     ui.render_section_header(
                         "Order-Flow Signal Strength",
-                        "Top 10 long / short candidates by reversion priority",
+                        "Top 10 long / short candidates by momentum priority",
                         icon="zap", accent="amber",
                     )
                     pn_top_longs  = results_df.sort_values('Priority_Long',  ascending=False).head(10)
@@ -5650,7 +5652,7 @@ def main():
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
                         f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
-                        "Delta Divergence (A) · Clamp Cross (B)",
+                        "Pullback-Resumption (A) · Gap-and-Go (B)",
                         icon="zap",
                         accent="amber"
                     )
@@ -5659,7 +5661,7 @@ def main():
                     _if_mode, _if_thr = _intel_filter_active()
                     if _if_mode != "Off":
                         _if_verb = "hiding" if _if_mode == "Hide" else "dimming"
-                        _if_src = "the reversion engine's Meta score (rank × edge-scaled conviction)"
+                        _if_src = "the momentum engine's Meta score (rank × edge-scaled conviction)"
                         st.markdown(
                             f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--amber); '
                             f'background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22); '
@@ -5725,12 +5727,12 @@ def main():
                                 _r = sum(lb_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(lb_html, height=max(70 + _g * 46 + _r * 44, 110))
                             with prio_bull_tab:
-                                # Entire universe ranked by the LONG reversion priority —
+                                # Entire universe ranked by the LONG momentum priority —
                                 # not gated by any signal set; this is the engine ranking.
                                 _all_long = results_df.sort_values('Priority_Long', ascending=False)
                                 st.markdown(
                                     '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
-                                    'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the long reversion priority '
+                                    'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the long momentum priority '
                                     '(cross-sectional score, alpha-health-scaled) — independent of signal sets A–B.</div>',
                                     unsafe_allow_html=True,
                                 )
@@ -5751,11 +5753,11 @@ def main():
                                 _r = sum(sb_stats[a]['count'] for a in _age_order)
                                 st.components.v1.html(sb_html, height=max(70 + _g * 46 + _r * 44, 110))
                             with prio_bear_tab:
-                                # Entire universe ranked by the SHORT reversion priority.
+                                # Entire universe ranked by the SHORT momentum priority.
                                 _all_short = results_df.sort_values('Priority_Short', ascending=False)
                                 st.markdown(
                                     '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
-                                    'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the short reversion priority '
+                                    'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the short momentum priority '
                                     '(cross-sectional score, alpha-health-scaled) — independent of signal sets A–B.</div>',
                                     unsafe_allow_html=True,
                                 )
@@ -5787,7 +5789,7 @@ def main():
                 with tab_strength:
                     ui.render_section_header(
                         "Order-Flow Signal Strength",
-                        "Top signals ranked by reversion priority — Set A · Set B overlays",
+                        "Top signals ranked by momentum priority — Set A · Set B overlays",
                         icon="zap",
                         accent="amber"
                     )
@@ -5824,7 +5826,7 @@ def main():
                         <span style="font-family:var(--display); font-size:0.62rem; font-weight:700;
                                      letter-spacing:0.12em; text-transform:uppercase; color:#D4A853;
                                      padding:0.18rem 0.5rem; background:rgba(212,168,83,0.1);
-                                     border:1px solid rgba(212,168,83,0.3); border-radius:4px;">REVERSION ENGINE</span>
+                                     border:1px solid rgba(212,168,83,0.3); border-radius:4px;">MOMENTUM ENGINE</span>
                         <span style="font-family:var(--display); font-size:1rem; font-weight:700;
                                      color:#F1F5F9; letter-spacing:0.04em;">Top 10 Rankings</span>
                     </div>
@@ -5856,10 +5858,122 @@ def main():
         # Always render footer
         render_footer()
 
+def _passport_status_html(current_universe, current_index, current_timeframe) -> str:
+    """Engine-Status card (+ mismatch note) as HTML, built purely from session_state.
+
+    Extracted so the card can be REPAINTED into its placeholder after a run completes: the
+    single-pass render (no post-run st.rerun) paints the sidebar BEFORE the screener sets the
+    new alpha-health reading, so without a repaint the passport would lag one interaction.
+    """
+    res = st.session_state.get("opt_results") or {}
+    trailing_ic = st.session_state.get("alpha_health_ic", res.get("trailing_ic"))
+    health = st.session_state.get("alpha_health_mult", res.get("alpha_health"))
+    measured = trailing_ic is not None and isinstance(trailing_ic, (int, float))
+
+    cal_universe  = res.get("universe") or None
+    cal_index     = res.get("selected_index") or None
+    cal_timeframe = res.get("timeframe") or None
+    cal_label     = cal_index or cal_universe or "—"
+    cur_label     = (current_index or current_universe or "—")
+    universe_mismatch  = bool(res) and cal_label != "—" and cur_label != "—" and cal_label != cur_label
+    timeframe_mismatch = (bool(res) and cal_timeframe and current_timeframe
+                          and cal_timeframe != current_timeframe)
+    mismatch = universe_mismatch or timeframe_mismatch
+
+    t_stat = st.session_state.get("alpha_health_t", res.get("t_stat"))
+    if measured:
+        _lbl, card_class, _ = _edge_state(trailing_ic, t_stat)      # shared with the tab
+        state_label = _lbl.split(" — ")[0].split(" (")[0]           # compact sidebar label
+        ic_str     = f"{trailing_ic:+.3f}" + (f" · t{t_stat:+.1f}" if t_stat is not None else "")
+        health_str = f"{float(health):.2f}×" if isinstance(health, (int, float)) else "—"
+    else:
+        state_label = "Cold Start"
+        card_class  = "neutral"
+        ic_str      = "—"
+        health_str  = f"{float(health):.2f}×" if isinstance(health, (int, float)) else "—"
+    if mismatch:
+        card_class = "warning"
+    updated     = res.get("timestamp", "—") or "—"
+    ic_color    = "var(--emerald)" if (measured and trailing_ic > 0) else "var(--rose)" if measured else "var(--ink-secondary)"
+    cal_tf_disp = cal_timeframe or "—"
+
+    def _trim(s, n=22):
+        s = str(s)
+        return s if len(s) <= n else s[: n - 1] + "…"
+    cal_label_disp = _trim(cal_label)
+
+    html = f"""
+    <div class="metric-card {card_class}" style="
+            min-height:auto; padding:0.85rem 0.95rem; margin-bottom:0.7rem; animation:none;">
+        <h4 style="margin:0 0 0.3rem 0;">Momentum Engine</h4>
+        <h2 style="font-size:1.05rem; margin:0 0 0.7rem 0; letter-spacing:-0.01em;">{state_label}</h2>
+        <div style="display:flex; flex-direction:column; gap:0.32rem; padding-top:0.55rem;
+                    border-top:1px solid rgba(255,255,255,0.06);">
+            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
+                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Engine</span>
+                <span style="color:var(--ink-secondary); font-weight:500;">X-Sect Momentum v5.1</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
+                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Measured on</span>
+                <span style="color:var(--ink-secondary); font-weight:500; max-width:62%; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{cal_label_disp}</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
+                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Depth</span>
+                <span style="color:var(--ink-secondary); font-weight:500;">{cal_tf_disp}</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.65rem;">
+                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Trailing IC</span>
+                <span style="color:{ic_color}; font-weight:600;">{ic_str}</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.65rem;">
+                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Alpha-Health</span>
+                <span style="color:var(--ink-secondary); font-weight:600;">{health_str}</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.6rem;">
+                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Updated</span>
+                <span style="color:var(--ink-secondary);">{updated}</span>
+            </div>
+        </div>
+    </div>
+    """
+    if mismatch:
+        mismatch_lines = []
+        if universe_mismatch:
+            mismatch_lines.append(f"Edge measured on <b>{_trim(cal_label, 28)}</b><br>"
+                                  f"Active universe is <b>{_trim(cur_label, 28)}</b>")
+        if timeframe_mismatch:
+            mismatch_lines.append(f"Measured depth is <b>{cal_timeframe}</b><br>"
+                                  f"Active depth is <b>{current_timeframe}</b>")
+        html += f"""
+        <div style="font-family:var(--data); font-size:0.62rem; color:var(--amber);
+                    background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22);
+                    border-radius:6px; padding:0.55rem 0.65rem; margin-bottom:0.7rem; line-height:1.45;">
+            <span style="font-weight:700;">Reading is from a different universe / depth.</span><br>
+            {"<br>".join(mismatch_lines)}<br>
+            <span style="color:var(--ink-tertiary);">The alpha-health re-measures on the next run for
+            the current selection — or use Re-measure edge below.</span>
+        </div>
+        """
+    return html
+
+
+def _refresh_passport():
+    """Repaint the Engine-Status card into its sidebar placeholder from the latest
+    session_state. Called after a run sets the new alpha-health / opt_results so the sidebar
+    reflects THIS run (the single-pass render painted it before the analysis ran)."""
+    slot = st.session_state.get("_passport_slot")
+    args = st.session_state.get("_passport_args")
+    if slot is not None and args is not None:
+        try:
+            slot.markdown(_passport_status_html(*args), unsafe_allow_html=True)
+        except Exception:
+            pass
+
+
 def _render_model_passport_sidebar(current_universe: str, current_index, current_timeframe=None, analysis_mode=None):
     """Sidebar Engine Status panel — visible in every mode.
 
-    The reversion engine is fixed and validated; there are no per-universe profiles to
+    The momentum engine is fixed and validated; there are no per-universe profiles to
     manage. This panel surfaces the engine name, the live alpha-health / trailing-IC
     reading from the last screener run, and the universe/timeframe it was measured on,
     plus a single 'Re-measure edge' control.
@@ -5916,14 +6030,14 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
             padding:0.85rem 0.95rem;
             margin-bottom:0.7rem;
             animation:none;">
-        <h4 style="margin:0 0 0.3rem 0;">Reversion Engine</h4>
+        <h4 style="margin:0 0 0.3rem 0;">Momentum Engine</h4>
         <h2 style="font-size:1.05rem; margin:0 0 0.7rem 0; letter-spacing:-0.01em;">{state_label}</h2>
         <div style="display:flex; flex-direction:column; gap:0.32rem;
                     padding-top:0.55rem;
                     border-top:1px solid rgba(255,255,255,0.06);">
             <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
                 <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Engine</span>
-                <span style="color:var(--ink-secondary); font-weight:500;">X-Sect Reversion v1</span>
+                <span style="color:var(--ink-secondary); font-weight:500;">X-Sect Momentum v5.1</span>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
                 <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Measured on</span>
@@ -5997,7 +6111,7 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
             st.markdown(
                 '<div style="font-family:var(--data); font-size:0.62rem; color:var(--ink-tertiary); '
                 'line-height:1.55; padding:0 0 0.4rem 0;">Filter fired signals by <b>Meta score</b> — the '
-                'reversion engine\'s rank × edge-scaled conviction. Dim greys low-conviction signals; '
+                'momentum engine\'s rank × edge-scaled conviction. Dim greys low-conviction signals; '
                 'Hide removes them from the Action Dashboard. Off shows all signals.</div>',
                 unsafe_allow_html=True,
             )

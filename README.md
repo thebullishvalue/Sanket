@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Cross-Sectional Momentum Ranker · Obsidian Quant · Pragyam Family · `v5.0.0`
+### Cross-Sectional Momentum Ranker · Obsidian Quant · Pragyam Family · `v5.1.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -117,13 +117,30 @@ Conviction = tail_strength × alpha_health × regime_suitability × regime_confi
 
 - **tail_strength** — distance from the cross-sectional median (0 at the middle, → 1 at the tails)
 - **alpha_health** — the live edge multiplier (see below)
-- **regime_suitability** — vol-regime weight (momentum damped in HIGH / EXTREME vol, where it crashes)
+- **regime_suitability** — per-name vol-regime weight, **data-calibrated to near-neutral**
+  (`{LOW 1.0, NORMAL 1.0, HIGH 1.0, EXTREME 0.85}`): per-name vol tracks *beta*, not edge, so it
+  barely tilts conviction; the real edge-timing (calm vs turbulent *markets*) is the alpha-health
+  monitor's job
 - **entry_nudge** — the `Entry_Timing` pullback bonus
 
 ### 4. Side
 Top cross-sectional tail → **Long**, bottom tail → **Short** (underweight / F&O-only — NSE cash
 can't short single names), the muddy middle → context-only. Side is assigned by **rank**, so the
 shortlist is never empty — on a dormant day it simply carries low conviction.
+
+### 5. Entry screeners (Set A / Set B) — long-only
+Two live, same-bar entry timers surfaced alongside the rank, each validated on an out-of-sample
+condition sweep as a better-than-baseline *entry* on names already trending. They time **when** to
+enter, not **what** to hold (the momentum rank does that), and are not standalone portfolio alpha.
+
+- **Set A · Momentum Pullback-Resumption** — an uptrend (Close > 200-day MA, 12-1 momentum > 10%)
+  that dips below its 20-day MA then closes back above it. *Buy the dip that resumed.*
+- **Set B · Gap-and-Go Continuation** — an uptrend gaps up ≥ 1.5%, holds it (Close > Open), and
+  finishes near its 20-day high. *Momentum ignition on a catalyst* — the strongest signal in the
+  system (+0.9% over the momentum baseline at 5 days, positive in 9 of 11 years).
+
+Both are **long-only** — the short side of these events anti-predicts. The inferred delta / CVD /
+volume profile stay descriptive context; every delta-based entry condition tested added no edge.
 
 ---
 
@@ -240,17 +257,23 @@ day harvests a lookback window, later runs reuse it).
 
 ---
 
-## What Changed in v5.0.0
+## What Changed
 
-A **thesis replacement, driven by a new reproducible harness** — see [`CHANGELOG.md`](CHANGELOG.md)
-for the full entry. In short: [`research.py`](research.py) (point-in-time, cost-aware) was built to
-regenerate evidence on demand, and it showed the prior core — cross-sectional reversion — is a
-**cost trap** (real IC, but net-negative after fees at its 1–2 day horizon). The same harness found
-the edge that *survives* costs: **12-1 cross-sectional momentum**, long tilt, monthly. `engine.py`
-was rebuilt around it (reversion demoted to an `Entry_Timing` overlay; `VOL_REGIME_MOM` damps
-momentum in high vol; alpha-health retuned to momentum), and the data window was widened so 12-month
-formation has runway. The output-column contract and UI identity are preserved; the copy was made
-honest about beta-vs-alpha and the 2024–2026 decay.
+**v5.1.0 — rebuilt entry screeners + data-calibrated intelligence.** Across two out-of-sample
+sweeps (~130 candidate conditions), the dead delta-divergence/clamp-cross signals were replaced by
+two long-only, edge-validated screeners: **Set A · Momentum Pullback-Resumption** and **Set B ·
+Gap-and-Go Continuation** (the strongest signal in the system, +0.9% over the momentum baseline,
+9/11 years). The intelligence engine's `VOL_REGIME_MOM` was recalibrated from data to near-neutral
+(per-name vol is beta, not edge; the alpha-health monitor owns the real market-regime timing).
+Momentum ignition beat accumulation, and every inferred-delta condition failed — delta stays context.
+
+**v5.0.0 — thesis replacement, driven by a new reproducible harness.** [`research.py`](research.py)
+(point-in-time, cost-aware) was built to regenerate evidence on demand, and it showed the prior core
+— cross-sectional reversion — is a **cost trap** (real IC, but net-negative after fees at its 1–2 day
+horizon). The same harness found the edge that *survives* costs: **12-1 cross-sectional momentum**,
+long tilt, monthly. `engine.py` was rebuilt around it, the data window widened so 12-month formation
+has runway, and the copy made honest about beta-vs-alpha and the 2024–2026 decay. See
+[`CHANGELOG.md`](CHANGELOG.md) for both full entries.
 
 ---
 
@@ -277,4 +300,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v5.0.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v5.1.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

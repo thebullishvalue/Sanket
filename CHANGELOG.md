@@ -7,6 +7,41 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v5.1.0] · 2026-07-23
+### Rebuilt Entry Screeners (Set A/B) + Data-Calibrated Intelligence Engine
+
+Follows v5.0.0's momentum thesis with a ground-up rebuild of the two live signal sets and an
+empirical recalibration of the conviction engine — every change driven by the `research.py`
+harness, not priors.
+
+**New Set A / Set B — long-only, edge-validated entry screeners.** The old delta-divergence
+(Set A) and clamp-cross (Set B) signals carried no tradeable edge and are retired. Across two
+out-of-sample sweeps (~130 candidate conditions, ranked by train[≤2021]/test[≥2022] consistency +
+per-year stability + beat-the-momentum-baseline), two survivors ship:
+- **Set A · Momentum Pullback-Resumption** — an uptrend (Close>SMA200, 12-1 momentum>10%) that
+  dips below its SMA20 and closes back above it. +0.25% vs universe @5d, positive in both OOS halves.
+- **Set B · Gap-and-Go Continuation** — an uptrend gaps up ≥1.5%, holds it (Close>Open), finishes
+  near its 20-day high. **+0.99% vs universe @5d, t~2.2, positive in 9 of 11 years** — the strongest
+  signal in the system, near-orthogonal to Set A. Upgraded from a weaker volume-surge candidate.
+
+Both are **long-only** (the short side of every tested event anti-predicted) and framed honestly as
+*entry-odds screeners*, not standalone portfolio alpha. Two structural findings from the sweeps:
+momentum-*ignition* (buy strength) beat *accumulation* (buy weakness), and **every inferred-delta
+condition failed** — confirming, a third time, that the OHLC-proxy delta stays pure context.
+
+**Intelligence engine recalibrated from data.** `VOL_REGIME_MOM` was a prior that damped high-vol
+names. A calibration study showed per-name high-vol momentum names return *more* (that's beta, not
+edge) and per-name vol does not predict the cross-sectional edge — so the weights were **flattened
+to near-neutral** (`{1.0, 1.0, 1.0, 0.85}`, keeping only a mild extreme-vol risk trim). The real
+edge-timing is market-wide (momentum IC +0.056 calm vs +0.007 turbulent) and is already owned by the
+**alpha-health monitor**. HMM / GARCH-regime / CUSUM remain display context and never touch the rank.
+
+**System-wide copy + version alignment.** Terminal logging, progress labels, headers, footer, system
+cards, tooltips, and legends updated from "reversion" to the momentum + Set A/B language. `engine.py`
+untouched at the rank (momentum IC re-confirmed +0.025/+0.032/+0.048). Version → **v5.1.0**.
+
+---
+
 ## [v5.0.0] · 2026-07-23
 ### Thesis Replacement — Reversion → 12-1 Momentum, and a Reproducible Research Harness
 
