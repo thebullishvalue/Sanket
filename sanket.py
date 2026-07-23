@@ -5496,9 +5496,9 @@ def main():
                 "analysis_date": analysis_date,
                 "timeframe":     timeframe,
             }
-            # NOTE: _ensure_alpha_health returns cached|measured|harvest_empty; the
-            # sidebar Engine Status card picks up a fresh reading on the next natural
-            # rerun (the old "tuned" rerun branch died with the calibrator).
+            # _ensure_alpha_health returns cached|measured|harvest_empty. The sidebar
+            # Engine Status card is repainted in-place at the end of this block (see
+            # _refresh_passport) so it reflects THIS run's reading immediately.
             _ = _calib_status
 
         elif mode == "Historical Range":
@@ -5519,6 +5519,12 @@ def main():
                 corr_lookback, corr_method, timeframe, analysis_date,
             )
             st.session_state["corr_data"] = corr_data
+
+        # The sidebar was painted BEFORE this run executed (single-pass render), so its
+        # Engine Status card still shows the PREVIOUS reading. Repaint that placeholder now
+        # that the run has set alpha_health_* / opt_results — keeps the passport truthful
+        # without costing a full st.rerun (which is what the single-pass design removed).
+        _refresh_passport()
 
     # ── Mode-change cleanup ──────────────────────────────────────────────
     last_mode = st.session_state.get("_last_mode")
@@ -5984,110 +5990,17 @@ def _render_model_passport_sidebar(current_universe: str, current_index, current
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-title">Engine Status</div>', unsafe_allow_html=True)
 
-    res = st.session_state.get("opt_results") or {}
-    trailing_ic = st.session_state.get("alpha_health_ic", res.get("trailing_ic"))
-    health = st.session_state.get("alpha_health_mult", res.get("alpha_health"))
-    measured = trailing_ic is not None and isinstance(trailing_ic, (int, float))
-
-    cal_universe  = res.get("universe") or None
-    cal_index     = res.get("selected_index") or None
-    cal_timeframe = res.get("timeframe") or None
-    cal_label     = cal_index or cal_universe or "—"
-    cur_label     = (current_index or current_universe or "—")
-    universe_mismatch  = bool(res) and cal_label != "—" and cur_label != "—" and cal_label != cur_label
-    timeframe_mismatch = (bool(res) and cal_timeframe and current_timeframe
-                          and cal_timeframe != current_timeframe)
-    mismatch = universe_mismatch or timeframe_mismatch
-
-    t_stat = st.session_state.get("alpha_health_t", res.get("t_stat"))
-    if measured:
-        # Significance-gated + hysteresis (shared _edge_state, same as the tab).
-        _lbl, card_class, _ = _edge_state(trailing_ic, t_stat)
-        # Compact sidebar label (strip the trailing "— …" descriptor).
-        state_label = _lbl.split(" — ")[0].split(" (")[0]
-        ic_str     = f"{trailing_ic:+.3f}" + (f" · t{t_stat:+.1f}" if t_stat is not None else "")
-        health_str = f"{float(health):.2f}×" if isinstance(health, (int, float)) else "—"
-    else:
-        state_label = "Cold Start"
-        card_class  = "neutral"
-        ic_str      = "—"
-        health_str  = f"{float(health):.2f}×" if isinstance(health, (int, float)) else "—"
-    if mismatch:
-        card_class = "warning"
-    updated     = res.get("timestamp", "—") or "—"
-    ic_color    = "var(--emerald)" if (measured and trailing_ic > 0) else "var(--rose)" if measured else "var(--ink-secondary)"
-    cal_tf_disp = cal_timeframe or "—"
-
-    def _trim(s, n=22):
-        s = str(s)
-        return s if len(s) <= n else s[: n - 1] + "…"
-
-    cal_label_disp = _trim(cal_label)
-
-    st.markdown(f"""
-    <div class="metric-card {card_class}" style="
-            min-height:auto;
-            padding:0.85rem 0.95rem;
-            margin-bottom:0.7rem;
-            animation:none;">
-        <h4 style="margin:0 0 0.3rem 0;">Momentum Engine</h4>
-        <h2 style="font-size:1.05rem; margin:0 0 0.7rem 0; letter-spacing:-0.01em;">{state_label}</h2>
-        <div style="display:flex; flex-direction:column; gap:0.32rem;
-                    padding-top:0.55rem;
-                    border-top:1px solid rgba(255,255,255,0.06);">
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Engine</span>
-                <span style="color:var(--ink-secondary); font-weight:500;">X-Sect Momentum v5.1</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Measured on</span>
-                <span style="color:var(--ink-secondary); font-weight:500; max-width:62%; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{cal_label_disp}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Depth</span>
-                <span style="color:var(--ink-secondary); font-weight:500;">{cal_tf_disp}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.65rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Trailing IC</span>
-                <span style="color:{ic_color}; font-weight:600;">{ic_str}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.65rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Alpha-Health</span>
-                <span style="color:var(--ink-secondary); font-weight:600;">{health_str}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.6rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Updated</span>
-                <span style="color:var(--ink-secondary);">{updated}</span>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    if mismatch:
-        mismatch_lines = []
-        if universe_mismatch:
-            mismatch_lines.append(
-                f"Edge measured on <b>{_trim(cal_label, 28)}</b><br>"
-                f"Active universe is <b>{_trim(cur_label, 28)}</b>"
-            )
-        if timeframe_mismatch:
-            mismatch_lines.append(
-                f"Measured depth is <b>{cal_timeframe}</b><br>"
-                f"Active depth is <b>{current_timeframe}</b>"
-            )
-        mismatch_body = "<br>".join(mismatch_lines)
-        st.markdown(f"""
-        <div style="font-family:var(--data); font-size:0.62rem; color:var(--amber);
-                    background:rgba(212,168,83,0.08);
-                    border:1px solid rgba(212,168,83,0.22);
-                    border-radius:6px; padding:0.55rem 0.65rem;
-                    margin-bottom:0.7rem; line-height:1.45;">
-            <span style="font-weight:700;">Reading is from a different universe / depth.</span><br>
-            {mismatch_body}<br>
-            <span style="color:var(--ink-tertiary);">The alpha-health re-measures on the next run for
-            the current selection — or use Re-measure edge below.</span>
-        </div>
-        """, unsafe_allow_html=True)
+    # Paint the status card into a placeholder and stash it. The single-pass render paints
+    # the sidebar BEFORE the screener runs, so _refresh_passport() repaints this same slot
+    # once the run has set the new alpha-health reading — otherwise the card would keep
+    # showing the PREVIOUS run's values until the next interaction.
+    _passport_slot = st.empty()
+    _passport_slot.markdown(
+        _passport_status_html(current_universe, current_index, current_timeframe),
+        unsafe_allow_html=True,
+    )
+    st.session_state["_passport_slot"] = _passport_slot
+    st.session_state["_passport_args"] = (current_universe, current_index, current_timeframe)
 
     # ── Alpha-Health controls — directly below the status card. The engine is fixed;
     # the only knob is whether to force a fresh edge measurement this run.
