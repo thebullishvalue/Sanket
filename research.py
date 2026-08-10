@@ -1,5 +1,20 @@
 """
-research.py — reproducible, point-in-time research harness for the Sanket system.
+research.py — reproducible, point-in-time research harness (LEGACY, v5.x).
+
+⚠ THIS DOES NOT VALIDATE THE SHIPPED ENGINE.
+------------------------------------------------------------------------------------
+As of v6.0.0 Sanket runs a single screening condition — SB v8 close-location reversal
+(see ``engine.py`` and ``sb_v8.pine``). This harness documents the *previous* engine's
+thesis: the 12-1 cross-sectional momentum study on 100 NIFTY-100 names, 2016-2026.
+
+It is retained because the machinery is sound and reusable — a no-lookahead,
+cost-aware, shuffled-null-controlled cross-sectional evaluator is worth keeping — but
+nothing it prints describes the engine currently in production. SB v8's evidence (39
+instruments, 251,200 daily bars, 1993-2026, Bonferroni corrected, one sealed holdout)
+lives in the ``sb_v8.pine`` header, summarised in ``ARCHITECTURE.md``.
+
+Do not quote this file's numbers as support for SB v8.
+------------------------------------------------------------------------------------
 
 Why this module exists
 ----------------------

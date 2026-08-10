@@ -1,10 +1,12 @@
 """
 Sanket - Market Signal Screener | A Pragyam Product Family Member
-Cross-Sectional Momentum Ranker · Quantitative Signal Screener Terminal
+SB v8 Close-Location Reversal · Quantitative Signal Screener Terminal
 
-Engine: 12-1 cross-sectional momentum (long tilt) with a live alpha-health monitor, plus two
-long-only entry screeners (Set A pullback-resumption · Set B gap-and-go). See engine.py,
-research.py, and ARCHITECTURE.md for the thesis, validation, and design rationale.
+Engine: SB v8 (sb_v8.pine) — the z-score of where price closes inside its own bar range.
+ONE screening condition, two events: a weak close (green triangle) is the BUY, a strong
+close (yellow diamond) is the SELL. The system's universe selector drives the indicator's
+instrument-class input, so the measured out-of-sample expectancy shown always matches the
+asset class on screen. See engine.py, sb_v8.pine, and ARCHITECTURE.md.
 """
 
 import os
@@ -35,7 +37,7 @@ import warnings
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 from nsepython import nse_get_advances_declines
 from logger import console
 
@@ -77,7 +79,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v5.1.0"
+VERSION = "v6.0.0"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -104,9 +106,10 @@ def _today_ist() -> datetime.date:
 
 _REGISTRY_KEY  = "data_registry"
 _MAX_DAYS_BACK = 900  # fetch the maximum once; all modes slice what they need.
-# 900 calendar days ≈ ~620 trading days. The 12-1 momentum alpha (engine.py) needs
-# ~273 bars of warmup (252 formation + 21 skip); 620 leaves ~350 valid-momentum dates,
-# enough for both the live cross-section and the trailing-IC alpha-health harvest.
+# 900 calendar days ≈ ~620 trading days, and fetch_batch_data pads a further 365 calendar
+# days on top (≈ 870 trading bars). The SB v8 z-score needs a full 252-bar lookback before
+# it can signal (engine.min_bars_for), so this leaves ~600 signal-bearing daily dates —
+# enough for the live cross-section and for a Historical Range harvest over the same pool.
 # Bound the L1 registry so cycling through indices (or stock_list variations from
 # transient fetch failures) can't accumulate stale 500-day universe DataFrames in
 # session_state until the tab closes. Keep only the N most-recently-used universes;
@@ -186,17 +189,22 @@ _ANALYZED_CACHE_KEY = "analyzed_frame_cache"
 
 
 def _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
-                         wt2_len, wt2_type, end_date) -> tuple:
+                         wt2_len, wt2_type, end_date, sb_params=None) -> tuple:
     """Identity of an analyzed frame — everything that changes its computed values.
 
     The engine tag invalidates frames cached under a previous signal/feature engine.
     History: 'rev1'–'rev6' = the retired reversion-ranker + delta-divergence/clamp-cross
-    signal sets; 'mom1' (v5.0) = 12-1 momentum rank + reversion entry overlay; 'mom2'
-    (v5.1) = long-only Set A pullback-resumption + Set B gap-and-go screeners, and the
-    data-calibrated near-neutral VOL_REGIME_MOM.
+    signal sets; 'mom1'/'mom2' (v5.0/v5.1) = the 12-1 momentum rank with the Set A/Set B
+    entry screeners; 'sbv8' (v6.0) = SB v8 close-location reversal, the only screening
+    condition.
+
+    ``sb_params`` = (z_look, thr, horizon). These are baked into the frame (buy_cond /
+    sell_cond / the hold window all depend on them), so a threshold change in the sidebar
+    must miss the cache rather than serve stale conditions.
     """
-    return ("mom2", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
-            tuple(levels), int(wt2_len), str(wt2_type), end_date)
+    return ("sbv8", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
+            tuple(levels), int(wt2_len), str(wt2_type), end_date,
+            tuple(sb_params) if sb_params else None)
 
 
 def _analyzed_cache_reset(params_sig: tuple):
@@ -227,8 +235,8 @@ def _analyzed_cache_clear():
 def get_universe_data(stock_list: list, end_date: datetime.date = None):
     """Fetch OHLCV data for a universe, checking the session-state registry first.
 
-    Always fetches _MAX_DAYS_BACK days so screener, intelligence, and correlation
-    can all slice from the same pool without re-fetching.  Correlation callers
+    Always fetches _MAX_DAYS_BACK days so the screener, the range harvest, and
+    correlation can all slice from the same pool without re-fetching.  Correlation callers
     should pass only the universe symbols here, then supplement the returned dict
     with a single-ticker fetch for the target asset if it is missing.
 
@@ -280,344 +288,86 @@ if _REGISTRY_KEY not in st.session_state:
     st.session_state[_REGISTRY_KEY] = {}
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Alpha-health monitor — the momentum engine has no weights to calibrate. Instead
-# it measures its OWN live edge: the trailing mean of daily cross-sectional IC of
-# the momentum score vs realized forward return. Conviction auto-scales by this so
-# the screen stands down when the edge is dormant. Measured once/day per universe.
+# SB v8 parameter resolution — the four inputs the Pine exposes, resolved per run.
+# Every default is a measured plateau (see engine.py), not a fitted value. The
+# instrument class is NOT a knob: it is derived from the selected universe so the
+# expectancy the UI reports always matches the asset class on screen.
 # ──────────────────────────────────────────────────────────────────────────────
-def _measure_trailing_ic(ts_data) -> tuple:
-    """Compute the trailing daily cross-sectional IC of the momentum score from a
-    harvested panel. Re-ranks each date's cross-section with engine.compute_ranking,
-    then correlates the momentum score vs a forward-return column.
+@dataclass(frozen=True)
+class SBSettings:
+    """One run's SB v8 configuration."""
+    z_look:   int
+    thr:      float
+    horizon:  int
+    cost_bps: float
+    iclass:   str
 
-    Returns (trailing_ic, n_dates, t_stat). trailing_ic / t_stat are None when the
-    panel is too thin. t_stat carries the 3-bar-overlap significance haircut so the
-    UI can tell a real edge from a noise-level +0.01 IC.
+    @property
+    def params_sig(self) -> tuple:
+        """The subset that changes a per-symbol analyzed frame (see _analysis_params_sig)."""
+        return (int(self.z_look), float(self.thr), int(self.horizon))
+
+    @property
+    def edge(self) -> float:
+        return eng.class_edge(self.iclass)
+
+    @property
+    def hit(self) -> float:
+        return eng.class_hit(self.iclass)
+
+    @property
+    def established(self) -> bool:
+        return eng.is_established(self.iclass)
+
+    @property
+    def cost_ok(self) -> bool:
+        return eng.cost_ok(self.cost_bps, self.iclass)
+
+    @property
+    def min_bars(self) -> int:
+        return eng.min_bars_for(self.z_look)
+
+
+def _sb_settings(universe, selected_index, timeframe, overrides=None) -> SBSettings:
+    """Resolve the active SB v8 settings for a (universe, timeframe) selection.
+
+    ``overrides`` is the sidebar dict ({thr, horizon, cost_bps}); anything absent falls
+    back to the measured default. The z-score lookback follows the timeframe and the
+    instrument class follows the universe — neither is a user knob.
     """
-    if ts_data is None or getattr(ts_data, "empty", True):
-        return None, 0, None
-    df = ts_data.copy()
-    # Pick a forward-return column: prefer Ret_3b, else the first available Ret_*.
-    ret_cols = [c for c in df.columns if c.startswith("Ret_")]
-    if not ret_cols:
-        return None, 0, None
-    # Prefer a short forward horizon: responsive to regime change and, with a ~60-day
-    # window, enough near-independent observations for a stable trailing IC. (Momentum's
-    # edge is cleaner at monthly horizons, but a 21d forward over a 60d window leaves only
-    # ~3 independent obs — too thin to gauge live health.)
-    fwd_col = "Ret_5b" if "Ret_5b" in ret_cols else ret_cols[0]
-    ics = []
-    for _date, day in df.groupby("Date"):
-        try:
-            ranked = eng.compute_ranking(day, alpha_health_mult=1.0)
-        except Exception:
-            continue
-        # Score column: the momentum Priority_Long (or Rev_Score fallback).
-        score_col = "Priority_Long" if "Priority_Long" in ranked.columns else (
-            "Rev_Score" if "Rev_Score" in ranked.columns else None)
-        if score_col is None or fwd_col not in ranked.columns:
-            continue
-        ic = eng.cross_sectional_ic(ranked[score_col], ranked[fwd_col])
-        if ic is not None and np.isfinite(ic):
-            ics.append(ic)
-    if not ics:
-        return None, 0, None
-    window = np.asarray(ics[-60:], dtype=float)   # last ~60 daily ICs
-    trailing_ic = float(window.mean())
-    # Significance of the trailing mean IC. The daily ICs use an h-bar-forward return
-    # (h parsed from fwd_col), so consecutive days overlap → the naive t overstates
-    # significance. Haircut the effective sample size by that horizon (Newey-West-lite):
-    # a +0.010 IC at t≈1 is statistically indistinguishable from zero and must NOT read as
-    # a confident "edge active". t is None when the window is too thin to be meaningful.
-    h_fwd = max(int("".join(ch for ch in fwd_col if ch.isdigit()) or 5), 1)
-    t_stat = None
-    if len(window) >= 10 and window.std(ddof=1) > 0:
-        eff_n = max(len(window) / h_fwd, 1.0)
-        t_stat = float(trailing_ic / (window.std(ddof=1) / np.sqrt(eff_n)))
-    return trailing_ic, len(ics), t_stat
-
-
-def _ensure_alpha_health(universe, selected_index, timeframe, analysis_date,
-                         reg_len, wt_n1, wt_n2, levels, wt2_len, wt2_type, calib_settings,
-                         external_progress_slot=None, progress_offset=0, progress_scale=100):
-    """Measure the live alpha-health (trailing realized IC) for the active universe.
-
-    Harvests a recent lookback panel ending at analysis_date, computes the trailing
-    cross-sectional IC of the momentum score vs forward return, maps it to a [0,1]
-    conviction multiplier (engine.alpha_health), and stores both in session so the
-    screener compute block scales conviction and the Intelligence tab / Engine Status
-    panel can render from it.
-
-    Returns a short status string: cached | measured | harvest_empty .
-    """
-    force     = bool(calib_settings.get("force"))
-    today_str = _today_ist().strftime("%Y-%m-%d")
-    key       = (universe, selected_index, timeframe)
-
-    # Cheap guard — a fresh alpha-health measured today for this same key: skip recompute.
-    if (not force
-            and st.session_state.get("_alpha_health_key") == key
-            and st.session_state.get("alpha_health_ic") is not None
-            and str((st.session_state.get("opt_results") or {}).get("timestamp", ""))[:10] == today_str):
-        console.detail(
-            f"Alpha-health: reusing today's reading · trailing IC "
-            f"{st.session_state.get('alpha_health_ic', float('nan')):+.3f}"
-        )
-        return "cached"
-
-    # Harvest a lookback window ending at the analysis date, then measure realized edge.
-    lookback = int(calib_settings.get("lookback_days", 730))
-    start    = analysis_date - datetime.timedelta(days=lookback)
-    console.detail(f"Alpha-health: {'forced ' if force else ''}measuring — harvesting ~{lookback}d ending {analysis_date}")
-    run_timeseries_analysis(universe, selected_index, start, analysis_date,
-                            reg_len, wt_n1, wt_n2, levels, timeframe,
-                            wt2_len=wt2_len, wt2_type=wt2_type,
-                            external_progress_slot=external_progress_slot,
-                            progress_offset=progress_offset, progress_scale=progress_scale)
-    ts_data = st.session_state.get("ts_results_df")
-
-    trailing_ic, n_dates, t_stat = _measure_trailing_ic(ts_data)
-    if trailing_ic is None:
-        # Cold-start neutral — keep a dim, low-conviction screen rather than failing it.
-        st.session_state["alpha_health_mult"] = 0.75
-        st.session_state["alpha_health_ic"]   = None
-        st.session_state["_alpha_health_key"] = key
-        st.session_state["opt_results"] = {
-            "trailing_ic":    None,
-            "alpha_health":   0.75,
-            "n_dates":        0,
-            "t_stat":         None,
-            "timestamp":      _today_ist().strftime("%Y-%m-%d %H:%M"),
-            "universe":       universe,
-            "selected_index": selected_index,
-            "timeframe":      timeframe,
-        }
-        console.warning("Alpha-health: harvest empty / insufficient — cold-start neutral (0.75)")
-        st.session_state["timeseries_done"] = False
-        return "harvest_empty"
-
-    health = eng.alpha_health(trailing_ic)
-    st.session_state["alpha_health_mult"] = health
-    st.session_state["alpha_health_ic"]   = trailing_ic
-    st.session_state["alpha_health_t"]    = t_stat
-    st.session_state["_alpha_health_key"] = key
-    st.session_state["opt_results"] = {
-        "trailing_ic":    trailing_ic,
-        "alpha_health":   health,
-        "n_dates":        n_dates,
-        "t_stat":         t_stat,
-        "timestamp":      _today_ist().strftime("%Y-%m-%d %H:%M"),
-        "universe":       universe,
-        "selected_index": selected_index,
-        "timeframe":      timeframe,
-    }
-    _t_disp = f", t {t_stat:+.1f}" if t_stat is not None else ""
-    console.detail(f"Alpha-health: trailing IC {trailing_ic:+.3f}{_t_disp} → health {health:.2f} over {n_dates} dates")
-    # The harvest flag is an internal precondition here, not a Historical-Range deliverable.
-    st.session_state["timeseries_done"] = False
-    return "measured"
-
-
-# Edge-state thresholds. The old badge flipped ACTIVE↔WEAK at a single IC=0.01
-# cutoff — so a noise-level +0.0102 (t≈1, indistinguishable from zero) rendered a
-# confident green "EDGE ACTIVE". Two fixes: (1) require BOTH a higher IC and a
-# significant t before claiming an active edge; (2) hysteresis — a wide neutral
-# band between ACTIVE and DORMANT so a reading hovering at the boundary doesn't
-# oscillate. Significance is the real gate: mean IC alone is not enough.
-_EDGE_IC_ACTIVE = 0.015    # IC must clear this AND be significant to read "active"
-_EDGE_IC_DORMANT = 0.000   # below this = actively standing down
-_EDGE_T_SIGNIF = 1.5       # trailing-IC t (overlap-adjusted) needed for "active"
-
-
-def _edge_state(trailing_ic, t_stat):
-    """Classify the live edge from IC + significance → (label, css_class, note).
-
-    Honest about statistics: a positive-but-insignificant IC is 'MARGINAL', not
-    'EDGE ACTIVE'. Returns a short note flagging when the reading is noise-level.
-    """
-    if trailing_ic is None:
-        return "COLD START", "neutral", "no reading yet — measures on the next run"
-    sig = t_stat is not None and abs(t_stat) >= _EDGE_T_SIGNIF
-    t_txt = (f"t {t_stat:+.1f}" if t_stat is not None else "t n/a")
-    if trailing_ic >= _EDGE_IC_ACTIVE and sig:
-        return "EDGE ACTIVE", "success", f"significant ({t_txt})"
-    if trailing_ic <= _EDGE_IC_DORMANT:
-        return "DORMANT — standing down", "danger", f"no edge ({t_txt})"
-    # positive IC but not both high AND significant → be honest it's marginal/noise
-    if trailing_ic > 0 and not sig:
-        return "MARGINAL — not significant", "warning", f"IC ~ noise ({t_txt})"
-    return "WEAK", "warning", f"partial edge ({t_txt})"
-
-
-def _render_intelligence_tab(universe, selected_index, timeframe):
-    """Single-Date 'Intelligence' tab — the Alpha-Health Monitor.
-
-    The ranker is a fixed, validated cross-sectional 12-1 MOMENTUM model (long tilt) —
-    there are no factor weights to calibrate. What it DOES measure live is its own
-    realized edge: the trailing mean of daily cross-sectional IC of the momentum score
-    vs forward return. Conviction auto-scales by that health. Rendered from the active reading
-    (opt_results / alpha_health_*); the measurement itself runs inline on the screener
-    click, so there is no button here."""
-    res = st.session_state.get("opt_results") or {}
-    trailing_ic = st.session_state.get("alpha_health_ic", res.get("trailing_ic"))
-    health = float(st.session_state.get("alpha_health_mult", res.get("alpha_health", 1.0)) or 1.0)
-    n_dates = int(res.get("n_dates", 0) or 0)
-    t_stat = st.session_state.get("alpha_health_t", res.get("t_stat"))
-    measured = trailing_ic is not None and isinstance(trailing_ic, (int, float))
-
-    ui.render_section_header(
-        "Alpha-Health Monitor",
-        "Is the momentum edge working right now? — the system measures its own realized edge.",
-        icon="brain", accent="violet",
+    o = overrides or {}
+    return SBSettings(
+        z_look   = eng.z_look_for(timeframe),
+        thr      = float(o.get("thr", eng.SB_THRESHOLD)),
+        horizon  = int(o.get("horizon", eng.SB_HORIZON)),
+        cost_bps = float(o.get("cost_bps", eng.SB_COST_BPS)),
+        iclass   = eng.instrument_class(universe, selected_index),
     )
 
-    # ── Interpretation tag — significance-gated, with hysteresis (see _edge_state) ──
-    tag, tag_class, tag_note = _edge_state(trailing_ic if measured else None, t_stat)
 
-    ic_t = f" · t {t_stat:+.1f}" if (measured and t_stat is not None) else ""
-    ic_str     = f"{trailing_ic:+.3f}" if measured else "—"
-    health_str = f"{health:.2f}×"
-    health_class = "success" if health >= 0.85 else ("warning" if health >= 0.55 else "danger")
-    dates_str  = f"{n_dates}" if n_dates else "—"
-
-    st.markdown(f"""
-    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:1rem; margin-top:0.5rem;">
-        <div class="metric-card {"info" if measured else "neutral"}" style="margin:0;">
-            <h4>Trailing IC</h4><h2>{ic_str}</h2>
-            <div class="sub-metric">realized IC · score vs fwd return{ic_t}</div>
-        </div>
-        <div class="metric-card {health_class}" style="margin:0;">
-            <h4>Alpha-Health</h4><h2>{health_str}</h2>
-            <div class="sub-metric">conviction multiplier · 0.35–1.00</div>
-        </div>
-        <div class="metric-card {tag_class}" style="margin:0;">
-            <h4>Edge State</h4><h2 style="font-size:1.15rem;">{tag}</h2>
-            <div class="sub-metric">{html.escape(tag_note)}</div>
-        </div>
-        <div class="metric-card info" style="margin:0;">
-            <h4>Dates Measured</h4><h2>{dates_str}</h2>
-            <div class="sub-metric">daily ICs in the trailing window</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown(
-        '<div style="font-family:var(--data); font-size:0.72rem; color:var(--ink-tertiary); '
-        'padding:0.9rem 0 0.1rem 0; line-height:1.6;">'
-        'The ranker is a fixed, validated <b>cross-sectional 12-1 momentum</b> model (long tilt) — it '
-        'holds the strongest trending names across the universe and uses a short-horizon reversion '
-        'overlay to favour those that have pulled back for entry. It has no weights to '
-        'tune; instead it watches its <b>own realized edge</b>, the trailing mean daily cross-sectional '
-        'IC of the momentum score against forward returns. Conviction <b>auto-scales by that health</b>: '
-        'when the edge is active the screen runs at full conviction, and when it goes '
-        '<b style="color:var(--ink-secondary);">dormant</b> the screen intentionally steps down to '
-        'low conviction rather than forcing trades into a market the edge is not currently working in.'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-    if not measured:
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-        ui.render_interpretation_card(
-            "Cold start — edge not yet measured",
-            "No trailing-IC reading for this universe / timeframe yet, so the screen runs at a neutral "
-            "0.75× conviction. The alpha-health auto-measures once per day on the next run — or tick "
-            "“Re-measure edge” in the sidebar to measure now.",
-            "neutral",
-        )
-
-    # ── Reference: Context & Entry signal-aging columns ──
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    _render_aging_reference()
+def _active_sb_settings() -> SBSettings:
+    """The settings the last run resolved, for renderers that don't take them as args."""
+    sb = st.session_state.get("sb_settings")
+    if isinstance(sb, SBSettings):
+        return sb
+    return _sb_settings(None, None, "Daily")
 
 
-# Legend rows mirror the bands in _context_status / _entry_status — those helpers
-# are the source of truth for the cell colors, so keep these hexes in sync.
-_CONTEXT_LEGEND = [
-    ("Confirmed", "#2DD4A8", "Intel confidence rose since the signal fired — the thesis is strengthening."),
-    ("Holding",   "#A3E635", "Confidence broadly unchanged — the regime that backed the signal still holds."),
-    ("Fading",    "#FB923C", "Confidence slipping — the supporting context is weakening."),
-    ("Stale",     "#E8555A", "Confidence collapsed (or now very low) — the thesis has broken down."),
-    ("New",       "#94A3B8", "Fired today — nothing has aged yet."),
-]
-_ENTRY_LEGEND = [
-    ("Open",     "#2DD4A8", "Price has barely moved (under ½σ) — the entry is still fresh."),
-    ("Running",  "#5EBFA8", "Moving your way (½–1½σ) — the move is in progress."),
-    ("Extended", "#FB923C", "Stretched ≥ 1½σ — most of the move is spent; a late entry."),
-    ("Adverse",  "#E8555A", "Gone ≥ 1σ against the signal — price moved the wrong way."),
-    ("Now",      "#94A3B8", "Fired today — entry is current."),
-]
-
-
-def _render_aging_reference():
-    """Reference guide for the Context & Entry columns on the signal tables.
-
-    Context = has the thesis held since firing (Intel-confidence trajectory);
-    Entry = has price already run (σ-scaled move since the fire bar). The two are
-    orthogonal — one judges the signal, the other the timing. Rendered with the
-    Intelligence tab's own token vocabulary (no new CSS classes)."""
-    def _rows(legend):
-        out = []
-        for label, color, meaning in legend:
-            out.append(
-                '<div style="display:flex; align-items:baseline; gap:0.6rem; padding:0.32rem 0; '
-                'border-bottom:1px solid var(--border-subtle);">'
-                f'<span style="font-family:var(--data); font-size:0.7rem; font-weight:700; '
-                f'color:{color}; min-width:78px; letter-spacing:0.02em;">{label}</span>'
-                '<span style="font-family:var(--data); font-size:0.68rem; color:var(--ink-tertiary); '
-                f'line-height:1.45;">{meaning}</span>'
-                '</div>'
-            )
-        return "".join(out)
-
-    ui.render_section_header(
-        "Signal Aging Reference",
-        "Context & Entry — the two columns beside Intel on the signal tables",
-        icon="clock", accent="violet",
-    )
-    st.markdown(
-        '<div style="font-family:var(--data); font-size:0.70rem; color:var(--ink-tertiary); '
-        'padding:0.1rem 0 0.7rem 0; line-height:1.5;">'
-        'On the Set A / Set B signal tables, each aged signal (1d / 2d / … ago) carries '
-        'two <b>orthogonal</b> reads, both scored <b>at the bar it fired</b>. '
-        '<b style="color:var(--ink-secondary);">Context</b> asks whether the signal is still good; '
-        '<b style="color:var(--ink-secondary);">Entry</b> asks whether the move has already run.</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f"""
-        <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:1rem; margin-top:0.1rem;">
-            <div class="metric-card neutral" style="margin:0; text-align:left;">
-                <div style="font-family:var(--display); font-size:0.8rem; font-weight:700;
-                            color:var(--ink-secondary); letter-spacing:0.02em; margin-bottom:0.1rem;">
-                    Context <span style="color:var(--ink-tertiary); font-weight:500;">· thesis decay</span>
-                </div>
-                <div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary);
-                            line-height:1.4; padding-bottom:0.45rem;">
-                    Intel confidence at the fire bar vs today.
-                </div>
-                {_rows(_CONTEXT_LEGEND)}
-            </div>
-            <div class="metric-card neutral" style="margin:0; text-align:left;">
-                <div style="font-family:var(--display); font-size:0.8rem; font-weight:700;
-                            color:var(--ink-secondary); letter-spacing:0.02em; margin-bottom:0.1rem;">
-                    Entry <span style="color:var(--ink-tertiary); font-weight:500;">· move exhaustion</span>
-                </div>
-                <div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary);
-                            line-height:1.4; padding-bottom:0.45rem;">
-                    Directional move since firing, scaled by the symbol's own volatility (σ).
-                </div>
-                {_rows(_ENTRY_LEGEND)}
-            </div>
-        </div>
-        <div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary);
-                    padding:0.55rem 0 0.1rem 0; line-height:1.5;">
-            A “—” means the value isn't available for that bar. Today's signals show
-            <b>New</b> / <b>Now</b> — there is nothing yet to age.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+# Scope banding for the instrument class, shared by the sidebar card and the reference
+# tab so a class can never read "validated" in one place and "unproven" in another.
+def _scope_state(sb: SBSettings) -> tuple:
+    """(label, css_class, note) describing how far this asset class was validated."""
+    if sb.established:
+        return ("VALIDATED OOS", "success",
+                "drift-free holdout CI excluded zero")
+    if sb.edge >= 0.05:
+        return ("POSITIVE, UNCONFIRMED", "warning",
+                "positive expectancy but the CI includes zero")
+    if sb.edge > 0.0:
+        return ("NOT ESTABLISHED", "warning",
+                "nominally positive, did not survive holdout")
+    return ("NO EDGE MEASURED", "danger",
+            "zero or negative expectancy for this class")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1359,8 +1109,8 @@ def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True
             # heterogeneous (some already have today's bar, some not) and (b) yfinance live
             # 1d bars are stamped with an intraday time while historical daily bars are
             # stamped 00:00:00 — an exact-timestamp .difference() would therefore append a
-            # SECOND "today" row next to the 00:00 one, double-counting today and corrupting
-            # the 3/5-bar momentum oscillators.
+            # SECOND "today" row next to the 00:00 one, double-counting today and shifting
+            # every rolling window (including the close-location z) by a bar.
             _hint_has_today = any(idx.date() == _ist_today for idx in sample_df.index)
             if not _hint_has_today:
                 try:
@@ -1469,16 +1219,38 @@ def build_download_filename(context: str, *,
 
 
 def to_excel(df):
-    """Convert DataFrame to Excel bytes for download with a Legend sheet."""
+    """Convert DataFrame to Excel bytes for download with a Legend sheet.
+
+    Per-bar history columns (Z_Hist / Close_Hist) hold Python lists — they exist so the UI
+    can report the z at the bar a signal fired, and would serialise as list-reprs. Dropped
+    from the export; the per-age BUY_*/SELL_* columns carry the same information legibly.
+    """
     output = io.BytesIO()
+    _drop = [c for c in ('Z_Hist', 'Close_Hist') if c in df.columns]
+    if _drop:
+        df = df.drop(columns=_drop)
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Sanket_Quant_Data')
         
-        # Add Legend for user clarity
+        # Add Legend for user clarity. THE SIGNAL block comes first, then everything
+        # that is descriptive context — the distinction matters more than the ordering.
         legend_data = {
             "Column Identifier": [
-                "Priority_Long",
-                "Priority_Short",
+                "— THE SIGNAL (SB v8) —",
+                "SB_CLV",
+                "SB_Z",
+                "Signal / Fade_Score / SB_Score",
+                "buy_cond / BUY_*",
+                "sell_cond / SELL_*",
+                "Side",
+                "Conviction",
+                "SB_State",
+                "SB_Hold_Dir / SB_Hold_Age",
+                "SB_Rank_Pct",
+                "Priority_Long / Priority_Short",
+                "Signal_Reason",
+                "— CONTEXT ONLY (never a signal input) —",
+                "Zone / Condition",
                 "Bar_Delta",
                 "CVD",
                 "CVD_Slope",
@@ -1486,23 +1258,38 @@ def to_excel(df):
                 "Abs_Strength",
                 "Buy_Share",
                 "Absorption_Score",
-                "Regime_Confidence",
+                "Regime / Regime_Confidence",
                 "Vol_Regime",
-                "Change_Point"
+                "Change_Point",
+                "Ret_1b / Ret_5b / Ret_10b / Ret_21b",
             ],
             "Metric Description": [
-                "Master ranking score for bullish setups (normalized magnitude).",
-                "Master ranking score for bearish setups (normalized magnitude).",
-                "Inferred per-bar buy−sell volume delta (OHLC close-location proxy).",
+                "",
+                "Close location in [-1, +1]: ((C-L) - (H-C)) / (H-L). -1 = closed on the low, +1 = on the high.",
+                "THE MEASURE. Z-score of SB_CLV over the trailing lookback (252 daily / 52 weekly bars). Population stdev, matching Pine ta.stdev.",
+                "Fade score = -SB_Z. Positive = bullish. The sign flip IS the finding: a strong close predicts weakness.",
+                "BUY event (green triangle): SB_Z below -threshold, a weak close to fade up. BUY_Today/_1d/_2d/_3d/_5d mark the signal's age.",
+                "SELL event (yellow diamond): SB_Z above +threshold. NOTE: this side did NOT confirm out of sample (holdout +0.0094, CI [-0.030, +0.052]).",
+                "Buy / Sell / '-' — only a fired event is actionable; sub-threshold rows are context.",
+                "|z| magnitude x the instrument class's measured out-of-sample expectancy x the cost gate, in [0,1]. Not a probability.",
+                "WARMING UP (no full lookback yet) / BUY / SELL / NEUTRAL for this bar.",
+                "Hold window: direction (+1 buy, -1 sell, 0 none) and bars elapsed since it opened. Edge lives at 5-10 bars.",
+                "Cross-sectional fade-score percentile within the universe on this date.",
+                "Fade score x 100 and its negation — the ranking keys the UI tables sort on.",
+                "Plain-language read of the row: which event (if any), the z that produced it, and any scope caveat.",
+                "",
+                "Where cumulative delta sits vs its 20-bar mean: Accumulation(+) / Distribution(+) / Neutral.",
+                "Inferred per-bar buy-sell volume delta (OHLC close-location proxy).",
                 "Cumulative volume delta (running sum of Bar_Delta).",
-                "3-bar change in CVD — flow building (+) or draining (−).",
-                "Signed z-score of Bar_Delta vs its 20-bar distribution.",
-                "Absorption strength: |Bar_Delta| ÷ its 20-bar average (order-flow context).",
-                "Rolling 20-bar inferred buy share ∈ [0,1] (0.5 = balanced) — volume-normalized, cross-sectionally comparable flow bias.",
-                "Absorption context ∈ [0,1]: high delta soaked by a small range; >0.25 ≈ inferred_delta.pine rawAbsorb (relDelta>1.8 & relRange<0.6).",
-                "Statistical probability (0.0 - 1.0) of the detected HMM regime.",
-                "Volatility regime classification (Low/Normal/High) via GARCH analysis.",
-                "Structural change point detection (CUSUM) identifying regime shifts."
+                "3-bar change in CVD — flow building (+) or draining (-).",
+                "Signed z-score of Bar_Delta vs its 20-bar distribution. Volume-weighted, so distinct from SB_Z.",
+                "Absorption strength: |Bar_Delta| / its 20-bar average.",
+                "Rolling 20-bar inferred buy share in [0,1] (0.5 = balanced) — volume-normalized, cross-sectionally comparable.",
+                "Absorption context in [0,1]: high delta soaked by a small range; >0.25 approximates inferred_delta.pine rawAbsorb.",
+                "HMM regime label and the probability of the detected state. Per-name RISK CONTEXT.",
+                "Volatility regime (LOW/NORMAL/HIGH/EXTREME) via GARCH. Risk context.",
+                "Structural change point (CUSUM) identifying regime shifts. Risk context.",
+                "Forward returns at the SB v8 horizons (Historical Range mode only). LABELS for evaluation — never inputs.",
             ]
         }
         pd.DataFrame(legend_data).to_excel(writer, index=False, sheet_name='Legend')
@@ -1513,8 +1300,9 @@ def to_excel(df):
 # SHARED MATH HELPERS  (SMA + True Range — the only primitives the engine needs)
 # ──────────────────────────────────────────────────────────────────────────────
 #  The WRCI-era MA library (EMA/HMA/WMA/VWMA/ALMA/RMA, f_smooth, linreg, RSI) and
-#  the Ehlers AutoTune filter were removed with the WRCI engine — the reversion
-#  ranker uses only a simple SMA and ATR.
+#  the Ehlers AutoTune filter were removed with the WRCI engine. SB v8 needs neither:
+#  the signal is a rolling mean/stdev of the close location (engine.add_sb_features).
+#  What remains here serves the descriptive order-flow context only.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def calculate_sma(series, length):
@@ -1576,34 +1364,25 @@ def _rolling_volume_profile(high, low, vol, win=20, bins=24, va_pct=0.70):
 
 def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40,
                       wt2_len=20, wt2_type="ALMA",
-                      hci_thres=0.25, hci_look=102, hci_sig_len=53, hci_sig_type="SMA", hci_roc_len=15):
-    """Per-symbol feature engine — 12-1 momentum features (the ranking alpha) + the two
-    long-only entry screeners (Set A/B) plus order-flow context (inferred delta, CVD, profile).
+                      hci_thres=0.25, hci_look=102, hci_sig_len=53, hci_sig_type="SMA", hci_roc_len=15,
+                      sb=None):
+    """Per-symbol feature engine — the SB v8 close-location signal plus order-flow context.
 
-    The RANKING alpha is cross-sectional 12-1 MOMENTUM (see engine.py / research.py); its
-    per-symbol inputs are attached here via ``eng.add_alpha_features`` and ranked later across
-    the universe by ``eng.compute_ranking``. Reversion was demoted to an entry-timing overlay
-    after the research harness showed it is net-negative post-cost; momentum is the edge that
-    survives costs (~+6%/yr excess, Sharpe_exc ~0.6, ~21% turnover — beta-heavy, decays, so the
-    alpha-health monitor gates it). The legacy WRCI / Conviction / Pulse / Liquidity / HCI /
-    AutoTune engines were removed.
+    The SIGNAL is SB v8 (see engine.py / sb_v8.pine): the z-score of where price closes
+    inside its own bar range. It is attached here via ``eng.add_sb_features`` — one
+    screening condition producing two events, a BUY on a weak close (``buy_cond``, the
+    green triangle) and a SELL on a strong close (``sell_cond``, the yellow diamond).
+    The cross-section is ranked later by ``eng.compute_ranking`` on the fade score.
 
-    The inferred delta / CVD / volume profile are DESCRIPTIVE ORDER-FLOW CONTEXT (OHLC proxy;
-    validated to add no cross-sectional ranking edge). Alongside them, two LIVE same-bar
-    LONG-ONLY entry screeners are surfaced (compute_signal_sets), each validated on an
-    out-of-sample edge sweep as a better-than-baseline ENTRY timer on uptrending names:
-      • long_cond (short_cond=False) — Set A · MOMENTUM PULLBACK-RESUMPTION: an established
-                                       uptrend (Close>SMA200, mom_12_1>0.10) that dipped
-                                       below SMA20 and closed back above it (buy the dip)
-      • long_cond_comp (*_comp=False) — Set B · GAP-AND-GO CONTINUATION: an uptrend gaps up
-                                        ≥1.5%, holds it (Close>Open), finishes near its 20d high
-    They are ENTRY-ODDS screeners for the trader, not ranking inputs and not standalone
-    portfolio alpha — the momentum engine (engine.py) is the rank.
+    Everything else written here is DESCRIPTIVE CONTEXT, never a signal input: the inferred
+    delta / CVD / volume profile (OHLC proxies, validated to add no cross-sectional edge),
+    the MA alignment count, and the F1/F2 features the regime engine consumes.
 
+    ``sb`` is the run's :class:`SBSettings`; ``None`` falls back to the measured defaults.
     The unused WRCI-era params (n1/n2/obLevel*/osLevel*/wt2_*/hci_*) are retained in the
-    signature only so existing call sites keep working; `reg_len` still drives the ATR
-    window. `_analysis_params_sig` carries an engine tag so frames cached by the old
-    engine are invalidated.
+    signature only so existing call sites keep working; ``reg_len`` still drives the ATR
+    window. ``_analysis_params_sig`` carries an engine tag plus the SB parameters, so frames
+    cached by the old engine — or under a different threshold — are invalidated.
     """
     reg_len = max(reg_len, 2)
 
@@ -1632,8 +1411,8 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     cvd_ema    = cvd.ewm(span=20, adjust=False).mean()   # CVD flow-trend (UI context)
 
     # ── ATR(14) for absorption range-normalization ─────────────────────────────
-    # Pine's ta.atr is RMA-smoothed (Wilder), not SMA — matched exactly so the
-    # Rel_Range used by the Set B absorption filter reproduces inferred_delta.pine.
+    # Pine's ta.atr is RMA-smoothed (Wilder), not SMA — matched exactly so Rel_Range
+    # reproduces inferred_delta.pine's absorption geometry.
     tr    = calculate_true_range(df)
     atr14 = pd.Series(_rma(tr.to_numpy(dtype=float), 14), index=df.index)
     mintick = (close.abs().clip(lower=1e-6) * 1e-4)   # proxy for syminfo.mintick
@@ -1723,15 +1502,24 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
         ma_counts += (close > ema).astype(int)
     df['MA_Alignment'] = ma_counts
 
-    df = compute_signal_sets(df, high, low, close, vol,
-                             bar_delta, cvd, cvd_ma)
+    # ── FLOW CONDITION (context only) ──────────────────────────────────────────
+    # Where cumulative delta sits vs its 20-bar mean → accumulation / distribution.
+    # Consumed by the Correlation setup classifier and the range-mode breadth charts;
+    # it is not part of the signal.
+    cvd_dev = (cvd - cvd_ma)
+    band    = cvd_dev.abs().rolling(20).mean().clip(lower=1e-9)
+    df['Condition'] = np.select(
+        [cvd_dev >  2 * band, cvd_dev >  band, cvd_dev < -2 * band, cvd_dev < -band],
+        ['Accumulation+', 'Accumulation', 'Distribution+', 'Distribution'],
+        default='Neutral',
+    )
 
-    # ── ALPHA FEATURES (12-1 momentum ranking edge + reversion entry overlay; see engine.py) ──
-    # Momentum is the validated cost-survivable edge (research.py); reversion was demoted to
-    # entry-timing after it proved net-negative post-cost. The cross-sectional ranking
-    # (engine.compute_ranking) runs later once the universe is assembled. Order-flow above is
-    # context only.
-    df = eng.add_alpha_features(df)
+    # ── THE SCREENING CONDITION — SB v8 close-location reversal (engine.py) ────
+    # The only signal in the system. Writes SB_CLV / SB_Z / Fade_Score plus the two
+    # plotted events (buy_cond = green triangle, sell_cond = yellow diamond) and the
+    # hold window. Cross-sectional ranking happens later, once the universe is assembled.
+    _sb = sb if sb is not None else _sb_settings(None, None, "Daily")
+    df = eng.add_sb_features(df, z_look=_sb.z_look, thr=_sb.thr, horizon=_sb.horizon)
 
     return df
 
@@ -1765,91 +1553,8 @@ def _rma(x: np.ndarray, length: int) -> np.ndarray:
     return out
 
 
-
-def compute_signal_sets(df: pd.DataFrame,
-                        high: pd.Series, low: pd.Series, close: pd.Series,
-                        vol: pd.Series,
-                        bar_delta: pd.Series, cvd: pd.Series, cvd_ma: pd.Series,
-                        # Clamp engine (clamp.pine defaults)
-                        thr_length: int = 20, thr_stat_len: int = 60,
-                        thr_vol_norm_len: int = 50, base_k: float = 2.0,
-                        use_adaptive_k: bool = True) -> pd.DataFrame:
-    """LIVE same-bar LONG-ONLY entry screeners (both fire ON the bar, no delay).
-
-    Rebuilt (v5.1) from a 40-candidate out-of-sample edge sweep (see research.py /
-    ARCHITECTURE.md). The prior delta-divergence (Set A) and clamp-cross (Set B) signals
-    were validated to carry NO tradeable edge and are retired; the short side of every
-    tested variant ANTI-predicted on this universe, so both screeners are LONG-ONLY.
-
-    Both flag better-than-baseline ENTRY timing on names already in an uptrend — entry-odds
-    screeners for a discretionary trader, NOT standalone portfolio alpha (overweighting a
-    momentum book that already holds these names does not raise its Sharpe).
-
-    Shared trend gate: Close > SMA200 AND 12-1 momentum positive — an established uptrend.
-    (This absolute per-symbol gate stands in for the cross-sectional momentum rank, which is
-    not visible here; verified to preserve the edge.)
-
-    Set A — MOMENTUM PULLBACK-RESUMPTION (long_cond):
-      strong uptrend (mom_12_1 > 0.10) that dipped below its SMA20 and closed back above it.
-      "Buy the dip that resumed." Validated ~+0.26% vs universe / +0.17% vs the momentum
-      top-tercile at 5d, positive in BOTH 2016-21 and 2022-26 halves (overlap-t ~2.0).
-
-    Set B — GAP-AND-GO CONTINUATION (long_cond_comp):
-      an uptrend gaps up ≥1.5% (Open > 1.015 × prior close), HOLDS the gap (Close > Open),
-      and finishes near its 20-day high — textbook momentum ignition on a catalyst. Chosen
-      over volume-surge by a curated 40-condition OOS sweep: +0.90% vs the momentum top-tercile
-      at 5d (overlap-t ~2.0), positive in 9/11 years, and near-orthogonal to Set A AND to the
-      old volume-surge signal (Jaccard ~0.01-0.06). Rarer but far higher-conviction.
-
-    short_cond / short_cond_comp are retained as all-False for LA_/SA_/LB_/SB_ column
-    compatibility — the screeners are long-only. Also writes the flow Condition (context).
-    """
-    n = len(df)
-    open_ = df['Open'] if 'Open' in df.columns else close.shift(1)
-
-    # ── Per-symbol trend + entry primitives ────────────────────────────────────
-    sma20    = close.rolling(20).mean()
-    sma200   = close.rolling(200).mean()
-    mom_12_1 = close.shift(21) / close.shift(252) - 1.0          # 12-month return, skip last month
-    hi20     = close.rolling(20).max()
-    pc       = close.shift(1)
-    uptrend  = close > sma200
-
-    # ── SET A — momentum pullback-resumption (long-only) ──
-    long_cond = (uptrend & (mom_12_1 > 0.10)
-                 & (pc < sma20.shift(1)) & (close > sma20)).to_numpy(dtype=bool)
-    # ── SET B — gap-and-go continuation (long-only) ──
-    # Upgraded from volume-surge (+0.28%) to gap-and-go (+0.90% vs momentum, t~2.0, 9/11 yrs,
-    # orthogonal to Set A) after the curated 40-condition OOS sweep. An uptrend gaps up ≥1.5%,
-    # HOLDS the gap (close > open), and finishes near its 20-day high — textbook momentum ignition.
-    long_cond_comp = (uptrend & (open_ > pc * 1.015)
-                      & (close > open_) & (close >= hi20 * 0.99)).to_numpy(dtype=bool)
-
-    # Long-only: the short side of these events anti-predicts (validated). Kept all-False
-    # for LA_/SA_/LB_/SB_ column compatibility.
-    short_cond      = np.zeros(n, dtype=bool)
-    short_cond_comp = np.zeros(n, dtype=bool)
-
-    df['long_cond']       = long_cond
-    df['short_cond']      = short_cond
-    df['long_cond_comp']  = long_cond_comp
-    df['short_cond_comp'] = short_cond_comp
-
-    # Flow Condition (unchanged): where cumulative delta sits vs its 20-bar mean →
-    # accumulation / distribution / neutral.
-    cvd_dev = (cvd - cvd_ma)
-    band    = cvd_dev.abs().rolling(20).mean().clip(lower=1e-9)
-    df['Condition'] = np.select(
-        [cvd_dev >  2 * band, cvd_dev >  band, cvd_dev < -2 * band, cvd_dev < -band],
-        ['Accumulation+', 'Accumulation', 'Distribution+', 'Distribution'],
-        default='Neutral'
-    )
-
-    return df
-
-
 # ══════════════════════════════════════════════════════════════════════════════
-# REGIME INTELLIGENCE ENGINE (NIRNAY FEATURES)
+# REGIME ENGINE (per-name risk context — never a signal input)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class AdaptiveHMM:
@@ -2030,12 +1735,15 @@ class AdaptiveKalmanFilter:
 
 def run_regime_analysis(df):
     """
-    Apply joint-state regime intelligence over (F1_PriceMom, F2_VolQual, CVD flow).
+    Apply joint-state regime classification over (F1_PriceMom, F2_VolQual, CVD flow).
     The three input dimensions are roughly orthogonal (price momentum, volume
     quality, cumulative-delta flow), so HMM's classification reflects true market
-    state. The regime engine is order-flow-agnostic; its Vol_Regime and
-    Regime_Confidence outputs feed the conviction read in engine.compute_ranking
-    and the per-name risk context in the UI.
+    state.
+
+    Pure per-name RISK CONTEXT. Its Regime / Vol_Regime / Change_Point outputs are
+    displayed alongside the signal and aggregated in the range-mode Regime tab; they do
+    NOT enter the SB v8 signal or its conviction, which is a function of the
+    close-location z-score, the instrument class's measured expectancy, and the cost gate.
     """
     hmm    = AdaptiveHMM()
     garch  = GARCHDetector()
@@ -2119,23 +1827,15 @@ def run_regime_analysis(df):
 
 
 def _classify_signal_type(row) -> str:
-    """Return priority-ordered signal type for a single bar row (pandas Series).
+    """Return the SB v8 signal type for a single bar row (pandas Series).
 
-    Priority: Set A (pullback-resumption) > Set B (gap-and-go continuation) > flow zone.
+    A fired event wins; otherwise the row falls back to its flow zone (context only).
     Matches the vectorised np.select in the harvest path.
     """
-    if row.get('long_cond'):       return "A: Long"
-    if row.get('short_cond'):      return "A: Short"
-    if row.get('long_cond_comp'):  return "B: Long"
-    if row.get('short_cond_comp'): return "B: Short"
+    if row.get('buy_cond'):   return "BUY"
+    if row.get('sell_cond'):  return "SELL"
     cond = row.get('Condition', 'Neutral')
     return cond if cond != 'Neutral' else '-'
-
-
-# The legacy WRCI-oscillator divergence detector (`calculate_divergences`, writing
-# Bullish_Div / Bearish_Div) was removed in the order-flow rewrite: Set A IS the
-# delta-divergence signal now (compute_signal_sets), so a separate price/oscillator
-# divergence pass is redundant.
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA HANDLING & UTILITIES
@@ -2169,14 +1869,14 @@ def render_landing_page():
         <div class='system-card portfolio'>
             <h3>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                MOMENTUM ENGINE
+                SB v8 · CLOSE-LOCATION
             </h3>
-            <p>Sanket ranks the universe by 12-1 cross-sectional momentum (long tilt) — the strongest trending names relative to peers, entered on short-horizon pullbacks. It's the edge that survives costs; reversion (real but net-negative post-cost) is demoted to entry timing.</p>
+            <p>One screening condition: where price closes inside its own bar range, z-scored over a trailing year. The sign is the finding — a <strong>strong close predicts weakness</strong>, so the fade of a weak close is the buy.</p>
             <div class='spec'>
-                <span>Primary:</span> 12-month return, skip last month (robust-z)<br>
-                <span>Method:</span> Within-date robust z-score, long-only monthly<br>
-                <span>Validated:</span> excess ~+6%/yr, Sharpe_exc ~0.6, ~21% turnover (research.py)<br>
-                <span>Sorting:</span> Rank by momentum score
+                <span>Measure:</span> ((C−L) − (H−C)) / (H−L), z over 252 bars<br>
+                <span>Discovery:</span> IC −0.0634, z −7.96, p_bonf 1.2e-13<br>
+                <span>Holdout:</span> confirmed at h=1 and h=5 (2014–2026)<br>
+                <span>Sorting:</span> Rank by fade score (−z)
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -2186,14 +1886,14 @@ def render_landing_page():
         <div class='system-card regime'>
             <h3>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
-                CONVICTION & EDGE
+                TWO EVENTS
             </h3>
-            <p>Conviction scales by a live alpha-health monitor — the system measures its own realized edge and stands down when momentum is dormant.</p>
+            <p><span style="color:#00E676;">▲ BUY</span> on a weak close (z &lt; −1.5σ) — holdout-confirmed in both eras. <span style="color:#FFA726;">◆ SELL</span> on a strong close (z &gt; +1.5σ) — the Pine calls this side CAUTION: it did not confirm out of sample.</p>
             <div class='spec'>
-                <span>Sides:</span> Long (oversold) / Short (overbought) tails<br>
-                <span>Conviction:</span> Tail strength × alpha-health × regime<br>
-                <span>Edge monitor:</span> Trailing realized cross-sectional IC<br>
-                <span>Context:</span> Order-flow + vol-regime overlays
+                <span>Horizon:</span> 5–10 trading days · no intraday edge<br>
+                <span>Entry:</span> next session's open after the signal bar<br>
+                <span>Why events:</span> a continuous position costs 12%/yr and nets −0.48 Sharpe<br>
+                <span>Conviction:</span> |z| × class expectancy × cost gate
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -2203,14 +1903,14 @@ def render_landing_page():
         <div class='system-card strategies'>
             <h3>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
-                UNIVERSE & MODES
+                SCOPE IS NOT UNIVERSAL
             </h3>
-            <p>Span eight asset classes through five analysis modes — from single-date snapshots to historical edge measurement.</p>
+            <p>Your universe selection sets the instrument class, and with it the measured out-of-sample expectancy the dashboard reports. Believe what it says.</p>
             <div class='spec'>
-                <span>Coverage:</span> 8 asset classes · 500+ symbols<br>
-                <span>Timeframes:</span> Daily · Weekly<br>
-                <span>Modes:</span> 5 modes · snapshot to time-series<br>
-                <span>Edge monitor:</span> Live alpha-health (realized IC)
+                <span>Validated:</span> US indices +0.121 · US sectors +0.068<br>
+                <span>Unconfirmed:</span> India indices +0.089 (CI includes zero)<br>
+                <span>Gone:</span> commodities · FX · rates · credit · intl equity<br>
+                <span>Coverage:</span> 8 asset classes · 4 modes · Daily / Weekly
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -2225,7 +1925,7 @@ def render_landing_page():
         </h4>
         <p>Configure via the <strong>Sidebar</strong>: select <strong>Universe</strong>, <strong>Timeframe</strong>, <strong>Analysis Mode</strong>, and any mode-specific settings.<br>
            Click the <strong>RUN</strong> button — its label adapts to the active mode (Screener · Pulse · Harvest · Correlation).<br>
-           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will rank the cross-section by 12-1 momentum · scale conviction by live alpha-health · surface long-only entry screeners + order-flow context</span></p>
+           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will z-score each symbol's close location · fire BUY / SELL past ±1.5σ · rank the cross-section by fade score · gate conviction on the selected asset class's measured expectancy</span></p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -2258,7 +1958,7 @@ class SidebarState:
     corr_target_ticker: Optional[str]
     corr_lookback: int
     corr_method: str
-    calib_settings: dict[str, Any]
+    sb: "SBSettings"   # resolved SB v8 config for this run (params + derived instrument class)
 
 
 def render_sidebar() -> SidebarState:
@@ -2398,27 +2098,11 @@ def render_sidebar() -> SidebarState:
             disabled=not date_range_valid,
         )
 
-        # ── Per-universe alpha-health reset (must run BEFORE the Passport renders) ──
-        # When the (universe, selected_index, timeframe) triple changes — including the
-        # click that triggered THIS rerun — clear the stale trailing-IC reading so the
-        # alpha-health re-measures for the new universe on the next screener run. The
-        # momentum engine has no per-universe profiles on disk to load.
-        _current_uni_key = (universe, selected_index, timeframe)
-        _previous_uni_key = st.session_state.get("_last_universe_key")
-        if _previous_uni_key != _current_uni_key:
-            st.session_state.pop("alpha_health_ic", None)
-            st.session_state.pop("_alpha_health_key", None)
-            if "opt_results" in st.session_state:
-                del st.session_state["opt_results"]
-            if _previous_uni_key is not None:
-                _uni_label = (selected_index or universe or "—")
-                console.detail(f"Universe changed · {_uni_label} · alpha-health will re-measure")
-            st.session_state["_last_universe_key"] = _current_uni_key
-
-        # Engine Status panel — rendered in every mode. Surfaces the engine name, the
-        # live alpha-health / trailing-IC reading, and the Meta Filter controls.
-        # Returns the resolved alpha-health settings (force / lookback / horizons).
-        calib_settings = _render_model_passport_sidebar(universe, selected_index, timeframe, analysis_mode)
+        # Engine Status panel — rendered in every mode. Surfaces the SB v8 engine, the
+        # instrument class derived from the universe above, that class's measured
+        # out-of-sample expectancy, and the four Pine parameters. Returns the resolved
+        # SBSettings for this run.
+        sb = _render_engine_status_sidebar(universe, selected_index, timeframe)
 
         # System Spec Card — always rendered as the LAST block in the sidebar.
         try:
@@ -2447,6 +2131,7 @@ def render_sidebar() -> SidebarState:
             <div class="spec-row"><span class="spec-label">Universe</span><span class="spec-value" style="font-size:0.7rem;">{universe_display}</span></div>
             <div class="spec-row"><span class="spec-label">Timeframe</span><span class="spec-value">{timeframe}</span></div>
             <div class="spec-row"><span class="spec-label">Mode</span><span class="spec-value" style="font-size:0.7rem;">{analysis_mode}</span></div>
+            <div class="spec-row"><span class="spec-label">Asset Class</span><span class="spec-value" style="font-size:0.7rem;">{sb.iclass}</span></div>
         """
         if analysis_mode == "Correlation Analysis":
             spec_html += f'<div class="spec-row"><span class="spec-label">Target</span><span class="spec-value" style="font-size:0.7rem;">{target_selected}</span></div>'
@@ -2473,7 +2158,7 @@ def render_sidebar() -> SidebarState:
             corr_target_ticker=corr_target_ticker,
             corr_lookback=corr_lookback,
             corr_method=corr_method,
-            calib_settings=calib_settings,
+            sb=sb,
         )
 
 
@@ -2481,28 +2166,31 @@ def render_sidebar() -> SidebarState:
 # MAIN SCREENER FUNCTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True, external_progress_slot=None, progress_offset=0, progress_scale=100, wt2_len=20, wt2_type="ALMA"):
-    """Execute the cross-sectional momentum screen and return ranked signals.
+def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True, external_progress_slot=None, progress_offset=0, progress_scale=100, wt2_len=20, wt2_type="ALMA", sb=None):
+    """Execute the SB v8 screen and return the ranked cross-section.
 
-    Fetches market data for the universe, computes per-symbol momentum features + the two
-    long-only entry screeners + order-flow/regime context, then ranks the whole cross-section
-    by the 12-1 momentum score (engine.compute_ranking), scaling conviction by the live
-    alpha-health read.
+    Fetches market data for the universe, computes the per-symbol close-location z-score
+    (plus order-flow / regime context), then ranks the whole cross-section by the fade
+    score and gates conviction on the instrument class's measured expectancy and the cost
+    gate (engine.compute_ranking).
 
     Args:
+        sb: the run's :class:`SBSettings`; ``None`` resolves defaults for this universe.
         external_progress_slot: Optional Streamlit container for external progress tracking (e.g., from correlation analysis)
         progress_offset: Starting percentage for external progress tracking (default 0)
         progress_scale: Scale factor for progress percentage within external slot (default 100 = full)
 
-    Returns: DataFrame with signals ranked by magnitude, or None on error.
+    Returns: DataFrame with signals ranked by fade score, or None on error.
     """
     obLevel1, obLevel2, osLevel1, osLevel2 = levels
+    if sb is None:
+        sb = _sb_settings(universe, selected_index, timeframe)
     progress_slot = external_progress_slot if external_progress_slot is not None else (st.empty() if show_progress else None)
 
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (5 * progress_scale / 100)
-        progress_bar(progress_slot, pct_val, "Initializing Momentum Engine", f"Universe: {universe}")
-    
+        progress_bar(progress_slot, pct_val, "Initializing SB v8 Engine", f"Universe: {universe}")
+
     console.start_phase("DATA ACQUISITION", 1, 2)
     console.section("Universe Configuration")
     console.item("Universe", universe)
@@ -2540,10 +2228,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         progress_bar(progress_slot, pct_val, "Fetching Market Data", f"{len(stock_list)} Stocks")
     # Anchor the fetch at analysis_date (not today): the screener snaps to the
     # analysis_date bar for all signal/ranking reads (the only post-date read is the
-    # display-only "% Chng Since" column, which uses the few buffer days after it),
-    # while sharing the registry key the alpha-health harvest already populated for
-    # this (universe, analysis_date) — no second yfinance round-trip on historical
-    # runs. For the common analysis_date == today run this is identical to before.
+    # display-only "% Chng Since" column, which uses the few buffer days after it).
+    # For the common analysis_date == today run this is identical to before.
     end_date = analysis_date if isinstance(analysis_date, datetime.date) else _today_ist()
     data_dict, fetch_msg = get_universe_data(stock_list, end_date=end_date)
 
@@ -2556,13 +2242,16 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     console.end_phase("DATA ACQUISITION")
 
-    console.start_phase("MOMENTUM RANKING", 2, 2)
+    console.start_phase("SB v8 SCREEN", 2, 2)
 
     console.section("Engine Parameters")
-    console.item("Engine", "Cross-Sectional Momentum v5.1")
+    console.item("Engine", "SB v8 — Close-Location Reversal")
     console.item("Timeframe", timeframe)
-    console.item("Momentum formation", f"{eng.MOM_FORM}d − skip {eng.MOM_SKIP}d (12-1)")
-    console.item("Alpha-health", f"{st.session_state.get('alpha_health_mult', 1.0):.2f}× (live edge scaling)")
+    console.item("Z-score lookback", f"{sb.z_look} bars (needs {sb.min_bars} to signal)")
+    console.item("Trigger", f"±{sb.thr:.1f}σ · hold {sb.horizon} bars · entry next open")
+    console.item("Instrument class", f"{sb.iclass} · OOS edge {sb.edge:+.3f} vol · {sb.hit:.1f}% hit"
+                                     + ("" if sb.established else " (NOT established)"))
+    console.item("Cost gate", f"{sb.cost_bps:.1f} bp · " + ("net positive" if sb.cost_ok else "NET NEGATIVE"))
     console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (20 * progress_scale / 100)
@@ -2570,15 +2259,12 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     results = []
     _failed_symbols = []
-    # Per-symbol recent-bar feature windows, keyed by ticker. Powers the fire-bar
-    # context status for aged order-flow context signals (1d/2d/… ago).
-    intel_windows: dict = {}
+    _warmup_skipped = 0
 
-    # If an edge-measurement harvest just ran for this exact universe + params + date,
-    # its analyzed frames are cached — reuse them instead of recomputing the whole
-    # per-stock pipeline.
+    # If a range harvest just ran for this exact universe + params + date, its analyzed
+    # frames are cached — reuse them instead of recomputing the whole per-stock pipeline.
     _cache_sig = _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
-                                      wt2_len, wt2_type, end_date)
+                                      wt2_len, wt2_type, end_date, sb.params_sig)
     _cache_hits = 0
 
     _tf_label = "weekly" if timeframe == "Weekly" else "daily"
@@ -2601,16 +2287,19 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 if timeframe == "Weekly":
                     df = resample_to_weekly(df)
 
-            # Insufficient-data guard — applied on both cache hit and miss so a short
-            # frame cached by the (unguarded) harvest can't slip a stock the screener
-            # would otherwise skip.
-            if len(df) < reg_len + 30:
-                console.detail(f"{ticker}: Skipped (Insufficient data: {len(df)} rows)")
+            # Warmup guard — a symbol cannot carry an SB v8 signal until it has a full
+            # z-score lookback (the Pine's `dBars < zLook + 2` refusal). Applied on both
+            # cache hit and miss so a short frame cached by the (unguarded) harvest can't
+            # slip a symbol whose z-score would be NaN.
+            _min_bars = max(reg_len + 30, sb.min_bars)
+            if len(df) < _min_bars:
+                console.detail(f"{ticker}: Skipped (warming up: {len(df)} of {_min_bars} bars needed)")
+                _warmup_skipped += 1
                 continue
 
             if _cached is None:
                 df = run_full_analysis(df, reg_len, wt_n1, wt_n2, obLevel1, obLevel2, osLevel1, osLevel2,
-                                       wt2_len=wt2_len, wt2_type=wt2_type)
+                                       wt2_len=wt2_len, wt2_type=wt2_type, sb=sb)
                 df = run_regime_analysis(df)        # adds HMM_Bull/Bear, Vol_Regime, Change_Point, Regime_Confidence
 
             # Sample at analysis_date — snap to the correct historical bar.
@@ -2639,23 +2328,23 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
             last_row = df.iloc[idx_pos]
 
-            # Capture the recent-bar feature window (offsets 0..4 = Today..Within-5d)
-            # for fire-bar Intel scoring — the order-flow features signal_conf_features
-            # reads at each fire bar (not just the snapshot bar).
-            _win_cols = ['HMM_Bull', 'HMM_Bear', 'Vol_Regime', 'Regime_Confidence',
-                         'Change_Point', 'long_cond', 'short_cond',
-                         'long_cond_comp', 'short_cond_comp',
-                         'F1_PriceMom', 'CVD', 'CVD_Slope', 'Delta_Z', 'Close']
-            _win = df.iloc[max(0, idx_pos - 4): idx_pos + 1]
-            intel_windows[ticker] = _win[[c for c in _win_cols if c in _win.columns]].copy()
-            # Recent daily-return volatility — the asset-agnostic scale for the
-            # Entry (move-exhaustion) check: how far has price run, in σ units.
+            # Recent return volatility — the asset-agnostic σ scale used to report how far
+            # price has run since an aged signal fired.
             try:
                 _retvol20 = float(df['Close'].pct_change().rolling(20).std().iloc[idx_pos])
             except Exception:
                 _retvol20 = float('nan')
 
             signal_type = _classify_signal_type(last_row)
+
+            # The z-score at each of the last 5 bars, so an aged signal can report the z
+            # that fired it (offset 0 = the snapshot bar … 4 = five bars back).
+            _z_win = df['SB_Z'].iloc[max(0, idx_pos - 4): idx_pos + 1].tolist()
+            _z_hist = list(reversed(_z_win))            # [today, 1 back, 2 back, …]
+            _z_hist += [float('nan')] * (5 - len(_z_hist))
+            _close_win = df['Close'].iloc[max(0, idx_pos - 4): idx_pos + 1].tolist()
+            _close_hist = list(reversed(_close_win))
+            _close_hist += [float('nan')] * (5 - len(_close_hist))
 
             # Clean display names
             simple_name = ticker.replace(".NS", "").lstrip("^")
@@ -2683,7 +2372,15 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "Symbol": ticker,
                 "DisplayName": display_name,
                 "SimpleName": simple_name,
-                "Signal": round(last_row['Delta_Z'], 2) if not pd.isna(last_row['Delta_Z']) else 0.0,
+                # Signal == the SB v8 fade score (-z). Positive = bullish (weak close).
+                "Signal": round(float(last_row['Fade_Score']), 3) if pd.notna(last_row['Fade_Score']) else np.nan,
+                "SB_Z": float(last_row['SB_Z']) if pd.notna(last_row['SB_Z']) else np.nan,
+                "SB_CLV": float(last_row['SB_CLV']) if pd.notna(last_row['SB_CLV']) else np.nan,
+                "SB_State": str(last_row.get('SB_State', 'NEUTRAL')),
+                "SB_Hold_Dir": int(last_row.get('SB_Hold_Dir', 0) or 0),
+                "SB_Hold_Age": (float(last_row['SB_Hold_Age'])
+                                if pd.notna(last_row.get('SB_Hold_Age')) else np.nan),
+                "SB_Horizon": int(sb.horizon),
                 "Bar_Delta": round(last_row['Bar_Delta'], 2) if not pd.isna(last_row['Bar_Delta']) else 0.0,
                 "CVD": round(last_row['CVD'], 2) if not pd.isna(last_row['CVD']) else 0.0,
                 "CVD_Slope": round(last_row['CVD_Slope'], 2) if not pd.isna(last_row['CVD_Slope']) else 0.0,
@@ -2704,70 +2401,42 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "Regime_Confidence": float(last_row.get('Regime_Confidence', 0.0)),
                 "F1_PriceMom":   float(last_row.get('F1_PriceMom', 0)),
                 "F2_VolQual":    float(last_row.get('F2_VolQual', 0)),
-                # Alpha inputs consumed cross-sectionally by engine.compute_ranking:
-                #   _mom_* = the 12-1 momentum RANKING edge (primary); _rev_* = the reversion
-                #   entry-timing overlay (weak conviction nudge, never the rank).
-                "_mom_12_1":     last_row.get('_mom_12_1'),
-                "_mom_6_1":      last_row.get('_mom_6_1'),
-                "_rev_ret2":     last_row.get('_rev_ret2'),
-                "_rev_ret5":     last_row.get('_rev_ret5'),
-                "_rev_dist5":    last_row.get('_rev_dist5'),
-                "_rev_dist10":   last_row.get('_rev_dist10'),
-                "_rev_rngpos":   last_row.get('_rev_rngpos'),
                 "ATR_Pct":       last_row.get('ATR_Pct'),
-                # Set A · legacy L_/S_ alias of LA_/SA_ below
-                # (kept for Range Study compat; reads the same long_cond column).
-                "L_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
-                "L_1d": "●" if sample_range.iloc[-2]['long_cond'] else "—",
-                "L_2d": "●" if sample_range.iloc[-3]['long_cond'] else "—",
-                "L_3d": "●" if sample_range.iloc[-4]['long_cond'] else "—",
-                "L_5d": "●" if sample_range.tail(5)['long_cond'].any() else "—",
-                # (short side of the same legacy alias)
-                "S_Today": "●" if sample_range.iloc[-1]['short_cond'] else "—",
-                "S_1d": "●" if sample_range.iloc[-2]['short_cond'] else "—",
-                "S_2d": "●" if sample_range.iloc[-3]['short_cond'] else "—",
-                "S_3d": "●" if sample_range.iloc[-4]['short_cond'] else "—",
-                "S_5d": "●" if sample_range.tail(5)['short_cond'].any() else "—",
-                # Set A · Pullback-Resumption — Historical Long Signals
-                "LA_Today": "●" if sample_range.iloc[-1]['long_cond'] else "—",
-                "LA_1d": "●" if sample_range.iloc[-2]['long_cond'] else "—",
-                "LA_2d": "●" if sample_range.iloc[-3]['long_cond'] else "—",
-                "LA_3d": "●" if sample_range.iloc[-4]['long_cond'] else "—",
-                "LA_5d": "●" if sample_range.tail(5)['long_cond'].any() else "—",
-                # Set A · Short side RETIRED (long-only screeners) — always "—"
-                "SA_Today": "●" if sample_range.iloc[-1]['short_cond'] else "—",
-                "SA_1d": "●" if sample_range.iloc[-2]['short_cond'] else "—",
-                "SA_2d": "●" if sample_range.iloc[-3]['short_cond'] else "—",
-                "SA_3d": "●" if sample_range.iloc[-4]['short_cond'] else "—",
-                "SA_5d": "●" if sample_range.tail(5)['short_cond'].any() else "—",
-                # Set B · Gap-and-Go Continuation — Historical Long Signals
-                "LB_Today": "●" if sample_range.iloc[-1]['long_cond_comp'] else "—",
-                "LB_1d": "●" if sample_range.iloc[-2]['long_cond_comp'] else "—",
-                "LB_2d": "●" if sample_range.iloc[-3]['long_cond_comp'] else "—",
-                "LB_3d": "●" if sample_range.iloc[-4]['long_cond_comp'] else "—",
-                "LB_5d": "●" if sample_range.tail(5)['long_cond_comp'].any() else "—",
-                # Set B · Short side RETIRED (long-only screeners) — always "—"
-                "SB_Today": "●" if sample_range.iloc[-1]['short_cond_comp'] else "—",
-                "SB_1d": "●" if sample_range.iloc[-2]['short_cond_comp'] else "—",
-                "SB_2d": "●" if sample_range.iloc[-3]['short_cond_comp'] else "—",
-                "SB_3d": "●" if sample_range.iloc[-4]['short_cond_comp'] else "—",
-                "SB_5d": "●" if sample_range.tail(5)['short_cond_comp'].any() else "—",
+                # ── BUY_* — green triangle (weak close, z < -thr), by signal age ──
+                "BUY_Today": "●" if sample_range.iloc[-1]['buy_cond'] else "—",
+                "BUY_1d": "●" if sample_range.iloc[-2]['buy_cond'] else "—",
+                "BUY_2d": "●" if sample_range.iloc[-3]['buy_cond'] else "—",
+                "BUY_3d": "●" if sample_range.iloc[-4]['buy_cond'] else "—",
+                "BUY_5d": "●" if sample_range.tail(5)['buy_cond'].any() else "—",
+                # ── SELL_* — yellow diamond (strong close, z > +thr), by signal age ──
+                "SELL_Today": "●" if sample_range.iloc[-1]['sell_cond'] else "—",
+                "SELL_1d": "●" if sample_range.iloc[-2]['sell_cond'] else "—",
+                "SELL_2d": "●" if sample_range.iloc[-3]['sell_cond'] else "—",
+                "SELL_3d": "●" if sample_range.iloc[-4]['sell_cond'] else "—",
+                "SELL_5d": "●" if sample_range.tail(5)['sell_cond'].any() else "—",
+                # Per-age z-score / close so an aged row reports the bar that fired it.
+                "Z_Hist":     _z_hist,
+                "Close_Hist": _close_hist,
                 # Additional fields for detail cards
                 "Osc_Value": round(last_row.get('Delta_Z', 0), 2),
                 "MA_Alignment": int(last_row.get('MA_Alignment', 0)),
                 "ZScore_Value": round(last_row.get('Delta_Z', 0), 2),
             })
 
-            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: Delta_Z={last_row['Delta_Z']:+.2f}  Zone={last_row['Condition']}  Status={signal_type}")
-            
+            _z_disp = float(last_row['SB_Z']) if pd.notna(last_row['SB_Z']) else float('nan')
+            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: z={_z_disp:+.2f}  "
+                           f"state={last_row.get('SB_State', '—')}  zone={last_row['Condition']}")
+
         except Exception as e:
             console.failure(f"Analysis Failed: {ticker}", str(e))
             _failed_symbols.append(ticker)
             continue
 
-    console.end_phase("MOMENTUM RANKING")
+    console.end_phase("SB v8 SCREEN")
     if _cache_hits:
-        console.detail(f"Analyzed-frame cache: reused {_cache_hits}/{len(data_dict)} frames from the edge-measurement harvest (skipped re-analysis)")
+        console.detail(f"Analyzed-frame cache: reused {_cache_hits}/{len(data_dict)} frames from the range harvest (skipped re-analysis)")
+    if _warmup_skipped:
+        console.detail(f"Warmup: {_warmup_skipped} symbol(s) skipped — fewer than {sb.min_bars} bars, so the z-score has no lookback")
     # One-shot cache — release the harvested frames now that the screener has consumed them.
     _analyzed_cache_clear()
 
@@ -2775,9 +2444,11 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.summary("RUN SUMMARY", {
         "Universe": universe,
         "Universe Index": selected_index,
+        "Instrument Class": sb.iclass,
         "Total Symbols": len(stock_list),
         "Data Success": len(data_dict),
         "Analyzed Stocks": len(results),
+        "Warming Up": _warmup_skipped,
         "Failed Symbols": f"{_fail_count} ({', '.join(_failed_symbols[:5])}{'…' if _fail_count > 5 else ''})" if _fail_count else "0",
         "Analysis Date": analysis_date,
         "Status": "COMPLETE",
@@ -2788,12 +2459,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         "data_fetched":      len(data_dict),
         "analyzed":          len(results),
         "failed":            _fail_count,
+        "warming_up":        _warmup_skipped,
     }
-    # Fire-bar feature windows for the age-bucketed signal tables (per-symbol).
-    st.session_state["intel_windows"] = intel_windows
-    st.session_state["intel_fire_cache"] = {}   # invalidate memoized fire-bar scores
     console.line('═', 70)
-    
+
     if show_progress or external_progress_slot is not None:
         # If this run owns the tail of the bar (offset+scale reaches 100), show a
         # clean 100%; otherwise cap at 95% of the slice for a following phase.
@@ -2812,51 +2481,61 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "The exchange may have been closed, or yfinance may be rate-limiting. "
                 "Try refreshing or selecting a recent trading day."
             )
+        elif _warmup_skipped >= _n_fetched:
+            st.warning(
+                f"**Every symbol is still warming up.** SB v8 needs {sb.min_bars} "
+                f"{'weekly' if timeframe == 'Weekly' else 'daily'} bars before the close-location "
+                f"z-score has a lookback, and none of the {_n_fetched} symbols in {selected_index} "
+                f"has that much history as of {analysis_date}. Try the Daily timeframe, or a "
+                "universe with longer-listed instruments."
+            )
         else:
             st.info(
-                f"**No signals found** — {_n_fetched} of {_n_total} symbols had data for {analysis_date}, "
-                "but none produced an order-flow signal in the current timeframe. "
+                f"**Nothing to show** — {_n_fetched} of {_n_total} symbols had data for {analysis_date}, "
+                "but none produced a usable close-location reading. "
                 "Try an adjacent trading date, or check that the selected date is a market session."
             )
         # Return empty DataFrame with expected columns to prevent downstream KeyErrors
         expected_cols = [
-            "Symbol", "DisplayName", "SimpleName", "Signal", "Bar_Delta", "CVD", "CVD_Slope", "Delta_Z", "Buy_Share", "Absorption_Score", "Zone", "SignalType", "Price", "PctChange",
-            "L_Today", "L_1d", "L_2d", "L_3d", "L_5d", "S_Today", "S_1d", "S_2d", "S_3d", "S_5d",
-            "LA_Today", "LA_1d", "LA_2d", "LA_3d", "LA_5d", "SA_Today", "SA_1d", "SA_2d", "SA_3d", "SA_5d",
-            "LB_Today", "LB_1d", "LB_2d", "LB_3d", "LB_5d", "SB_Today", "SB_1d", "SB_2d", "SB_3d", "SB_5d",
+            "Symbol", "DisplayName", "SimpleName", "Signal", "SB_Z", "SB_CLV", "SB_State",
+            "SB_Hold_Dir", "SB_Hold_Age", "SB_Horizon",
+            "Bar_Delta", "CVD", "CVD_Slope", "Delta_Z", "Buy_Share", "Absorption_Score",
+            "Zone", "SignalType", "Price", "PctChange",
+            "BUY_Today", "BUY_1d", "BUY_2d", "BUY_3d", "BUY_5d",
+            "SELL_Today", "SELL_1d", "SELL_2d", "SELL_3d", "SELL_5d",
             "Osc_Value", "MA_Alignment", "ZScore_Value",
         ]
         return pd.DataFrame(columns=expected_cols)
 
     results_df = pd.DataFrame(results)
 
-    # Global ranking via the cross-sectional MOMENTUM engine (engine.py). The 12-1 momentum
-    # score is the validated cost-survivable alpha; conviction is scaled by the live alpha-health
-    # monitor (is the edge currently working?) and per-name vol-regime suitability, and nudged by
-    # the reversion entry-timing overlay. This single call emits the full UI contract
-    # (Priority_*, Intel_Confidence, Meta_*) — see engine.py.
+    # Cross-sectional ranking (engine.py): order by the fade score (-z), assign Side from
+    # which side of ±thr the close location landed, and gate conviction on |z| × the
+    # instrument class's measured OOS expectancy × the cost gate. One call emits the whole
+    # UI contract (SB_Score, Side, Conviction, Priority_*, Signal_Reason).
     if not results_df.empty:
-        health = float(st.session_state.get("alpha_health_mult", 1.0))
-        results_df = eng.compute_ranking(results_df, alpha_health_mult=health)
+        results_df = eng.compute_ranking(results_df, iclass=sb.iclass,
+                                         cost_bps=sb.cost_bps, thr=sb.thr)
 
     return results_df
 
 
 def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe, wt2_len=20, wt2_type="ALMA",
-                            external_progress_slot=None, progress_offset=0, progress_scale=100):
-    """Compute the per-(date, symbol) factor frame for a date range.
+                            external_progress_slot=None, progress_offset=0, progress_scale=100,
+                            sb=None):
+    """Compute the per-(date, symbol) SB v8 frame for a date range.
 
-    Pure compute path: fetches history, runs full / regime / divergence analyses on
-    every symbol, builds the per-(date, symbol) row set, and stores ts_results_df +
-    ts_meta in ``st.session_state``. **Does not render UI.** The dashboard is
-    rendered separately by ``render_timeseries_dashboard()`` so it survives sidebar
+    Pure compute path: fetches history, runs the full / regime analyses on every symbol,
+    builds the per-(date, symbol) row set with forward-return labels, and stores
+    ts_results_df + ts_meta in ``st.session_state``. **Does not render UI.** The dashboard
+    is rendered separately by ``render_timeseries_dashboard()`` so it survives sidebar
     interactions / reruns.
 
-    When ``external_progress_slot`` is supplied (the Single-Date alpha-health
-    pre-pass), progress renders into that shared bar over
-    [offset, offset+scale], so the whole run shows ONE continuous progress bar
-    instead of a separate harvest bar followed by the screener bar.
+    ``external_progress_slot`` lets a caller share one progress bar over
+    [offset, offset+scale] instead of stacking a second bar.
     """
+    if sb is None:
+        sb = _sb_settings(universe, selected_index, timeframe)
     _own_slot = external_progress_slot is None
     progress_slot = st.empty() if _own_slot else external_progress_slot
     def _p(pct, label, sub):
@@ -2908,16 +2587,16 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     console.success(f"Downloaded depth for {len(data_dict)} entities")
 
     # Start Unified Harvesting Phase
-    console.start_phase("EDGE MEASUREMENT", 2, 2)
+    console.start_phase("SIGNAL HARVEST", 2, 2)
     start_harvest = time.time()
 
-    _p(15, "Measuring Live Edge", f"{len(data_dict)} Stocks")
+    _p(15, "Harvesting Signals", f"{len(data_dict)} Stocks")
     all_results = []
 
-    # Analyzed-frame cache for this run — lets the screener that follows skip
+    # Analyzed-frame cache for this run — lets a screener that follows skip
     # re-running the identical per-stock analysis pipeline (see helper comment).
     _cache_sig = _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
-                                      wt2_len, wt2_type, end_date)
+                                      wt2_len, wt2_type, end_date, sb.params_sig)
     _analyzed_cache_reset(_cache_sig)
 
     for i, (ticker, df) in enumerate(data_dict.items()):
@@ -2929,34 +2608,26 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
             # Local 15% -> 85% band for the per-symbol harvest loop.
             pct = 15 + (i + 1) / len(data_dict) * 70
-            _p(pct, "Measuring Live Edge", f"{i + 1} / {len(data_dict)} Symbols · ETA {eta_str}")
+            _p(pct, "Harvesting Signals", f"{i + 1} / {len(data_dict)} Symbols · ETA {eta_str}")
             if timeframe == "Weekly":
                 df = resample_to_weekly(df)
             df = run_full_analysis(df, reg_len, wt_n1, wt_n2, *levels,
-                                   wt2_len=wt2_len, wt2_type=wt2_type)
+                                   wt2_len=wt2_len, wt2_type=wt2_type, sb=sb)
             df = run_regime_analysis(df)
             # Cache the analyzed frame so run_screener_analysis can reuse it instead
             # of recomputing. Stored by reference — the harvest-only columns appended
             # below (Ret_*, SignalType) are harmless extras; the screener copies on read.
             _analyzed_cache_put(ticker, df, _cache_sig)
 
-            # Calculate forward returns for each training horizon
+            # Forward-return labels at the SB v8 horizons (5-10 bars is where the edge
+            # lives; 1 and 21 bracket its decay). Labels only — never signal inputs.
             for h in eng.HOLD_HORIZONS:
                 df[f'Ret_{h}b'] = df['Close'].shift(-h) / df['Close'] - 1
 
-            # Vectorized SignalType per bar (priority: A pullback-resume > B gap-and-go > Zone;
-            # short_cond/*_comp are always False now — long-only screeners)
+            # Vectorized SignalType per bar — a fired event wins, else the flow zone.
             df['SignalType'] = np.select(
-                [
-                    df['long_cond'],      df['short_cond'],
-                    df['long_cond_comp'], df['short_cond_comp'],
-                    df['Condition'] != 'Neutral',
-                ],
-                [
-                    'A: Long', 'A: Short',
-                    'B: Long', 'B: Short',
-                    df['Condition'],
-                ],
+                [df['buy_cond'], df['sell_cond'], df['Condition'] != 'Neutral'],
+                ['BUY', 'SELL', df['Condition']],
                 default='-',
             )
 
@@ -2967,56 +2638,46 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                 all_results.append({
                     'Date': date,
                     'Symbol': ticker,
-                    'Signal': row['Delta_Z'],
+                    # Signal == the SB v8 fade score (-z). Positive = bullish (weak close).
+                    'Signal': row['Fade_Score'],
+                    'SB_Z': row['SB_Z'],
+                    'SB_CLV': row['SB_CLV'],
+                    'SB_State': row.get('SB_State', 'NEUTRAL'),
+                    'SB_Hold_Dir': row.get('SB_Hold_Dir', 0),
+                    'SB_Hold_Age': row.get('SB_Hold_Age'),
                     'Bar_Delta': row['Bar_Delta'],
                     'CVD': row['CVD'],
                     'CVD_Slope': row['CVD_Slope'],
                     'Delta_Z': row['Delta_Z'],
                     'Zone': row['Condition'],
-                    'LongSignal': row['long_cond'],
-                    'ShortSignal': row['short_cond'],
-                    # Set A + Set B live-signal booleans (pullback-resume / gap-and-go; long-only)
-                    'long_cond': row['long_cond'],
-                    'short_cond': row['short_cond'],
-                    'long_cond_comp': row['long_cond_comp'],
-                    'short_cond_comp': row['short_cond_comp'],
+                    # BuySignal / SellSignal are the aggregation-facing names the range
+                    # dashboard counts per day; buy_cond / sell_cond are the raw booleans.
+                    'BuySignal': row['buy_cond'],
+                    'SellSignal': row['sell_cond'],
+                    'buy_cond': row['buy_cond'],
+                    'sell_cond': row['sell_cond'],
                     'SignalType': row['SignalType'],
-                    # Regime Intelligence columns
+                    # Regime risk context (never a signal input)
                     'Regime': row.get('Regime', 'NEUTRAL'),
                     'HMM_Bull': row.get('HMM_Bull', 0),
                     'HMM_Bear': row.get('HMM_Bear', 0),
                     'Vol_Regime': row.get('Vol_Regime', 'NORMAL'),
                     'Change_Point': row.get('Change_Point', False),
                     'Regime_Confidence': row.get('Regime_Confidence', 0),
-                    # Forward Returns for self-training (horizons = engine.HOLD_HORIZONS)
-                    'Ret_5b':  row.get('Ret_5b', 0),
-                    'Ret_10b': row.get('Ret_10b', 0),
-                    'Ret_21b': row.get('Ret_21b', 0),
-                    'Ret_42b': row.get('Ret_42b', 0),
-                    'Ret_63b': row.get('Ret_63b', 0),
-                    # Optimization factors
+                    # Forward returns (labels; horizons = engine.HOLD_HORIZONS)
+                    **{f'Ret_{h}b': row.get(f'Ret_{h}b') for h in eng.HOLD_HORIZONS},
                     'F1_PriceMom': row.get('F1_PriceMom', 0),
                     'F2_VolQual': row.get('F2_VolQual', 0),
-                    # Alpha inputs (engine.compute_ranking) — the 12-1 MOMENTUM ranking edge plus
-                    # the reversion entry overlay. The alpha-health monitor re-ranks each harvested
-                    # cross-section to measure trailing realized IC. Mirrors the live screener row.
-                    '_mom_12_1':   row.get('_mom_12_1'),
-                    '_mom_6_1':    row.get('_mom_6_1'),
-                    '_rev_ret2':   row.get('_rev_ret2'),
-                    '_rev_ret5':   row.get('_rev_ret5'),
-                    '_rev_dist5':  row.get('_rev_dist5'),
-                    '_rev_dist10': row.get('_rev_dist10'),
-                    '_rev_rngpos': row.get('_rev_rngpos'),
                     'ATR_Pct':     row.get('ATR_Pct'),
                     'Close':       row.get('Close'),
                 })
-            
+
         except Exception as e:
             console.failure(f"Range Analysis Failed: {ticker}", str(e))
             continue
-            
+
     console.success(f"Successfully processed {len(data_dict)} symbols for historical depth")
-    console.end_phase("EDGE MEASUREMENT")
+    console.end_phase("SIGNAL HARVEST")
 
     if not all_results:
         if _own_slot:
@@ -3028,19 +2689,17 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     ts_df['Date'] = pd.to_datetime(ts_df['Date'])
     ts_df = ts_df.sort_values('Date')
 
-    # The momentum engine has no per-row confidence model — the historical dashboard's
-    # Avg_Intel aggregation degrades gracefully when Intel_Confidence is absent (see
-    # _aggregate_timeseries). The trailing realized IC is measured separately by the
-    # alpha-health monitor (_measure_trailing_ic) from this same harvested panel.
     daily_agg, summary = _aggregate_timeseries(ts_df)
 
     console.summary("HISTORICAL RANGE SUMMARY", {
         "Universe": universe,
         "Universe Index": selected_index,
+        "Instrument Class": sb.iclass,
         "Historical Range": f"{start_date} to {end_date}",
-        "Total Signals Generated": summary['total_signals'],
-        "Avg Signal Strength": round(summary['avg_signal'], 2),
-        "Bias Ratio (L/S)": round(summary['overall_ratio'], 2),
+        "Total Signals Fired": summary['total_signals'],
+        "Buy / Sell": f"{summary['total_buys']} / {summary['total_sells']}",
+        "Avg Fade Score": round(summary['avg_signal'], 3),
+        "Buy:Sell Ratio": round(summary['overall_ratio'], 2),
         "Dominant Zone": summary['most_common_zone'],
         "HMM Regime": summary['dominant_regime'],
         "Status": "HARVEST COMPLETE"
@@ -3055,6 +2714,9 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         "start_date":     start_date,
         "end_date":       end_date,
         "timeframe":      timeframe,
+        "iclass":         sb.iclass,
+        "thr":            sb.thr,
+        "z_look":         sb.z_look,
     }
 
     # Only clear our OWN bar. When sharing the Single-Date bar, the screener that
@@ -3068,7 +2730,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _aggregate_timeseries(ts_df):
-    """Aggregate per-(date, symbol) factor frame into daily metrics + summary stats.
+    """Aggregate the per-(date, symbol) SB v8 frame into daily metrics + summary stats.
 
     Pure function — used by both ``run_timeseries_analysis`` (for the console
     summary on harvest) and ``render_timeseries_dashboard`` (re-rendered on every
@@ -3078,8 +2740,8 @@ def _aggregate_timeseries(ts_df):
         'Signal': 'mean',
         'CVD': 'mean',
         'CVD_Slope': 'mean',
-        'LongSignal': 'sum',
-        'ShortSignal': 'sum',
+        'BuySignal': 'sum',
+        'SellSignal': 'sum',
         'Zone': lambda x: x.value_counts().idxmax() if len(x) > 0 else 'Neutral',
         'Regime': lambda x: x.value_counts().idxmax() if len(x) > 0 else 'NEUTRAL',
         'HMM_Bull': 'mean',
@@ -3089,13 +2751,20 @@ def _aggregate_timeseries(ts_df):
         'Regime_Confidence': 'mean',
     })
 
-    daily_agg['TotalSignals'] = daily_agg['LongSignal'] + daily_agg['ShortSignal']
-    daily_agg['L_S_Ratio']    = np.where(
-        daily_agg['ShortSignal'] == 0,
-        np.nan,                          # undefined (all longs, no shorts) — show as NaN in charts
-        daily_agg['LongSignal'] / daily_agg['ShortSignal'],
+    daily_agg['TotalSignals'] = daily_agg['BuySignal'] + daily_agg['SellSignal']
+    daily_agg['B_S_Ratio']    = np.where(
+        daily_agg['SellSignal'] == 0,
+        np.nan,                          # undefined (all buys, no sells) — NaN in charts
+        daily_agg['BuySignal'] / daily_agg['SellSignal'],
     )
     daily_agg['Flow_Strength'] = daily_agg['Signal'].abs()
+
+    # Signal breadth: % of the universe firing each event on a given day. This is the
+    # read that matters for SB v8 — a day where 30% of names close weak is a very
+    # different tape from one where 3% do.
+    total_per_day_all = ts_df.groupby('Date').size()
+    daily_agg['Buy_Breadth_Pct']  = (daily_agg['BuySignal']  / total_per_day_all * 100).fillna(0)
+    daily_agg['Sell_Breadth_Pct'] = (daily_agg['SellSignal'] / total_per_day_all * 100).fillna(0)
 
     # Flow-zone breadth: % of names in accumulation vs distribution each day.
     acc_counts    = ts_df.groupby('Date')['Zone'].apply(lambda x: (x.isin(['Accumulation+', 'Accumulation'])).sum())
@@ -3111,19 +2780,25 @@ def _aggregate_timeseries(ts_df):
     daily_agg['Regime_Bear_Pct']       = (regime_bear  / total_per_day * 100).fillna(0)
     daily_agg['Regime_Transition_Pct'] = (regime_trans / total_per_day * 100).fillna(0)
 
-    # Mean Signal-Intelligence confidence of the fired signals each day (Intel is
-    # NaN on non-fired bars, so this is a conviction-of-firing-signals breadth read).
-    if 'Intel_Confidence' in ts_df.columns:
-        daily_agg['Avg_Intel'] = ts_df.groupby('Date')['Intel_Confidence'].mean()
+    # Mean |z| of the day's fired signals — how far past the threshold the tape actually
+    # went, not just how many names crossed it.
+    _fired = ts_df[ts_df['BuySignal'] | ts_df['SellSignal']] if 'BuySignal' in ts_df.columns else ts_df.iloc[0:0]
+    if len(_fired) and 'SB_Z' in _fired.columns:
+        daily_agg['Avg_Fired_Z'] = _fired.groupby('Date')['SB_Z'].apply(lambda s: s.abs().mean())
     else:
-        daily_agg['Avg_Intel'] = np.nan
+        daily_agg['Avg_Fired_Z'] = np.nan
 
+    _n_buys  = int(daily_agg['BuySignal'].sum())
+    _n_sells = int(daily_agg['SellSignal'].sum())
     summary = {
         'total_signals':       int(daily_agg['TotalSignals'].sum()),
-        'total_buys':          int(daily_agg['LongSignal'].sum()),
-        'total_sells':         int(daily_agg['ShortSignal'].sum()),
+        'total_buys':          _n_buys,
+        'total_sells':         _n_sells,
         'avg_signal':          float(daily_agg['Signal'].mean()),
-        'overall_ratio':       float(daily_agg['LongSignal'].sum() / max(daily_agg['ShortSignal'].sum(), 1)),
+        'overall_ratio':       float(_n_buys / max(_n_sells, 1)),
+        'avg_buy_breadth':     float(daily_agg['Buy_Breadth_Pct'].mean()),
+        'avg_sell_breadth':    float(daily_agg['Sell_Breadth_Pct'].mean()),
+        'avg_fired_z':         float(daily_agg['Avg_Fired_Z'].mean()) if daily_agg['Avg_Fired_Z'].notna().any() else float('nan'),
         'most_common_zone':    ts_df['Zone'].mode()[0]   if len(ts_df['Zone'].mode())   > 0 else 'Neutral',
         'dominant_regime':     ts_df['Regime'].mode()[0] if len(ts_df['Regime'].mode()) > 0 else 'NEUTRAL',
         'avg_oversold':        float(daily_agg['Oversold_Pct'].mean()),
@@ -3157,26 +2832,32 @@ def render_timeseries_dashboard():
     range_label = (f"{start_date} to {end_date}"
                    if start_date and end_date
                    else f"{len(daily_agg)} periods")
-    ui.render_section_header(f"Historical Range ({range_label})", icon="history", accent="violet")
+    _iclass = meta.get('iclass', '—')
+    _thr    = float(meta.get('thr', eng.SB_THRESHOLD))
+    ui.render_section_header(
+        f"Historical Range ({range_label})",
+        f"SB v8 close-location · ±{_thr:.1f}σ · {_iclass}",
+        icon="history", accent="violet",
+    )
 
     # ── Summary metric row (6 cards, mirrors single-date / pulse cadence) ──
+    _avg_z = summary.get('avg_fired_z', float('nan'))
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
-        ui.render_metric_card("Total Signals", str(summary['total_signals']),
-                              f"{summary['total_buys']} long · {summary['total_sells']} short", "info")
+        ui.render_metric_card("Signals Fired", str(summary['total_signals']),
+                              f"{summary['total_buys']} buy · {summary['total_sells']} sell", "info")
     with c2:
-        ui.render_metric_card("Avg Distribution", f"{summary['avg_oversold']:.1f}%",
-                              timeframe_label, "success")
+        ui.render_metric_card("Avg Buy Breadth", f"{summary['avg_buy_breadth']:.1f}%",
+                              f"{timeframe_label} · weak closes", "success")
     with c3:
-        ui.render_metric_card("Avg Accumulation", f"{summary['avg_overbought']:.1f}%",
-                              timeframe_label, "danger")
+        ui.render_metric_card("Avg Sell Breadth", f"{summary['avg_sell_breadth']:.1f}%",
+                              f"{timeframe_label} · strong closes", "danger")
     with c4:
-        ui.render_metric_card("Period Regime", summary['dominant_regime'],
-                              f"Bull: {summary['avg_bull_regime']:.0f}% | Bear: {summary['avg_bear_regime']:.0f}%",
-                              "warning")
+        ui.render_metric_card("Avg Fired |z|", f"{_avg_z:.2f}" if np.isfinite(_avg_z) else "—",
+                              f"vs ±{_thr:.1f}σ trigger", "warning")
     with c5:
-        ui.render_metric_card("L/S Ratio", f"{summary['overall_ratio']:.2f}",
-                              f"{'Bullish' if summary['overall_ratio'] > 1 else 'Bearish'} bias", "info")
+        ui.render_metric_card("Buy:Sell Ratio", f"{summary['overall_ratio']:.2f}",
+                              f"{'Buy' if summary['overall_ratio'] > 1 else 'Sell'}-skewed tape", "info")
     with c6:
         ui.render_metric_card("Trading Days", str(len(daily_agg)), "Analyzed", "neutral")
 
@@ -3191,60 +2872,61 @@ def render_timeseries_dashboard():
 
     # ── TAB 1 · Signal Dashboard ───────────────────────────────────────────
     with tab1:
-        ui.render_section_header("Flow-Zone Extremes",
-                                 "Distribution / Accumulation Breadth Over Time",
+        ui.render_section_header("Signal Breadth",
+                                 f"% of universe firing BUY / SELL past ±{_thr:.1f}σ",
                                  icon="activity", accent="cyan")
-        fig_zones = go.Figure()
-        fig_zones.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Oversold_Pct'],
-                                       mode='lines', name='Distribution %',
-                                       fill='tozeroy', fillcolor='rgba(52,211,153,0.12)',
-                                       line=dict(color='#2DD4A8', width=2)))
-        fig_zones.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Overbought_Pct'],
-                                       mode='lines', name='Accumulation %',
-                                       fill='tozeroy', fillcolor='rgba(251,113,133,0.12)',
-                                       line=dict(color='#E8555A', width=2)))
-        _pct_raw = max(daily_agg['Oversold_Pct'].max(), daily_agg['Overbought_Pct'].max())
+        fig_breadth = go.Figure()
+        fig_breadth.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Buy_Breadth_Pct'],
+                                         mode='lines', name='Buy % (weak closes)',
+                                         fill='tozeroy', fillcolor='rgba(0,230,118,0.12)',
+                                         line=dict(color='#00E676', width=2)))
+        fig_breadth.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Sell_Breadth_Pct'],
+                                         mode='lines', name='Sell % (strong closes)',
+                                         fill='tozeroy', fillcolor='rgba(255,167,38,0.12)',
+                                         line=dict(color='#FFA726', width=2)))
+        _pct_raw = max(daily_agg['Buy_Breadth_Pct'].max(), daily_agg['Sell_Breadth_Pct'].max())
         _pct_raw = float(_pct_raw) if pd.notna(_pct_raw) and np.isfinite(_pct_raw) else 0.0
         ymax = max(_pct_raw * 1.15, 5.0)   # floor at 5 so axis always renders sensibly
-        fig_zones.update_layout(title='', height=350, hovermode='x unified',
-                                yaxis=dict(range=[0, ymax], title='% of Universe'))
-        apply_chart_theme(fig_zones)
-        st.plotly_chart(fig_zones, width='stretch', key='chart_zones')
+        fig_breadth.update_layout(title='', height=350, hovermode='x unified',
+                                  yaxis=dict(range=[0, ymax], title='% of Universe'))
+        apply_chart_theme(fig_breadth)
+        st.plotly_chart(fig_breadth, width='stretch', key='chart_breadth')
 
         st.markdown("<br>", unsafe_allow_html=True)
-        ui.render_section_header("Signal Count by Date", "Long vs Short Signal Count per Session",
+        ui.render_section_header("Signal Count by Date", "BUY vs SELL fires per session",
                                  icon="bar-chart", accent="info")
         fig_counts = go.Figure()
-        fig_counts.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['LongSignal'],
-                                    name='Long Signals',
-                                    marker=dict(color='#2DD4A8', line=dict(color='#2DD4A8', width=1))))
-        fig_counts.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['ShortSignal'],
-                                    name='Short Signals',
-                                    marker=dict(color='#E8555A', line=dict(color='#E8555A', width=1))))
+        fig_counts.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['BuySignal'],
+                                    name='Buy Signals',
+                                    marker=dict(color='#00E676', line=dict(color='#00E676', width=1))))
+        fig_counts.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['SellSignal'],
+                                    name='Sell Signals',
+                                    marker=dict(color='#FFA726', line=dict(color='#FFA726', width=1))))
         fig_counts.update_layout(title='', height=300, hovermode='x unified', barmode='group')
         apply_chart_theme(fig_counts)
         st.plotly_chart(fig_counts, width='stretch', key='chart_signal_counts')
 
     # ── TAB 2 · Transaction Dynamics ───────────────────────────────────────
     with tab2:
-        ui.render_section_header("Transaction Signal Trends",
-                                 "Buy / Sell Signal Counts Over Time",
+        ui.render_section_header("Signal Trends",
+                                 "BUY / SELL fire counts over time",
                                  icon="zap", accent="emerald")
         fig_signals = go.Figure()
-        fig_signals.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['LongSignal'],
-                                         mode='lines+markers', name='Long Signals',
-                                         line=dict(color='#2DD4A8', width=2),
-                                         marker=dict(size=6, color='#2DD4A8')))
-        fig_signals.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['ShortSignal'],
-                                         mode='lines+markers', name='Short Signals',
-                                         line=dict(color='#E8555A', width=2),
-                                         marker=dict(size=6, color='#E8555A')))
+        fig_signals.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['BuySignal'],
+                                         mode='lines+markers', name='Buy Signals',
+                                         line=dict(color='#00E676', width=2),
+                                         marker=dict(size=6, color='#00E676')))
+        fig_signals.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['SellSignal'],
+                                         mode='lines+markers', name='Sell Signals',
+                                         line=dict(color='#FFA726', width=2),
+                                         marker=dict(size=6, color='#FFA726')))
         fig_signals.update_layout(title='', height=300, hovermode='x unified')
         apply_chart_theme(fig_signals)
         st.plotly_chart(fig_signals, width='stretch', key='chart_signals_overtime')
 
         st.markdown("<br>", unsafe_allow_html=True)
-        ui.render_section_header("Flow Breadth", "Accumulation vs Distribution Over Time",
+        ui.render_section_header("Flow-Zone Breadth",
+                                 "Accumulation vs Distribution over time — context, not signal",
                                  icon="trending-up", accent="amber")
         fig_div = go.Figure()
         fig_div.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['Overbought_Pct'],
@@ -3259,31 +2941,32 @@ def render_timeseries_dashboard():
 
     # ── TAB 3 · Regime Analysis ────────────────────────────────────────────
     with tab3:
-        ui.render_section_header("Aggregate Flow Skew", "Average Delta Z-Score Over Time",
+        ui.render_section_header("Aggregate Close-Location Skew",
+                                 "Universe-mean fade score (−z) over time",
                                  icon="activity", accent="rose")
-        # Signal = per-name Delta_Z (clipped ±5); its daily cross-sectional MEAN
-        # concentrates near zero (σ ≈ 1/√N ≈ 0.08 for ~150 names). The extreme
-        # bands sit at ±0.25 (~3σ of that mean) — the old ±20 bands / ±80 axis
-        # were sized for the removed WT1 ±100 oscillator and rendered a dead
-        # flatline with never-triggering colors.
+        # Signal = per-name fade score (−z, σ≈1); its daily cross-sectional MEAN
+        # concentrates near zero (σ ≈ 1/√N ≈ 0.08 for ~150 names), so the extreme
+        # bands sit at ±0.25 (~3σ of that mean) rather than at the ±1.5σ per-name
+        # trigger. Green (positive) = the universe closed weak = bullish for SB v8.
         _sig_band = 0.25
-        colors = ['#2DD4A8' if v < -_sig_band else '#E8555A' if v > _sig_band else '#64748B'
+        colors = ['#00E676' if v > _sig_band else '#FFA726' if v < -_sig_band else '#64748B'
                   for v in daily_agg['Signal']]
         fig_avg = go.Figure()
         fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Signal'].clip(lower=0),
-                                     fill='tozeroy', fillcolor='rgba(232,85,90,0.05)',
+                                     fill='tozeroy', fillcolor='rgba(0,230,118,0.05)',
                                      line=dict(width=0), showlegend=False, hoverinfo='skip'))
         fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Signal'].clip(upper=0),
-                                     fill='tozeroy', fillcolor='rgba(45,212,168,0.05)',
+                                     fill='tozeroy', fillcolor='rgba(255,167,38,0.05)',
                                      line=dict(width=0), showlegend=False, hoverinfo='skip'))
         fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Signal'],
-                                     mode='lines+markers', name='Avg Δ-Z',
+                                     mode='lines+markers', name='Avg fade score',
                                      line=dict(color='#D4A853', width=2),
                                      marker=dict(size=6, color=colors)))
-        fig_avg.add_hline(y=_sig_band,  line=dict(color='rgba(239,68,68,0.5)', width=1, dash='dash'))
-        fig_avg.add_hline(y=-_sig_band, line=dict(color='rgba(16,185,129,0.5)', width=1, dash='dash'))
+        fig_avg.add_hline(y=_sig_band,  line=dict(color='rgba(0,230,118,0.5)', width=1, dash='dash'))
+        fig_avg.add_hline(y=-_sig_band, line=dict(color='rgba(255,167,38,0.5)', width=1, dash='dash'))
         fig_avg.add_hline(y=0,   line=dict(color='rgba(255,255,255,0.3)', width=1))
         _sig_span = float(np.nanmax(np.abs(daily_agg['Signal']))) if len(daily_agg) else 0.0
+        _sig_span = _sig_span if np.isfinite(_sig_span) else 0.0
         _sig_lim = max(_sig_span * 1.2, _sig_band * 1.6)
         fig_avg.update_layout(title='', height=300, hovermode='x unified',
                               yaxis=dict(range=[-_sig_lim, _sig_lim]))
@@ -3348,15 +3031,16 @@ def render_timeseries_dashboard():
             }
             st.dataframe(pd.DataFrame(regime_stats), width='stretch', hide_index=True)
         with col_r2:
-            ui.render_section_header("Distribution Metrics", "Signal Statistics",
+            ui.render_section_header("Fade-Score Distribution",
+                                     "Universe-mean fade score (−z) statistics",
                                      icon="database", accent="rose")
             signal_stats = {
-                "Metric": ["Mean Signal", "Median Signal", "Min Signal", "Max Signal", "Std Dev"],
-                "Value": [f"{daily_agg['Signal'].mean():.2f}",
-                          f"{daily_agg['Signal'].median():.2f}",
-                          f"{daily_agg['Signal'].min():.2f}",
-                          f"{daily_agg['Signal'].max():.2f}",
-                          f"{daily_agg['Signal'].std():.2f}"],
+                "Metric": ["Mean", "Median", "Min", "Max", "Std Dev"],
+                "Value": [f"{daily_agg['Signal'].mean():+.3f}",
+                          f"{daily_agg['Signal'].median():+.3f}",
+                          f"{daily_agg['Signal'].min():+.3f}",
+                          f"{daily_agg['Signal'].max():+.3f}",
+                          f"{daily_agg['Signal'].std():.3f}"],
             }
             st.dataframe(pd.DataFrame(signal_stats), width='stretch', hide_index=True)
 
@@ -3369,29 +3053,26 @@ def render_timeseries_dashboard():
         display_ts = daily_agg.copy()
         display_ts.index = display_ts.index.strftime('%Y-%m-%d')
         display_ts = display_ts.reset_index().rename(columns={'Date': 'Date'})
-        display_cols = ['Date', 'LongSignal', 'ShortSignal', 'Signal',
-                        'Oversold_Pct', 'Overbought_Pct',
+        display_cols = ['Date', 'BuySignal', 'SellSignal', 'Signal', 'Avg_Fired_Z',
+                        'Buy_Breadth_Pct', 'Sell_Breadth_Pct',
                         'Regime_Bull_Pct', 'Regime_Bear_Pct', 'Change_Point']
-        _has_intel = 'Avg_Intel' in display_ts.columns and display_ts['Avg_Intel'].notna().any()
-        if _has_intel:
-            display_cols.append('Avg_Intel')
         display_ts = display_ts[display_cols]
-        display_ts.columns = ['Date', 'Long Sig', 'Short Sig', 'Avg Signal',
-                              'Distribution %', 'Accumulation %',
-                              'Bull Regime %', 'Bear Regime %', 'Change Pts'] + (['Avg Conviction'] if _has_intel else [])
+        display_ts.columns = ['Date', 'Buy Sig', 'Sell Sig', 'Avg Fade', 'Avg Fired |z|',
+                              'Buy Breadth %', 'Sell Breadth %',
+                              'Bull Regime %', 'Bear Regime %', 'Change Pts']
         st.dataframe(
             display_ts, width='stretch', hide_index=True,
             column_config={
-                'Date':         st.column_config.TextColumn(help="Trading day (YYYY-MM-DD)."),
-                'Long Sig':     st.column_config.NumberColumn(help="Daily count of symbols firing the Set A long entry (momentum pullback-resumption: uptrend dips below SMA20 then closes back above)."),
-                'Short Sig':    st.column_config.NumberColumn(help="Retired — the screeners are long-only (the short side of these events anti-predicts). Always 0."),
-                'Avg Signal':   st.column_config.NumberColumn(help="Cross-sectional mean of Delta_Z (signed delta z-score, clipped ±5) on this day. The daily mean concentrates near 0; ±0.25 is already a strongly one-sided tape."),
-                'Distribution %': st.column_config.NumberColumn(help="Percent of universe in Distribution / Distribution+ flow zones (net selling flow)."),
-                'Accumulation %': st.column_config.NumberColumn(help="Percent of universe in Accumulation / Accumulation+ flow zones (net buying flow)."),
-                'Bull Regime %':st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BULL'."),
-                'Bear Regime %':st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BEAR'."),
-                'Change Pts':   st.column_config.NumberColumn(help="Sum of Change_Point flags — count of symbols with a regime-state transition on this day."),
-                'Avg Conviction': st.column_config.NumberColumn(help="Mean conviction of the surfaced long/short candidates on this day (0–1) — tail strength × alpha-health × regime.", format="%.2f"),
+                'Date':          st.column_config.TextColumn(help="Trading day (YYYY-MM-DD)."),
+                'Buy Sig':       st.column_config.NumberColumn(help=f"Symbols firing the SB v8 BUY (green triangle) — close-location z below −{_thr:.1f}σ, a weak close to fade up."),
+                'Sell Sig':      st.column_config.NumberColumn(help=f"Symbols firing the SB v8 SELL (yellow diamond) — close-location z above +{_thr:.1f}σ. Note: this side did not confirm out of sample."),
+                'Avg Fade':      st.column_config.NumberColumn(help="Cross-sectional mean fade score (−z) on this day. The daily mean concentrates near 0; ±0.25 is already a strongly one-sided tape.", format="%.3f"),
+                'Avg Fired |z|': st.column_config.NumberColumn(help=f"Mean |z| of the symbols that actually fired — how far past the ±{_thr:.1f}σ trigger the tape went, blank on days with no fires.", format="%.2f"),
+                'Buy Breadth %': st.column_config.NumberColumn(help="Percent of the universe firing BUY on this day.", format="%.1f"),
+                'Sell Breadth %':st.column_config.NumberColumn(help="Percent of the universe firing SELL on this day.", format="%.1f"),
+                'Bull Regime %': st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BULL' (risk context, not a signal input)."),
+                'Bear Regime %': st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BEAR' (risk context, not a signal input)."),
+                'Change Pts':    st.column_config.NumberColumn(help="Sum of Change_Point flags — count of symbols with a regime-state transition on this day."),
             },
         )
 
@@ -3416,14 +3097,16 @@ def render_timeseries_dashboard():
 # CORRELATION MODE ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_correlation_analysis(universe, selected_index, target_ticker, lookback, method, timeframe, analysis_date=None):
+def run_correlation_analysis(universe, selected_index, target_ticker, lookback, method, timeframe, analysis_date=None, sb=None):
     """Execute correlation analysis between universe constituents and a target asset.
 
     Returns a dict with correlation data, rolling correlations, prices, and returns,
-    plus a confluence score (|correlation| × momentum rank strength × conviction).
+    plus a confluence score (|correlation| × normalised SB v8 fade-score strength).
     """
     if analysis_date is None:
         analysis_date = _today_ist()
+    if sb is None:
+        sb = _sb_settings(universe, selected_index, timeframe)
     progress_slot = st.empty()
     progress_bar(progress_slot, 5, "Initializing Correlation Engine", "Fetching Market Data")
 
@@ -3455,7 +3138,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         progress_bar(progress_slot, 15, "Fetching OHLCV Data", f"Symbols: {len(stock_list)}")
 
-        # ── Universe data from registry (shared pool with screener / intelligence) ──
+        # ── Universe data from registry (shared pool with the screener) ──
         # Passing only the universe symbols so the registry key is consistent with
         # the screener and timeseries paths.  The target ticker is supplemented
         # below with a single small fetch if it is not already in the pool.
@@ -3625,28 +3308,17 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         )
         if _can_reuse:
             console.detail("Correlation: reusing cached screener results from session state")
-            wrci_results = _sdf
+            sb_results = _sdf
         else:
-            # Measure alpha-health BEFORE screening, exactly like the Single-Date path —
-            # so the Confluence Score (built from Priority_Long/Short) ranks with the
-            # live edge-scaled conviction rather than a stale / cold-start reading.
             _corr_reg_len, _corr_n1, _corr_n2 = 20, 10, 21
             _corr_levels = (80, 40, -80, -40)
             _corr_wt2_len, _corr_wt2_type = 20, "ALMA"
-            _calib = st.session_state.get("_calib_settings") or {}
-            # Share the correlation bar: alpha-health harvest (if any) → 60-75%,
-            # screener → 75-90%. No separate harvest bar.
-            _ensure_alpha_health(
-                universe, selected_index, timeframe, analysis_date,
-                _corr_reg_len, _corr_n1, _corr_n2, _corr_levels,
-                _corr_wt2_len, _corr_wt2_type, _calib,
-                external_progress_slot=progress_slot, progress_offset=60, progress_scale=15,
-            )
-            wrci_results = run_screener_analysis(
+            sb_results = run_screener_analysis(
                 universe, selected_index, analysis_date,
                 _corr_reg_len, _corr_n1, _corr_n2, _corr_levels, timeframe,
-                show_progress=False, external_progress_slot=progress_slot, progress_offset=75, progress_scale=15,
-                wt2_len=_corr_wt2_len, wt2_type=_corr_wt2_type,
+                show_progress=False, external_progress_slot=progress_slot,
+                progress_offset=60, progress_scale=30,
+                wt2_len=_corr_wt2_len, wt2_type=_corr_wt2_type, sb=sb,
             )
 
         progress_bar(progress_slot, 90, "Building Results DataFrame", "Computing Divergence Metrics")
@@ -3677,33 +3349,32 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 target_price = _pair[target_ticker].iloc[-1] if len(_pair) else np.nan
                 target_change = np.nan
 
-            # Get WRCI data if available — pull priorities from the screener's
-            # already-computed momentum ranking output so Correlation Analysis
-            # benefits from the live edge-scaled conviction.
-            wrci_signal = np.nan
-            wrci_zone = "—"
-            wrci_signal_type = "Neutral"
+            # Pull this symbol's SB v8 read from the screener output already computed
+            # above, so the confluence ranking carries the live signal state.
+            sb_signal = np.nan            # fade score (-z)
+            sb_zone = "—"
+            sb_signal_type = "Neutral"
+            sb_z = np.nan
+            sb_side = "—"
+            sb_conv = np.nan
             priority_long = np.nan
             priority_short = np.nan
-            intel_conf = np.nan
-            intel_source = ''
-            if wrci_results is not None and len(wrci_results) > 0:
-                wrci_row = wrci_results[wrci_results['SimpleName'] == symbol.replace('.NS', '').replace('^', '')]
-                if len(wrci_row) > 0:
-                    wrci_signal = wrci_row['Signal'].values[0]
-                    wrci_zone = wrci_row['Zone'].values[0]
-                    wrci_signal_type = wrci_row['SignalType'].values[0]
-                    if 'Priority_Long' in wrci_row.columns:
-                        priority_long = wrci_row['Priority_Long'].values[0]
-                    if 'Priority_Short' in wrci_row.columns:
-                        priority_short = wrci_row['Priority_Short'].values[0]
-                    # Layer-2 Signal Intelligence for this symbol's fired signal (NaN
-                    # when it didn't fire) — used below to penalize the confluence of
-                    # likely false positives.
-                    if 'Intel_Confidence' in wrci_row.columns:
-                        intel_conf = wrci_row['Intel_Confidence'].values[0]
-                    if 'Intel_Source' in wrci_row.columns:
-                        intel_source = wrci_row['Intel_Source'].values[0]
+            if sb_results is not None and len(sb_results) > 0:
+                sb_row = sb_results[sb_results['SimpleName'] == symbol.replace('.NS', '').replace('^', '')]
+                if len(sb_row) > 0:
+                    sb_signal = sb_row['Signal'].values[0]
+                    sb_zone = sb_row['Zone'].values[0]
+                    sb_signal_type = sb_row['SignalType'].values[0]
+                    if 'SB_Z' in sb_row.columns:
+                        sb_z = sb_row['SB_Z'].values[0]
+                    if 'Side' in sb_row.columns:
+                        sb_side = sb_row['Side'].values[0]
+                    if 'Conviction' in sb_row.columns:
+                        sb_conv = sb_row['Conviction'].values[0]
+                    if 'Priority_Long' in sb_row.columns:
+                        priority_long = sb_row['Priority_Long'].values[0]
+                    if 'Priority_Short' in sb_row.columns:
+                        priority_short = sb_row['Priority_Short'].values[0]
 
             # Correlation-implied expected move = beta × target move, where
             # beta = corr × σ_sym/σ_tgt over the same lookback window (see above).
@@ -3728,13 +3399,14 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 'Target_Pct': target_change,
                 'Expected_Change': expected_change,
                 'Divergence': divergence,
-                'WRCI_Signal': wrci_signal,
-                'WRCI_Zone': wrci_zone,
-                'WRCI_Signal_Type': wrci_signal_type,
+                'SB_Signal': sb_signal,          # fade score (-z)
+                'SB_Z': sb_z,
+                'SB_Zone': sb_zone,
+                'SB_Signal_Type': sb_signal_type,
+                'Side': sb_side,
+                'Conviction': sb_conv,
                 'Priority_Long':  priority_long,
                 'Priority_Short': priority_short,
-                'Intel_Confidence': intel_conf,
-                'Intel_Source':     intel_source,
             })
 
         corr_df = pd.DataFrame(corr_data_list)
@@ -3746,49 +3418,37 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         corr_df = corr_df.sort_values('Corr_Current', key=abs, ascending=False)
 
         # ── Confluence score ──────────────────────────────────────────────
-        # |Corr| × normalized max(|Priority_Long|, |Priority_Short|), where the
-        # priorities are the cross-sectional momentum scores (engine.py) — so
-        # the confluence ranking carries the live, alpha-health-scaled read.
-        # If Priority columns are missing entirely (defensive), drop back to
-        # the legacy Delta_Z-based formula.
+        # |Corr| × normalised |fade score|, i.e. how strong this symbol's own SB v8
+        # close-location reading is relative to the rest of the universe. Normalising by
+        # the observed max keeps the score in [0,1] across universes whose |z| spreads
+        # differ. Fired signals then get a conviction weight applied on top.
         if 'Priority_Long' in corr_df.columns and corr_df['Priority_Long'].notna().any():
-            abs_pri = pd.concat(
-                [corr_df['Priority_Long'].abs(), corr_df['Priority_Short'].abs()],
-                axis=1,
-            ).max(axis=1).fillna(0)
+            abs_pri = corr_df['Priority_Long'].abs().fillna(0)
             pri_norm = abs_pri / max(abs_pri.max(), 1e-6)        # [0, 1]
             corr_df['Priority_Strength'] = pri_norm
             corr_df['Confluence_Score'] = (corr_df['Corr_Current'].abs() * pri_norm).clip(0.0, 1.0)
-            console.item("Confluence formula", "|Corr| × momentum rank strength")
+            console.item("Confluence formula", "|Corr| × normalised |fade score|")
 
-            # ── Conviction penalty ───────────────────────────────────────────
-            # A high-correlation, high-priority name still deserves less weight when
-            # the engine's conviction in its assigned side is low (thin tail, dormant
-            # alpha-health, or hostile vol regime). Penalize the confluence of FIRED
-            # signals by conviction: factor = 0.5 + 0.5·Conviction, so full conviction
-            # is unchanged and near-zero conviction is halved (not zeroed — the
-            # correlation read still carries information). Non-fired rows (Intel NaN)
-            # are untouched.
-            if 'Intel_Confidence' in corr_df.columns and corr_df['Intel_Confidence'].notna().any():
-                _intel = corr_df['Intel_Confidence']
-                _factor = np.where(_intel.notna(), 0.5 + 0.5 * _intel.fillna(0.0), 1.0)
+            # ── Conviction weight ────────────────────────────────────────────
+            # A high-correlation, high-|z| name still deserves less weight when the
+            # engine's conviction is low — a sub-threshold reading, or an instrument
+            # class whose expectancy did not survive holdout. factor = 0.5 + 0.5·Conviction,
+            # so full conviction is unchanged and near-zero conviction is halved (not
+            # zeroed — the correlation read still carries information).
+            if 'Conviction' in corr_df.columns and corr_df['Conviction'].notna().any():
+                _conv = corr_df['Conviction']
+                _factor = np.where(_conv.notna(), 0.5 + 0.5 * _conv.fillna(0.0), 1.0)
                 corr_df['Confluence_Raw'] = corr_df['Confluence_Score']
                 corr_df['Confluence_Score'] = (corr_df['Confluence_Score'] * _factor).clip(0.0, 1.0)
-                _n_penalized = int((_intel.notna() & (_intel < 0.5)).sum())
-                console.item("Confluence formula", "|Corr| × momentum rank × (0.5 + 0.5·Conviction)")
-                console.item("Low-conviction signals", f"{_n_penalized} candidate(s) below 0.50 conviction")
+                _n_fired = int((corr_df['Side'].isin(['Buy', 'Sell'])).sum()) if 'Side' in corr_df.columns else 0
+                console.item("Confluence formula", "|Corr| × normalised |fade score| × (0.5 + 0.5·Conviction)")
+                console.item("Fired signals in universe", f"{_n_fired} symbol(s) past ±{sb.thr:.1f}σ")
         else:
-            # Normalise by the 95th-percentile absolute oscillator value so the
-            # scale adapts to the current universe (weekly ≈ ±40, crypto ≈ ±200)
-            # rather than assuming a fixed ±80 range.
-            _osc_p95 = max(corr_df['WRCI_Signal'].abs().quantile(0.95), 1.0)
-            corr_df['Confluence_Score'] = (
-                corr_df['Corr_Current'].abs() * (corr_df['WRCI_Signal'].fillna(0).abs() / _osc_p95)
-            ).clip(0.0, 1.0)
-            console.item(
-                "Confluence formula",
-                f"|Corr| × |WRCI_Signal|/{_osc_p95:.1f} (fallback — no priority data; scale from p95)"
-            )
+            # Defensive fallback — no screener output to join against, so rank on the
+            # correlation alone rather than inventing a signal strength.
+            corr_df['Priority_Strength'] = 0.0
+            corr_df['Confluence_Score'] = corr_df['Corr_Current'].abs().clip(0.0, 1.0)
+            console.item("Confluence formula", "|Corr| only (fallback — no SB v8 screener data)")
 
         # Get target name from maps (maps are display_name -> ticker, so reverse lookup)
         target_name = target_ticker
@@ -3814,6 +3474,8 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             "lookback": lookback,
             "method": method,
             "timeframe": timeframe,
+            "thr": sb.thr,
+            "iclass": sb.iclass,
         }
 
     except Exception as e:
@@ -3835,18 +3497,43 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 _GREEN  = "#34D399"
 _RED    = "#FB7185"
 
+# The indicator's own marker colours, so the app and the TradingView chart read the
+# same: green triangle = BUY, yellow/amber diamond = SELL. (sb_v8.pine colorBull /
+# colorWarn / colorNeut.)
+_SB_BUY  = "#00E676"
+_SB_SELL = "#FFA726"
+_SB_NEUT = "#787B86"
+
+# 'buy'/'sell' are the canonical side keys. 'long'/'short' are accepted so any
+# lingering caller keeps working rather than silently getting the sell palette.
+_BUY_SIDES = ('buy', 'long')
+
+
+def _is_buy_side(side: str) -> bool:
+    return str(side).lower() in _BUY_SIDES
+
+
+def _priority_pct_col(side: str) -> str:
+    """The cross-sectional percentile column for a side."""
+    return 'Priority_Long_pct' if _is_buy_side(side) else 'Priority_Short_pct'
+
+
 def _side_palette(side: str) -> dict:
-    """Side-keyed accent colors for long/short signal tables."""
-    if side == 'long':
+    """Side-keyed accent colors — BUY green triangle / SELL amber diamond."""
+    if _is_buy_side(side):
         return {
-            "accent_light": _GREEN,
-            "border_color": "rgba(45, 212, 168, 0.3)",
-            "header_bg":    "rgba(45, 212, 168, 0.15)",
+            "accent_light": _SB_BUY,
+            "border_color": "rgba(0, 230, 118, 0.3)",
+            "header_bg":    "rgba(0, 230, 118, 0.13)",
+            "mark":         "▲",
+            "label":        "BUY",
         }
     return {
-        "accent_light": _RED,
-        "border_color": "rgba(232, 85, 90, 0.3)",
-        "header_bg":    "rgba(232, 85, 90, 0.15)",
+        "accent_light": _SB_SELL,
+        "border_color": "rgba(255, 167, 38, 0.3)",
+        "header_bg":    "rgba(255, 167, 38, 0.13)",
+        "mark":         "◆",
+        "label":        "SELL",
     }
 
 def _signed_color(value: float, pos: str = _GREEN, neg: str = _RED) -> str:
@@ -3878,18 +3565,21 @@ def _human_vol(value: float, signed: bool = True) -> str:
     return f"{sign}{a:.0f}"
 
 
-def _build_confluence_table_html(df: pd.DataFrame) -> str:
-    """Build ranked HTML table for confluence setups.
+def _build_confluence_table_html(df: pd.DataFrame, thr: float = None) -> str:
+    """Build the ranked HTML table for confluence setups.
 
-    Displays symbol, correlation, zone, signal, actual/expected/divergence, and confluence score.
+    Displays symbol, correlation, the SB v8 close-location z + side, flow zone,
+    actual/expected/divergence, conviction, and the confluence score. ``thr`` is the run's
+    active trigger, so the z cell's colouring agrees with the Side the engine assigned.
 
     Returns: Complete HTML document string ready for st.components.v1.html().
     """
+    thr = eng.SB_THRESHOLD if thr is None else float(thr)
     table_rows = []
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="10" style="
+            <td colspan="11" style="
                 text-align: center;
                 color: #374151;
                 font-family: 'IBM Plex Mono', monospace;
@@ -3903,15 +3593,15 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
         for idx, (_, row) in enumerate(df.iterrows(), 1):
             symbol = html.escape(str(row.get('SimpleName', '')))
             corr = float(row.get('Corr_Current', 0))
-            zone = html.escape(str(row.get('WRCI_Zone', 'Neutral')))
-            signal_type = html.escape(str(row.get('WRCI_Signal_Type', '—')))
+            zone = html.escape(str(row.get('SB_Zone', 'Neutral')))
             actual = float(row.get('PctChange', 0))
             expected = float(row.get('Expected_Change', 0))
             divergence = float(row.get('Divergence', 0))
             confluence = float(row.get('Confluence_Score', 0))
-            
-            # Format the Intel cell
-            intel_cell, _ = _intel_cell_and_style(row.get('Intel_Confidence'), row.get('Intel_Source', ''), 'Off', 0.0)
+
+            z_cell    = _z_cell(row.get('SB_Z'), thr)
+            side_cell = _side_cell(row.get('Side'))
+            conv_cell = _conv_cell(row.get('Conviction'))
 
             # Note: confluence uses strict > 0 (not >=), so zero is "red" here.
             corr_color = _GREEN if corr > 0 else _RED
@@ -3925,12 +3615,13 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
                 <td class="numeric" style="color: #D4A853; font-weight: 700;">{rank_str}</td>
                 <td class="symbol">{symbol}</td>
                 <td class="numeric" style="color: {corr_color}; font-weight: 600;">{corr:+.3f}</td>
-                <td class="numeric">{zone}</td>
-                <td class="numeric">{signal_type}</td>
+                {z_cell}
+                {side_cell}
+                <td class="numeric" style="color: #94A3B8; font-size:0.65rem;">{zone}</td>
                 <td class="numeric" style="color: #94A3B8;">{actual:+.2f}%</td>
                 <td class="numeric" style="color: #94A3B8;">{expected:+.2f}%</td>
                 <td class="numeric" style="color: {div_color}; font-weight: 600;">{divergence:+.2f}%</td>
-                {intel_cell}
+                {conv_cell}
                 <td class="numeric" style="color:{conf_color}; font-weight:600;">{confluence:.2f}</td>
             </tr>
             """)
@@ -3991,13 +3682,14 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
                 <th class="numeric">Rank</th>
                 <th>Symbol</th>
                 <th class="numeric">Corr</th>
-                <th>Zone</th>
-                <th>Type</th>
+                <th class="numeric" title="Close-location z — the SB v8 core measure">Close-Loc z</th>
+                <th class="numeric" title="▲ BUY (weak close) · ◆ SELL (strong close) · — inside the band">Side</th>
+                <th class="numeric" title="Cumulative-delta flow zone — context only">Zone</th>
                 <th class="numeric" title="Symbol's price change on the analysis date">Actual %</th>
                 <th class="numeric" title="Expected move = target return × beta (rolling correlation × vol ratio over the lookback)">Expected %</th>
                 <th class="numeric" title="Divergence = Actual − Expected (positive = outperforming expectation)">Div %</th>
-                <th class="numeric" title="Conviction in the assigned side (0–1)">Intel</th>
-                <th class="numeric" title="Confluence = |Correlation| × normalised Priority strength [0–1]">Confluence</th>
+                <th class="numeric" title="|z| magnitude × instrument-class OOS expectancy × cost gate">Conv</th>
+                <th class="numeric" title="Confluence = |Correlation| × normalised |fade score| × (0.5 + 0.5·Conviction)">Confluence</th>
             </tr>
         </thead>
         <tbody>
@@ -4022,10 +3714,12 @@ def render_correlation_results(corr_data: dict) -> None:
     target_name = corr_data["target_name"]
     lookback = corr_data["lookback"]
     method = corr_data["method"]
+    thr = float(corr_data.get("thr", eng.SB_THRESHOLD))
+    iclass = corr_data.get("iclass", "—")
 
     tab1, tab2, tab3 = st.tabs([
         "Correlation Dashboard",
-        "Trade Intelligence",
+        "Confluence Setups",
         "Heatmap Matrix"
     ])
 
@@ -4119,8 +3813,8 @@ def render_correlation_results(corr_data: dict) -> None:
     # ═══════════════════════════════════════════════════════════════════════════
     with tab2:
         ui.render_section_header(
-            "Trade Intelligence",
-            "Confluence: Correlation × Momentum Rank",
+            "Confluence Setups",
+            f"Confluence: Correlation × SB v8 close-location strength · ±{thr:.1f}σ · {iclass}",
             icon="zap",
             accent="cyan"
         )
@@ -4133,16 +3827,22 @@ def render_correlation_results(corr_data: dict) -> None:
                 How to Read
             </div>
             <div style="color:#F1F5F9; line-height:1.6;">
-                Each setup type is ranked by <span style="color:#38BDF8; font-weight:600;">Confluence Score</span> (0-1).
-                Highest rank = strongest opportunity. Look for: <span style="font-weight:600;">(1) Score >0.7</span>,
-                <span style="font-weight:600;">(2) |Div %| >3%</span>, <span style="font-weight:600;">(3) a confirming flow Zone (Accumulation+/Distribution+)</span>
+                Each setup type is ranked by <span style="color:#38BDF8; font-weight:600;">Confluence Score</span> (0-1)
+                = |Correlation| × normalised |fade score| × conviction. Highest rank = strongest
+                overlap between the correlation relationship and a live SB v8 reading. Look for:
+                <span style="font-weight:600;">(1) Score &gt;0.7</span>,
+                <span style="font-weight:600;">(2) |Div %| &gt;3%</span>,
+                <span style="font-weight:600;">(3) a fired Side (▲ / ◆), not a blank one</span>
             </div>
-            <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:0.5rem; margin-top:0.75rem;">
+            <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:0.5rem; margin-top:0.75rem;">
                 <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
                     <span style="color:#38BDF8; font-weight:600;">Corr</span> — Correlation strength
                 </div>
                 <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
-                    <span style="color:#38BDF8; font-weight:600;">Zone</span> — Flow zone (Accumulation / Distribution)
+                    <span style="color:#38BDF8; font-weight:600;">Close-Loc z</span> — where the bar closed in its range
+                </div>
+                <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
+                    <span style="color:#38BDF8; font-weight:600;">Side</span> — ▲ BUY / ◆ SELL / — no fire
                 </div>
                 <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
                     <span style="color:#38BDF8; font-weight:600;">Div %</span> — Actual vs Expected
@@ -4167,7 +3867,7 @@ def render_correlation_results(corr_data: dict) -> None:
         def classify_setup(row):
             corr = row['Corr_Current']
             div = row['Divergence']
-            zone = row['WRCI_Zone']
+            zone = row['SB_Zone']
 
             # Div = Actual − Expected: NEGATIVE = the name underperformed what the
             # correlation implied (a laggard), POSITIVE = it outran the implication.
@@ -4319,7 +4019,7 @@ def render_correlation_results(corr_data: dict) -> None:
                         Top Confluence</p>""", unsafe_allow_html=True)
                     top_half = setup_data.head(5)
                     if len(top_half) > 0:
-                        st.components.v1.html(_build_confluence_table_html(top_half), height=100 + len(top_half) * 48)
+                        st.components.v1.html(_build_confluence_table_html(top_half, thr=thr), height=100 + len(top_half) * 48)
                 with col_right:
                     st.markdown(f"""<p style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600;
                                    text-transform:uppercase; letter-spacing:0.1em; color:{config['color']};
@@ -4327,7 +4027,7 @@ def render_correlation_results(corr_data: dict) -> None:
                         Also Considered</p>""", unsafe_allow_html=True)
                     bottom_half = setup_data.iloc[5:10]
                     if len(bottom_half) > 0:
-                        st.components.v1.html(_build_confluence_table_html(bottom_half), height=100 + len(bottom_half) * 48)
+                        st.components.v1.html(_build_confluence_table_html(bottom_half, thr=thr), height=100 + len(bottom_half) * 48)
                     else:
                         st.info("No additional setups")
 
@@ -4372,84 +4072,126 @@ def render_correlation_results(corr_data: dict) -> None:
 # HELPER FUNCTIONS FOR TAB RENDERING
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _intel_filter_active():
-    """Read the Meta Filter settings from session state.
-
-    Returns (mode, threshold) where mode ∈ {'Off','Dim','Hide'}. Defaults to
-    'Dim' at 0.45 (set in the sidebar expander); it applies only to fired-signal
-    tables — never to the full-universe priority ranking (whose non-fired rows
-    have no confidence score).
-    """
-    mode = st.session_state.get("intel_filter_mode", "Off")
-    if mode not in ("Off", "Dim", "Hide"):
-        mode = "Off"
+def _fmt_num(v, fmt="{:+.2f}", dash="—"):
+    """Format a possibly-NaN/None number, falling back to an em dash."""
     try:
-        thr = float(st.session_state.get("intel_filter_threshold", 0.45))
+        f = float(v)
     except (TypeError, ValueError):
-        thr = 0.45
-    return mode, thr
+        return dash
+    return dash if not np.isfinite(f) else fmt.format(f)
 
 
-def _intel_cell_and_style(conf, source, mode, thr):
-    """Render an Intel-Confidence table cell + optional row dim style.
-
-    Returns (td_html, tr_style). conf is the row's Intel_Confidence (0–1 or
-    NaN/None for non-fired). A filled ◆ marks a calibrated (Layer-2) score, a
-    hollow ◇ the Layer-1 heuristic. In 'Dim' mode, rows below threshold are
-    greyed; 'Hide' is handled upstream by dropping the rows.
-    """
-    if conf is None or pd.isna(conf):
-        return '<td class="numeric" style="color:#4B5563;">—</td>', ''
-    c = float(conf)
-    if source == 'calibrated':
-        # Calibrated → a real out-of-sample probability. Vivid semantic bands and
-        # a % format so the value reads as P(true).
-        if   c >= 0.65: col = '#2DD4A8'
-        elif c >= 0.50: col = '#A3E635'
-        elif c >= 0.35: col = '#D4A853'
-        elif c >= 0.20: col = '#FB923C'
-        else:           col = '#E8555A'
-        txt   = f'◆ {c*100:.0f}%'
-        title = f'Calibrated P(true) ≈ {c*100:.0f}%'
-    else:
-        # Heuristic → an indicative 0–1 index, NOT a probability. Muted (desaturated)
-        # bands + "~" prefix so it is never read on the calibrated scale.
-        if   c >= 0.65: col = '#7FA8A0'
-        elif c >= 0.50: col = '#9DB07A'
-        elif c >= 0.35: col = '#B0A079'
-        elif c >= 0.20: col = '#B58E6E'
-        else:           col = '#B57A7E'
-        txt   = f'~{c:.2f}'
-        title = f'Heuristic estimate {c:.2f} — not a calibrated probability'
-    cell = (f'<td class="numeric" style="color:{col}; font-weight:700;" title="{title}">{txt}</td>')
-    style = 'opacity:0.4;' if (mode == 'Dim' and c < thr) else ''
-    return cell, style
-
-
-def _meta_intel_cell(conv, tier=None, source=''):
-    """Render a Layer-3 Meta Intelligence table cell (tier-banded fused score).
-
-    conv ∈ [0,1] or NaN/None (non-fired / no snapshot fusion → '—'). The fused
-    score blends cross-sectional Priority rank × per-signal Intel confidence.
-    source 'meta' (the calibrated fused model, active or advisory) shows a filled
-    ◆; 'fallback' (rank × confidence) a hollow ◇. Colour follows the 0–3 tier band.
-    """
-    if conv is None or pd.isna(conv):
+# Close-location z bands. Colour follows the SB v8 semantics, NOT price direction:
+# a deeply NEGATIVE z (weak close) is the bullish read, so it renders green.
+def _z_cell(z, thr: float = None) -> str:
+    """Render a close-location z-score cell, coloured by SB v8 meaning."""
+    thr = eng.SB_THRESHOLD if thr is None else float(thr)
+    try:
+        f = float(z)
+    except (TypeError, ValueError):
+        f = float('nan')
+    if not np.isfinite(f):
         return '<td class="numeric" style="color:#4B5563;">—</td>'
-    c = float(conv)
-    if tier is None or pd.isna(tier):
-        tier = 1 + sum(c >= b for b in (0.35, 0.55, 0.70))
-    t = int(tier)
+    if f <= -thr:
+        col, note = '#00E676', 'weak close — BUY (fade up)'
+    elif f >= thr:
+        col, note = '#FFA726', 'strong close — SELL (holdout-unconfirmed side)'
+    else:
+        col, note = '#787B86', f'inside ±{thr:.1f}σ — context only'
+    title = f'close-location z {f:+.2f} · {note}'
+    return (f'<td class="numeric" style="color:{col}; font-weight:700;" '
+            f'title="{html.escape(title)}">{f:+.2f}</td>')
+
+
+def _conv_cell(conv) -> str:
+    """Render the conviction cell — |z| magnitude × class expectancy × cost gate."""
+    try:
+        c = float(conv)
+    except (TypeError, ValueError):
+        c = float('nan')
+    if not np.isfinite(c):
+        return '<td class="numeric" style="color:#4B5563;">—</td>'
     if   c >= 0.70: col = '#2DD4A8'
     elif c >= 0.55: col = '#A3E635'
-    elif c >= 0.35: col = '#D4A853'
+    elif c >= 0.40: col = '#D4A853'
     else:           col = '#FB923C'
-    is_meta = str(source) == 'meta'
-    mark  = '◆' if is_meta else '◇'
-    txt   = f'{mark} {c*100:.0f}%'
-    title = (f'Meta Intelligence {c*100:.0f}% · tier {t}/3 · '
-             + ('fused model (rank × confidence)' if is_meta else 'fallback rank × confidence'))
-    return f'<td class="numeric" style="color:{col}; font-weight:700;" title="{title}">{txt}</td>'
+    title = (f'Conviction {c*100:.0f}% — |z| magnitude x the instrument class\'s measured '
+             f'out-of-sample expectancy x the cost gate. Not a probability.')
+    return (f'<td class="numeric" style="color:{col}; font-weight:700;" '
+            f'title="{html.escape(title)}">{c*100:.0f}%</td>')
+
+
+def _side_cell(side) -> str:
+    """Render the Side cell with the indicator's own marks (▲ buy / ◆ sell)."""
+    s = str(side or '—')
+    if s == 'Buy':
+        return ('<td class="numeric" style="color:#00E676; font-weight:700; font-size:0.68rem;" '
+                'title="green triangle — weak close, fade long">▲ BUY</td>')
+    if s == 'Sell':
+        return ('<td class="numeric" style="color:#FFA726; font-weight:700; font-size:0.68rem;" '
+                'title="yellow diamond — strong close. The Pine labels this side CAUTION: it did '
+                'not confirm out of sample.">◆ SELL</td>')
+    return '<td class="numeric" style="color:#4B5563; font-size:0.68rem;">—</td>'
+
+
+def _hold_cell(age, horizon, direction) -> str:
+    """Render the hold window as "day N/H" — how far into the measured 5-10 bar window."""
+    try:
+        a = float(age)
+        h = int(horizon)
+    except (TypeError, ValueError):
+        return '<td class="numeric" style="color:#4B5563;">—</td>'
+    if not np.isfinite(a) or h <= 0:
+        return '<td class="numeric" style="color:#4B5563;">—</td>'
+    n = int(a)
+    d = int(direction or 0)
+    col = '#00E676' if d > 0 else '#FFA726' if d < 0 else '#787B86'
+    if n > h:
+        return ('<td class="numeric" style="color:#787B86; font-size:0.65rem;" '
+                f'title="window expired — the measured edge does not extend past {h} bars">expired</td>')
+    frac = 1.0 - (n / max(h, 1))
+    title = (f'day {n} of {h} in the hold window · {frac*100:.0f}% of the measured horizon left. '
+             f'Entry was the open after the signal bar.')
+    return (f'<td class="numeric" style="color:{col}; font-weight:600; font-size:0.65rem;" '
+            f'title="{html.escape(title)}">{n}/{h}</td>')
+
+
+def _entry_status(row, offset: int):
+    """Has price already run since the signal fired — i.e. is the entry now late?
+
+    Directional move from the fire bar to the snapshot bar, normalised by the symbol's
+    own recent return volatility x sqrt(bars elapsed) so the bands are asset-agnostic
+    (sigma units). Returns (label, color, title).
+    """
+    if offset == 0:
+        return ('Now', '#94a3b8', 'fresh — fired on the snapshot bar')
+    closes = row.get('Close_Hist')
+    if not isinstance(closes, (list, tuple)) or offset >= len(closes):
+        return ('—', '#4B5563', '')
+    fire_close, now_close = closes[offset], closes[0]
+    if not (pd.notna(fire_close) and pd.notna(now_close) and float(fire_close) > 0):
+        return ('—', '#4B5563', '')
+    # Direction of the trade the signal implied, read from the z that fired it.
+    zs = row.get('Z_Hist')
+    fire_z = zs[offset] if isinstance(zs, (list, tuple)) and offset < len(zs) else float('nan')
+    if not (pd.notna(fire_z) and np.isfinite(float(fire_z))):
+        return ('—', '#4B5563', '')
+    side_sign = 1.0 if float(fire_z) < 0 else -1.0      # weak close → long, strong → sell
+    dm = (float(now_close) - float(fire_close)) / float(fire_close) * side_sign
+    rv = row.get('RetVol20')
+    scale = (float(rv) * (offset ** 0.5)) if (rv is not None and pd.notna(rv) and float(rv) > 0) else None
+    if scale and scale > 0:
+        sig = dm / scale
+        title = f'{dm*100:+.1f}% since the fire bar, in the signal\'s direction ({sig:+.1f} sigma)'
+        if sig <= -1.0: return ('Adverse', '#E8555A', title)
+        if sig >= 1.5:  return ('Extended', '#FB923C', title)
+        if sig >= 0.5:  return ('Running', '#5EBFA8', title)
+        return ('Open', '#2DD4A8', title)
+    title = f'{dm*100:+.1f}% since the fire bar, in the signal\'s direction'
+    if dm <= -0.03: return ('Adverse', '#E8555A', title)
+    if dm >= 0.06:  return ('Extended', '#FB923C', title)
+    if dm >= 0.02:  return ('Running', '#5EBFA8', title)
+    return ('Open', '#2DD4A8', title)
 
 
 def _status_cell(status) -> str:
@@ -4461,128 +4203,17 @@ def _status_cell(status) -> str:
             f'title="{_t}">{html.escape(str(label))}</td>')
 
 
-def _context_status(fire_c, today_c, offset):
-    """Has the regime/momentum context that made the signal good held up to today?
+def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timeframe: str = 'Daily') -> tuple:
+    """Bucket fired SB v8 signals by age (Today, 1d, 2d, 3d, within 5d) for the timeline.
 
-    Compares confidence at the fire bar vs today (both per-symbol). Returns
-    (label, color, title). Orthogonal to price — this is about the thesis, not
-    whether the move already ran.
+    side: 'buy' (green triangle, BUY_* columns) or 'sell' (yellow diamond, SELL_*).
+    timeframe: 'Daily' or 'Weekly' — determines the age label names.
+
+    A symbol appears in the NEWEST bucket it fired in and nowhere else. Each row carries
+    the z that actually fired it (``_fire_z``, read from Z_Hist at that offset) plus an
+    entry-exhaustion read, so an aged signal reports its own bar rather than today's.
     """
-    if fire_c is None or pd.isna(fire_c):
-        return ('—', '#4B5563', '')
-    if offset == 0:
-        return ('New', '#94a3b8', 'fired today')
-    if today_c is None or pd.isna(today_c):
-        return ('—', '#4B5563', '')
-    d = float(today_c) - float(fire_c)
-    title = f'context: fire {float(fire_c):.2f} → now {float(today_c):.2f} (Δ{d:+.2f})'
-    if float(today_c) < 0.20 or d <= -0.30:
-        return ('Stale', '#E8555A', title)
-    if d >= 0.05:
-        return ('Confirmed', '#2DD4A8', title)
-    if d <= -0.12:
-        return ('Fading', '#FB923C', title)
-    return ('Holding', '#A3E635', title)
-
-
-def _entry_status(window, side: str, offset: int, row):
-    """Has price already run since the signal fired — i.e. is the entry now late?
-
-    Directional move from the fire bar to today, normalized by the symbol's own
-    recent return volatility × √(bars elapsed) so the bands are asset-agnostic
-    (σ units). Returns (label, color, title). Orthogonal to context.
-    """
-    if offset == 0:
-        return ('Now', '#94a3b8', 'fresh — fired today')
-    if window is None or len(window) == 0 or 'Close' not in getattr(window, 'columns', []):
-        return ('—', '#4B5563', '')
-    fidx = len(window) - 1 - offset
-    if fidx < 0:
-        return ('—', '#4B5563', '')
-    fire_close = window['Close'].iloc[fidx]
-    today_close = window['Close'].iloc[-1]
-    if not (pd.notna(fire_close) and pd.notna(today_close) and fire_close > 0):
-        return ('—', '#4B5563', '')
-    side_sign = 1.0 if side == 'long' else -1.0
-    dm = (float(today_close) - float(fire_close)) / float(fire_close) * side_sign
-    rv = row.get('RetVol20')
-    scale = (float(rv) * (offset ** 0.5)) if (rv is not None and pd.notna(rv) and float(rv) > 0) else None
-    if scale and scale > 0:
-        sig = dm / scale
-        title = f'entry: {dm*100:+.1f}% since fire ({sig:+.1f}σ)'
-        if sig <= -1.0: return ('Adverse', '#E8555A', title)
-        if sig >= 1.5:  return ('Extended', '#FB923C', title)
-        if sig >= 0.5:  return ('Running', '#5EBFA8', title)
-        return ('Open', '#2DD4A8', title)
-    # Fallback when volatility is unavailable — crude fixed % bands.
-    title = f'entry: {dm*100:+.1f}% since fire'
-    if dm <= -0.03: return ('Adverse', '#E8555A', title)
-    if dm >= 0.06:  return ('Extended', '#FB923C', title)
-    if dm >= 0.02:  return ('Running', '#5EBFA8', title)
-    return ('Open', '#2DD4A8', title)
-
-
-def _active_model_sig() -> str:
-    """Cheap signature of the active confidence model — the momentum engine has none."""
-    return 'heuristic'
-
-
-def _cached_conf_series(symbol, window, side: str, condition_set: str):
-    """Per-bar confidence for (symbol, side, set), memoized for the current screener run.
-
-    The momentum engine has no per-bar confidence model, so there is no fire-bar
-    confidence series to recompute — return empty arrays. Callers fall back to the
-    row's own snapshot Intel_Confidence / Conviction. Kept memoized for API parity;
-    the cache is cleared when a new screener run replaces intel_windows.
-    """
-    cache = st.session_state.setdefault("intel_fire_cache", {})
-    key = (symbol, side, condition_set, _active_model_sig())
-    hit = cache.get(key)
-    if hit is not None:
-        return hit
-    res = (np.array([]), np.array([]))
-    cache[key] = res
-    return res
-
-
-def _fire_bar_metrics(window, side: str, condition_set: str, offset: int, row) -> dict:
-    """Per-signal fire-bar metrics: confidence (at fire), context decay, entry state.
-
-    `window` is the symbol's recent-bar feature frame (chronological, last row =
-    snapshot). `offset` 0 = Today … 4 = Within-5d. The Intel confidence is read at
-    the fire bar; Context compares it to today; Entry measures the price move
-    since firing. Falls back to snapshot confidence when the window is missing.
-    """
-    conf, src = np.nan, ''
-    ctx = ('—', '#4B5563', '')
-    confs = np.array([])
-    if window is not None and len(window) and condition_set in ('A', 'B'):
-        confs, srcs = _cached_conf_series(row.get('Symbol'), window, side, condition_set)
-        fidx = len(confs) - 1 - offset
-        if 0 <= fidx < len(confs):
-            conf = confs[fidx]
-            src = srcs[fidx] if fidx < len(srcs) else ''
-            ctx = _context_status(conf, confs[-1], offset)
-    if pd.isna(conf):   # window missing / out of range → snapshot fallback
-        c = row.get('Intel_Confidence')
-        conf = c if c is not None else np.nan
-        src = row.get('Intel_Source', '') or ''
-    entry = _entry_status(window, side, offset, row)
-    return {'conf': conf, 'src': src, 'ctx': ctx, 'entry': entry}
-
-
-def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', condition_set: str = 'A', timeframe: str = 'Daily') -> dict:
-    """Bucket signals by age (Today, 1d, 2d, 3d, 5d) with stats for timeline display.
-
-    condition_set: 'A' = Pullback-Resumption (LA_/SA_), 'B' = Gap-and-Go (LB_/SB_)
-    timeframe: 'Daily' or 'Weekly' — determines age label names
-    """
-    if condition_set == 'A':
-        prefix = 'LA' if side == 'long' else 'SA'
-    elif condition_set == 'B':
-        prefix = 'LB' if side == 'long' else 'SB'
-    else:
-        prefix = 'L' if side == 'long' else 'S'
+    prefix = 'BUY' if side == 'buy' else 'SELL'
     target_indicator = "●"
 
     if timeframe == 'Weekly':
@@ -4596,92 +4227,67 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
         age_labels[1]: f"{prefix}_1d",
         age_labels[2]: f"{prefix}_2d",
         age_labels[3]: f"{prefix}_3d",
-        age_labels[4]: f"{prefix}_5d"
+        age_labels[4]: f"{prefix}_5d",
     }
     seen = set()
 
-    # Fire-bar Intel scoring: each signal is scored at the bar it fired (its age
-    # offset), not at the snapshot date. The result is attached to the row as
-    # _fire_conf / _fire_src and reused for both Layer-3 Hide and table display.
-    _filter_mode, _filter_thr = _intel_filter_active()
-    _windows = st.session_state.get("intel_windows", {})
-
     for _offset, age in enumerate(buckets.keys()):
         col = col_map[age]
+        if col not in results_df.columns:
+            continue
         subset = results_df[(results_df[col] == target_indicator) & (~results_df['Symbol'].isin(seen))]
         for _, r in subset.iterrows():
             sym = r['Symbol']
-            m = _fire_bar_metrics(_windows.get(sym), side, condition_set, _offset, r)
-            # Intel DISPLAY value — the real per-signal Intel confidence (fire-bar for
-            # aged signals, snapshot for today). This is what the Intel column shows; it
-            # is kept distinct from the Meta filter value below so the two columns never
-            # mirror each other.
-            fc = m['conf']
-            _fc_src = m['src']
-            # FILTER decision value (drives Hide here + Dim styling in the table) — the
-            # Meta score on fired signals (rank × edge-scaled conviction), else the
-            # fire-bar Intel for aged signals. The old "probation" gate keyed off a
-            # Meta_Active column the removed fused model emitted; the momentum engine
-            # never emits it, so gating Hide on it made Hide silently inert — the
-            # engine's Meta score is always the live conviction fusion and may hide.
-            _mv = r.get('Meta_Score')
-            if _mv is not None and not pd.isna(_mv):
-                _filter_val = float(_mv)
-            else:
-                _filter_val = fc
-            _filter_may_hide = True
-            # Hide mode — drop low-score signals (and don't let an older fire of the same
-            # symbol resurface in a later bucket).
-            if (_filter_mode == "Hide" and _filter_may_hide and _filter_val is not None
-                    and not pd.isna(_filter_val) and _filter_val < _filter_thr):
-                seen.add(sym)
-                continue
             r = r.copy()
-            r['_fire_conf'] = fc            # Intel column — REAL Intel confidence
-            r['_fire_src'] = _fc_src
-            r['_filter_val'] = _filter_val  # Meta (today) / Intel (aged) — drives Dim styling
-            r['_ctx'] = m['ctx']      # (label, color, title) — context decay
-            r['_entry'] = m['entry']  # (label, color, title) — move exhaustion
+            # The z at the bar that fired, not at the snapshot bar. The buckets are walked
+            # newest-first and `seen` blocks re-listing, so a symbol reaching the last
+            # bucket did NOT fire at offsets 0-3 — and since the *_5d column is an .any()
+            # over offsets 0-4, offset 4 is then the fire bar exactly. Every offset is
+            # therefore knowable; the snapshot z is only a fallback for a missing window.
+            _zs = r.get('Z_Hist')
+            _fz = float('nan')
+            if isinstance(_zs, (list, tuple)) and _offset < len(_zs):
+                _fz = _zs[_offset]
+            if not (pd.notna(_fz) and np.isfinite(float(_fz))):
+                _fz = r.get('SB_Z', float('nan'))
+            r['_fire_z'] = _fz
+            r['_age_offset'] = _offset
+            r['_entry'] = _entry_status(r, _offset)
             buckets[age].append(r)
             seen.add(sym)
 
-    # Compute stats for each bucket
+    # Per-bucket stats
     stats = {}
     for age, rows in buckets.items():
         if rows:
-            signals = [r['Signal'] for r in rows]
-            pct_changes = [r.get('PctChange', 0) for r in rows]
-            convictions = [abs(r.get('Delta_Z', 0)) for r in rows]
-            avg_signal = np.mean(signals)
-            avg_pct_change = np.mean(pct_changes)
-            avg_conviction = np.mean(convictions)
-            count = len(rows)
+            fire_zs = [float(r['_fire_z']) for r in rows
+                       if pd.notna(r['_fire_z']) and np.isfinite(float(r['_fire_z']))]
             stats[age] = {
-                'count': count,
-                'avg_signal': avg_signal,
-                'avg_pct_change': avg_pct_change,
-                'avg_conviction': avg_conviction,
-                'rows': rows
+                'count': len(rows),
+                'avg_signal': float(np.mean([-z for z in fire_zs])) if fire_zs else 0.0,
+                'avg_abs_z': float(np.mean([abs(z) for z in fire_zs])) if fire_zs else 0.0,
+                'avg_pct_change': float(np.mean([r.get('PctChange', 0) or 0 for r in rows])),
+                'rows': rows,
             }
         else:
-            stats[age] = {'count': 0, 'avg_signal': 0, 'avg_pct_change': 0, 'rows': []}
+            stats[age] = {'count': 0, 'avg_signal': 0.0, 'avg_abs_z': 0.0,
+                          'avg_pct_change': 0.0, 'rows': []}
 
-    # Calculate trend: are signals strengthening (newer) or weakening (older)?
-    newest_label = age_labels[0]  # "Today" or "This Week"
-    older_labels = age_labels[1:]  # Rest of the labels
+    # Trend: are the newest fires more extreme than the older ones? |z| is the honest
+    # scale here — a fresh batch at 2.4 sigma is a stronger tape than one at 1.6.
+    newest_label = age_labels[0]
+    older_labels = age_labels[1:]
+    newest_avg = stats[newest_label]['avg_abs_z'] if stats[newest_label]['count'] > 0 else 0.0
+    _older = [stats[a]['avg_abs_z'] for a in older_labels if stats[a]['count'] > 0]
+    older_avg = float(np.mean(_older)) if _older else 0.0
 
-    newest_avg = stats[newest_label]['avg_signal'] if stats[newest_label]['count'] > 0 else 0
-    older_avg = np.mean([stats[age]['avg_signal'] for age in older_labels if stats[age]['count'] > 0]) if any(stats[age]['count'] for age in older_labels) else 0
-
-    # Signal = Delta_Z (clipped ±5); bucket averages move on a ~±1 scale, so the
-    # strengthening/weakening threshold is 0.5 — the old ±5 threshold (sized for
-    # the removed ±100 oscillator) was unreachable and pinned the badge on "Stable".
-    _TREND_EPS = 0.5
+    # |z| bucket means live on a ~1.5-3.0 scale, so 0.25 sigma is a meaningful shift.
+    _TREND_EPS = 0.25
     if newest_avg > older_avg + _TREND_EPS:
-        trend = f"{SVGS['UP'].replace('12','14').replace('12','14')} Strengthening"
+        trend = f"{SVGS['UP']} Strengthening"
         trend_color = "#2DD4A8"
     elif newest_avg < older_avg - _TREND_EPS:
-        trend = f"{SVGS['DOWN'].replace('12','14').replace('12','14')} Weakening"
+        trend = f"{SVGS['DOWN']} Weakening"
         trend_color = "#E8555A"
     else:
         trend = "— Stable"
@@ -4690,13 +4296,16 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'long', conditi
     return buckets, stats, trend, trend_color
 
 
-def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = 'Daily') -> str:
-    """Build organized HTML table for signals grouped by age with section headers."""
+def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'Daily',
+                             thr: float = None) -> str:
+    """Build the age-grouped HTML table of fired SB v8 signals, with section headers."""
     _pal = _side_palette(side)
     accent_light = _pal["accent_light"]
     border_color = _pal["border_color"]
     header_bg    = _pal["header_bg"]
-    _filter_mode, _filter_thr = _intel_filter_active()
+    _mark, _label = _pal["mark"], _pal["label"]
+    thr = eng.SB_THRESHOLD if thr is None else float(thr)
+    _NCOLS = 11
 
     table_rows = []
     if timeframe == 'Weekly':
@@ -4709,14 +4318,13 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
             continue
 
         # Section header for this age group
-        avg_signal = stats[age]['avg_signal']
-        avg_pct = stats[age].get('avg_pct_change', 0)
-        avg_conv = stats[age].get('avg_conviction', 0)
-        count = stats[age]['count']
+        avg_abs_z = stats[age].get('avg_abs_z', 0)
+        avg_pct   = stats[age].get('avg_pct_change', 0)
+        count     = stats[age]['count']
         table_rows.append(f"""
         <tr style="background: {header_bg}; border-bottom: 2px solid {border_color};">
-            <td colspan="13" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
-                {age} · {count} signal{'s' if count != 1 else ''} · Avg |Δ-Z|: {avg_conv:+.1f} · Avg %: {avg_pct:+.1f}
+            <td colspan="{_NCOLS}" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
+                {_mark} {age} · {count} {_label} signal{'s' if count != 1 else ''} · Avg |z|: {avg_abs_z:.2f}σ · Avg %: {avg_pct:+.1f}
             </td>
         </tr>
         """)
@@ -4724,64 +4332,50 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
         # Data rows for this age group
         for row in stats[age]['rows']:
             symbol = html.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
-            price = float(row.get('Price', 0))
-            pct_change = float(row.get('PctChange', 0))
-            signal = float(row.get('Signal', 0))
-            bar_delta = float(row.get('Bar_Delta', 0))
-            cvd = float(row.get('CVD', 0))
-            cvd_slope = float(row.get('CVD_Slope', 0))
-            delta_z = float(row.get('Delta_Z', 0))
-            abs_strength = float(row.get('Abs_Strength', 0))
+            price = float(row.get('Price', 0) or 0)
+            pct_change = float(row.get('PctChange', 0) or 0)
+            cvd_slope = float(row.get('CVD_Slope', 0) or 0)
+            abs_strength = float(row.get('Abs_Strength', 0) or 0)
             abs_color = _signed_color(abs_strength - 1.0, pos="#fbbf24", neg="#38bdf8")  # >1× = amber
-            signal_type = str(row.get('SignalType', '-'))
+            zone = html.escape(str(row.get('Zone', '—')))
 
             pct_color        = _signed_color(pct_change)
-            cvd_color        = _signed_color(cvd)
             cvd_slope_color  = _signed_color(cvd_slope, pos="#4a9eff", neg="#D4A853")
             cvd_slope_arrow  = _delta_arrow(cvd_slope)
 
-            # Intel Confirmation cell — fire-bar confidence (set on the row by
-            # _bucket_signals_by_age), falling back to the snapshot value.
-            _conf_val = row.get('_fire_conf', row.get('Intel_Confidence'))
-            _conf_src = row.get('_fire_src', row.get('Intel_Source', ''))
-            # Intel cell shows the REAL Intel confidence (no dim from it). The row Dim
-            # styling keys off the Meta filter value (Meta today / Intel aged), so the
-            # Intel and Meta columns stay independent.
-            intel_cell, _ = _intel_cell_and_style(_conf_val, _conf_src, 'Off', 0.0)
-            _fv = row.get('_filter_val', _conf_val)
-            _row_style = ('opacity:0.4;' if (_filter_mode == 'Dim' and _fv is not None
-                          and not pd.isna(_fv) and _fv < _filter_thr) else '')
-            # Context (thesis decay) + Entry (move exhaustion) status cells.
-            ctx_cell   = _status_cell(row.get('_ctx',   ('—', '#4B5563', '')))
+            # The z that FIRED this signal (its own bar), and the fade score it implies.
+            _fz = row.get('_fire_z', row.get('SB_Z'))
+            z_cell = _z_cell(_fz, thr)
+            _fade = (-float(_fz) if (pd.notna(_fz) and np.isfinite(float(_fz))) else float('nan'))
+            fade_txt = _fmt_num(_fade)
+
+            conv_cell  = _conv_cell(row.get('Conviction'))
+            hold_cell  = _hold_cell(row.get('SB_Hold_Age'), row.get('SB_Horizon', eng.SB_HORIZON),
+                                    row.get('SB_Hold_Dir'))
             entry_cell = _status_cell(row.get('_entry', ('—', '#4B5563', '')))
-            # Layer-3 Meta Intelligence (today's snapshot fusion; '—' for aged rows).
-            meta_cell  = _meta_intel_cell(row.get('Meta_Score'), row.get('Meta_Tier'),
-                                          row.get('Meta_Source', ''))
 
             table_rows.append(f"""
-            <tr style="{_row_style}">
+            <tr>
                 <td class="symbol">{symbol}</td>
                 <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
-                <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
-                <td class="numeric" style="color: #D4A853; font-weight: 600;">{_human_vol(bar_delta)}</td>
-                <td class="numeric" style="color: {cvd_color}; font-weight: 600;">{_human_vol(cvd)}</td>
-                <td class="numeric" style="color: {cvd_slope_color}; font-size: 0.65rem; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
-                <td class="numeric" style="color: #4a9eff; font-weight: 600;">{delta_z:+.2f}</td>
-                <td class="numeric" style="color: {abs_color}; font-weight: 600;">{abs_strength:.2f}×</td>
-                {intel_cell}
-                {meta_cell}
-                {ctx_cell}
+                <td class="numeric" style="color: {accent_light}; font-weight: 600;">{fade_txt}</td>
+                {z_cell}
+                {conv_cell}
+                {hold_cell}
                 {entry_cell}
+                <td class="numeric" style="color: #94A3B8; font-size: 0.65rem;">{zone}</td>
+                <td class="numeric" style="color: {cvd_slope_color}; font-size: 0.65rem; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
+                <td class="numeric" style="color: {abs_color}; font-weight: 600;">{abs_strength:.2f}×</td>
             </tr>
             """)
 
     if not table_rows:
         table_rows.append(f"""
         <tr>
-            <td colspan="13" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="{_NCOLS}" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
-                — no signals detected —
+                — no {_label} signals in the last 5 bars —
             </td>
         </tr>""")
 
@@ -4867,16 +4461,14 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
                     <th>Symbol</th>
                     <th class="numeric">Price</th>
                     <th class="numeric">% Change</th>
-                    <th class="numeric">Signal</th>
-                    <th class="numeric">Bar Δ</th>
-                    <th class="numeric">CVD</th>
+                    <th class="numeric" title="Fade score = −z at the bar that fired. Positive = bullish.">Fade</th>
+                    <th class="numeric" title="Close-location z at the bar that fired (SB v8 core measure)">Close-Loc z</th>
+                    <th class="numeric" title="|z| magnitude × instrument-class OOS expectancy × cost gate. Not a probability.">Conv</th>
+                    <th class="numeric" title="Bars into the measured hold window (entry was the open after the signal bar)">Hold</th>
+                    <th class="numeric" title="Has price already run in the signal's direction since it fired (σ units)?">Entry</th>
+                    <th class="numeric" title="Cumulative-delta flow zone — context only, not a signal input">Zone</th>
                     <th class="numeric">CVD Slope</th>
-                    <th class="numeric">Δ-Z</th>
                     <th class="numeric">Absorp</th>
-                    <th class="numeric">Intel</th>
-                    <th class="numeric" title="Fused score · momentum rank × conviction">Meta</th>
-                    <th class="numeric">Context</th>
-                    <th class="numeric">Entry</th>
                 </tr>
             </thead>
             <tbody>
@@ -4889,16 +4481,18 @@ def _build_signal_table_html(stats: dict, side: str = 'long', timeframe: str = '
     """
     return table_html
 
-def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
-    """Build a simplified HTML table for Pulse Narrative mode showing all symbols."""
+def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy', thr: float = None) -> str:
+    """Build the full-universe HTML table for Pulse Narrative mode (every symbol)."""
     _pal = _side_palette(side)
-    border_color = _pal["border_color"]  # accent_light unused in this builder
+    border_color = _pal["border_color"]
+    thr = eng.SB_THRESHOLD if thr is None else float(thr)
+    _NCOLS = 11
 
     table_rows = []
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="11" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
+            <td colspan="{_NCOLS}" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
                 font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
                 — no data available —
             </td>
@@ -4906,40 +4500,37 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
     else:
         for _, row in df.iterrows():
             symbol = html.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
-            price = float(row.get('Price', 0))
-            pct_change = float(row.get('PctChange', 0))
-            signal = float(row.get('Signal', 0))
-            bar_delta = float(row.get('Bar_Delta', 0))
-            cvd = float(row.get('CVD', 0))
-            cvd_slope = float(row.get('CVD_Slope', 0))
-            delta_z = float(row.get('Delta_Z', 0))
-            abs_strength = float(row.get('Abs_Strength', 0))
+            price = float(row.get('Price', 0) or 0)
+            pct_change = float(row.get('PctChange', 0) or 0)
+            bar_delta = float(row.get('Bar_Delta', 0) or 0)
+            cvd_slope = float(row.get('CVD_Slope', 0) or 0)
+            abs_strength = float(row.get('Abs_Strength', 0) or 0)
             abs_color = _signed_color(abs_strength - 1.0, pos="#fbbf24", neg="#38bdf8")
 
             pct_color       = _signed_color(pct_change)
-            cvd_color       = _signed_color(cvd)
             cvd_slope_color = _signed_color(cvd_slope, pos="#4a9eff", neg="#D4A853")
             cvd_slope_arrow = _delta_arrow(cvd_slope)
-            # Layer-2 Signal Intelligence — same snapshot Intel cell used elsewhere
-            # (calibrated % or muted ~heuristic; "—" when this symbol has no fired signal).
-            intel_cell, _ = _intel_cell_and_style(
-                row.get('Intel_Confidence'), row.get('Intel_Source', ''), 'Off', 0.0)
-            meta_cell = _meta_intel_cell(row.get('Meta_Score'), row.get('Meta_Tier'),
-                                         row.get('Meta_Source', ''))
+
+            fade_txt   = _fmt_num(row.get('Signal'))
+            z_cell     = _z_cell(row.get('SB_Z'), thr)
+            side_cell  = _side_cell(row.get('Side'))
+            conv_cell  = _conv_cell(row.get('Conviction'))
+            hold_cell  = _hold_cell(row.get('SB_Hold_Age'), row.get('SB_Horizon', eng.SB_HORIZON),
+                                    row.get('SB_Hold_Dir'))
 
             table_rows.append(f"""
             <tr>
                 <td class="symbol" style="color: #F1F5F9;">{symbol}</td>
                 <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
-                <td class="numeric" style="color: #60A5FA; font-weight: 600;">{signal:+.2f}</td>
+                <td class="numeric" style="color: #60A5FA; font-weight: 600;">{fade_txt}</td>
+                {z_cell}
+                {side_cell}
+                {conv_cell}
+                {hold_cell}
                 <td class="numeric" style="color: #D4A853; font-weight: 600;">{_human_vol(bar_delta)}</td>
-                <td class="numeric" style="color: {cvd_color}; font-weight: 600;">{_human_vol(cvd)}</td>
                 <td class="numeric" style="color: {cvd_slope_color}; font-size: 0.65rem; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
-                <td class="numeric" style="color: #4a9eff; font-weight: 600;">{delta_z:+.2f}</td>
                 <td class="numeric" style="color: {abs_color}; font-weight: 600;">{abs_strength:.2f}×</td>
-                {intel_cell}
-                {meta_cell}
             </tr>
             """)
 
@@ -5008,14 +4599,14 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
                     <th>Symbol</th>
                     <th class="numeric">Price</th>
                     <th class="numeric">% Change</th>
-                    <th class="numeric">Signal</th>
+                    <th class="numeric" title="Fade score = −z. Positive = bullish (a weak close).">Fade</th>
+                    <th class="numeric" title="Close-location z — the SB v8 core measure">Close-Loc z</th>
+                    <th class="numeric" title="▲ BUY past −thr · ◆ SELL past +thr · — inside the band (context only)">Side</th>
+                    <th class="numeric" title="|z| magnitude × instrument-class OOS expectancy × cost gate. Not a probability.">Conv</th>
+                    <th class="numeric" title="Bars into the measured hold window">Hold</th>
                     <th class="numeric">Bar Δ</th>
-                    <th class="numeric">CVD</th>
                     <th class="numeric">CVD Slope</th>
-                    <th class="numeric">Δ-Z</th>
                     <th class="numeric">Absorp</th>
-                    <th class="numeric">Intel</th>
-                    <th class="numeric" title="Fused score · momentum rank × conviction">Meta</th>
                 </tr>
             </thead>
             <tbody>
@@ -5030,76 +4621,71 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'long') -> str:
 
 
 
-def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> str:
-    """Build ranked HTML table for top momentum candidates by conviction.
+def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', thr: float = None) -> str:
+    """Build the ranked HTML table of SB v8 candidates for one side.
 
-    Creates styled HTML table with colored accent for side (long=green, short=red),
-    displaying symbol, price, signal magnitude, trend direction, and zone status.
-    Prioritizes conviction (momentum tail strength × alpha-health) as the ranking metric.
+    Ranks by the cross-sectional fade-score percentile: for 'buy' the weakest closes in
+    the universe come first, for 'sell' the strongest. Rows below the ±thr trigger still
+    appear — the table is the full ordering — but their Side reads '—' (context only).
 
     Returns: Complete HTML document string ready for st.components.v1.html().
     """
     _pal = _side_palette(side)
     accent_light = _pal["accent_light"]
     border_color = _pal["border_color"]
+    _is_buy = _is_buy_side(side)
+    _pct_col = _priority_pct_col(side)
+    thr = eng.SB_THRESHOLD if thr is None else float(thr)
+    _NCOLS = 13
 
     table_rows = []
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="14" style="
+            <td colspan="{_NCOLS}" style="
                 text-align: center;
                 color: #374151;
                 font-family: 'IBM Plex Mono', monospace;
                 font-size: 0.72rem;
                 letter-spacing: 0.06em;
                 padding: 2.25rem 1rem;
-            ">— no signals detected —</td>
+            ">— no symbols to rank —</td>
         </tr>
         """)
     else:
         for idx, (_, row) in enumerate(df.iterrows(), 1):
             symbol = html.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
-            price = float(row.get('Price', 0))
-            pct_change = float(row.get('PctChange', 0))
-            signal = float(row.get('Signal', 0))
-            bar_delta = float(row.get('Bar_Delta', 0))
-            cvd = float(row.get('CVD', 0))
-            cvd_slope = float(row.get('CVD_Slope', 0))
-            delta_z = float(row.get('Delta_Z', 0))
-            abs_strength = float(row.get('Abs_Strength', 0))
-            abs_color = _signed_color(abs_strength - 1.0, pos="#fbbf24", neg="#38bdf8")
+            price = float(row.get('Price', 0) or 0)
+            pct_change = float(row.get('PctChange', 0) or 0)
+            bar_delta = float(row.get('Bar_Delta', 0) or 0)
+            cvd_slope = float(row.get('CVD_Slope', 0) or 0)
 
             rank_str = f"{idx:02d}"
             pct_color       = _signed_color(pct_change)
             cvd_slope_color = _signed_color(cvd_slope)
             cvd_slope_arrow = _delta_arrow(cvd_slope)
 
-            # v3 Metrics
-            pct_rank = float(row.get(f'Priority_{side.capitalize()}_pct', 0))
-            hmm_bull = float(row.get('HMM_Bull', 0.5))
-            hmm_bear = float(row.get('HMM_Bear', 0.5))
+            pct_rank = float(row.get(_pct_col, 0) or 0)
+            hmm_bull = float(row.get('HMM_Bull', 0.5) or 0.5)
+            hmm_bear = float(row.get('HMM_Bear', 0.5) or 0.5)
             vol_reg  = str(row.get('Vol_Regime', 'NORMAL'))
 
-            # Regime Logic
+            # Regime risk context — displayed beside the signal, never inside it.
             regime_tag = "NEUTRAL"
             regime_color = "#94a3b8"
-            if side == 'long':
+            if _is_buy:
                 if hmm_bull > 0.7: regime_tag, regime_color = "BULL", _GREEN
                 elif hmm_bull < 0.3: regime_tag, regime_color = "BEAR", _RED
             else:
                 if hmm_bear > 0.7: regime_tag, regime_color = "BEAR", _RED
                 elif hmm_bear < 0.3: regime_tag, regime_color = "BULL", _GREEN
-                
+
             vol_color = {"LOW": "#60a5fa", "NORMAL": "#94a3b8", "HIGH": "#fbbf24", "EXTREME": "#f87171"}.get(vol_reg, "#94a3b8")
 
-            # Snapshot Intel confidence (today's, per-symbol). This is a ranking
-            # table with no canonical fire bar, so only the snapshot value applies
-            # (no Context/Entry, no Dim). '—' where the symbol has no fired signal.
-            _intel_cell, _ = _intel_cell_and_style(
-                row.get('Intel_Confidence'), row.get('Intel_Source', ''), 'Off', 0.0)
-            _meta_cell = _meta_intel_cell(row.get('Meta_Score'), row.get('Meta_Tier'),
-                                          row.get('Meta_Source', ''))
+            fade_txt  = _fmt_num(row.get('Signal'))
+            z_cell    = _z_cell(row.get('SB_Z'), thr)
+            side_cell = _side_cell(row.get('Side'))
+            conv_cell = _conv_cell(row.get('Conviction'))
 
             table_rows.append(f"""
             <tr>
@@ -5108,15 +4694,14 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                 <td class="numeric" style="color: #4a9eff; font-weight: 700;">TOP {min(100.0, 101-pct_rank):,.1f}%</td>
                 <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
-                <td class="numeric" style="color: {accent_light}; font-weight: 600;">{signal:+.2f}</td>
+                <td class="numeric" style="color: {accent_light}; font-weight: 600;">{fade_txt}</td>
+                {z_cell}
+                {side_cell}
+                {conv_cell}
                 <td class="numeric" style="color: #D4A853; font-weight: 600;">{_human_vol(bar_delta)}</td>
                 <td class="numeric" style="color: {cvd_slope_color}; font-size: 0.65rem; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
-                <td class="numeric" style="color: #4a9eff; font-weight: 600;">{delta_z:+.2f}</td>
                 <td class="numeric" style="color: {regime_color}; font-weight: 700; font-size: 0.65rem;">{regime_tag}</td>
                 <td class="numeric" style="color: {vol_color}; font-weight: 700; font-size: 0.65rem;">{vol_reg}</td>
-                <td class="numeric" style="color: {abs_color}; font-weight: 600;">{abs_strength:.2f}×</td>
-                {_intel_cell}
-                {_meta_cell}
             </tr>
             """)
 
@@ -5191,18 +4776,17 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
                 <tr>
                     <th class="numeric">Rank</th>
                     <th>Symbol</th>
-                    <th class="numeric">Percentile</th>
+                    <th class="numeric" title="Cross-sectional fade-score percentile within this universe">Percentile</th>
                     <th class="numeric">Price</th>
                     <th class="numeric">% Change</th>
-                    <th class="numeric">Signal</th>
+                    <th class="numeric" title="Fade score = −z. Positive = bullish (a weak close).">Fade</th>
+                    <th class="numeric" title="Close-location z — the SB v8 core measure">Close-Loc z</th>
+                    <th class="numeric" title="▲ BUY past −thr · ◆ SELL past +thr · — inside the band (context only)">Side</th>
+                    <th class="numeric" title="|z| magnitude × instrument-class OOS expectancy × cost gate. Not a probability.">Conv</th>
                     <th class="numeric">Bar Δ</th>
                     <th class="numeric">CVD Slope</th>
-                    <th class="numeric">Δ-Z</th>
-                    <th class="numeric">Regime</th>
-                    <th class="numeric">Vol</th>
-                    <th class="numeric">Absorp</th>
-                    <th class="numeric">Intel</th>
-                    <th class="numeric" title="Fused score · momentum rank × conviction">Meta</th>
+                    <th class="numeric" title="HMM regime — risk context, not a signal input">Regime</th>
+                    <th class="numeric" title="GARCH volatility regime — risk context, not a signal input">Vol</th>
                 </tr>
             </thead>
             <tbody>
@@ -5219,18 +4803,28 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'long') -> s
 
 
 _SIGNAL_TYPE_REFERENCE = [
-    ("Set A · Momentum Pullback-Resumption",   "amber",
-     "A LONG-ONLY entry timer, validated on an out-of-sample edge sweep (research.py). Fires when "
-     "an established uptrend (Close > 200-day MA, 12-1 momentum > 10%) dips below its 20-day MA and "
-     "then closes back above it — 'buy the dip that resumed'. Flagged names beat the momentum "
-     "top-tercile by ~+0.17% over the next 5 days, positive in both 2016-21 and 2022-26. It times "
-     "ENTRY on names you'd already hold; it is not a portfolio alpha on its own."),
-    ("Set B · Gap-and-Go Continuation", "violet",
-     "A LONG-ONLY entry timer, the top signal of a curated 40-condition out-of-sample sweep. Fires "
-     "when an uptrend (Close > 200-day MA) gaps up ≥1.5%, HOLDS the gap (closes above the open), and "
-     "finishes near its 20-day high — momentum ignition on a catalyst. Flagged names beat the "
-     "momentum top-tercile by ~+0.9% over the next 5 days, positive in 9 of 11 years. Rare but "
-     "high-conviction, and near-orthogonal to Set A. Long-only (the short side anti-predicts)."),
+    ("▲ BUY · Weak Close (green triangle)", "emerald",
+     "The screening condition. Fires when the close-location z-score drops below −1.5σ — the bar "
+     "closed unusually near its low relative to its own trailing year. A weak close predicts "
+     "STRENGTH, so this is the buy: fade it, enter at the next session's open, hold 5-10 bars. "
+     "This is the side that survived: drift-free discovery +0.0546 and holdout +0.0534, confirmed "
+     "in both eras. The 1.5σ trigger fires on ~9.3% of days, which is what cuts turnover ~35x and "
+     "makes the signal clear costs at all."),
+    ("◆ SELL · Strong Close (yellow diamond)", "amber",
+     "Fires when the close-location z rises above +1.5σ — the bar closed unusually near its high. "
+     "The same mean-reversion logic says expect weakness. Read the caveat, though: the source "
+     "indicator labels this side CAUTION rather than a short entry, because its drift-free holdout "
+     "was +0.0094 with a CI of [−0.030, +0.052] — it did NOT confirm out of sample. Sanket surfaces "
+     "it as a sell signal as configured; treat it as stronger evidence for trimming longs than for "
+     "initiating shorts."),
+    ("Scope · which asset classes this holds on", "violet",
+     "The edge is drift-free and holdout-confirmed ONLY on US equity indices (+0.121, 57.5% hit) "
+     "and US sector ETFs (+0.068, 54.9%). India indices read +0.089 but n=239 and the CI includes "
+     "zero. Commodities, FX, rates, credit and international equity did not survive. Your universe "
+     "selection sets the instrument class, and the Engine Status card in the sidebar states which "
+     "case you are in — believe it. The measurement was made on index/ETF-level instruments, so on "
+     "a constituent universe (individual stocks) read the class edge as indicative of the asset "
+     "class rather than measured on those names. There is NO intraday edge here; none is claimed."),
 ]
 
 
@@ -5247,8 +4841,11 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     )
 
     # ── Downloads ─────────────────────────────────────────────────────────
-    bull_df = results_df[results_df['Signal'] > 0] if 'Signal' in results_df.columns else results_df.iloc[0:0]
-    bear_df = results_df[results_df['Signal'] < 0] if 'Signal' in results_df.columns else results_df.iloc[0:0]
+    # Split on the FIRED events, not on the sign of the score: a positive fade score
+    # below the trigger is context, not a buy candidate.
+    _side = results_df['Side'] if 'Side' in results_df.columns else None
+    buy_df  = results_df[_side == 'Buy']  if _side is not None else results_df.iloc[0:0]
+    sell_df = results_df[_side == 'Sell'] if _side is not None else results_df.iloc[0:0]
 
     dl1, dl2, dl3 = st.columns(3)
     with dl1:
@@ -5263,85 +4860,103 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
             width='stretch',
             key="sysdata_dl_full",
             help=(
-                f"All {len(results_df)} symbols with every computed factor. "
-                "Includes a Legend sheet defining each column: signal-set conditions (Set A / Set B), "
-                "factor descriptions (Price Momentum, Vol Quality, Bar Delta, CVD, CVD Slope, Δ-Z), "
-                "and flow-zone/regime definitions."
+                f"All {len(results_df)} symbols with every computed column. "
+                "Includes a Legend sheet defining each one: the SB v8 signal (close location, z, "
+                "fade score, buy/sell events, hold window, conviction), the descriptive order-flow "
+                "context, and the regime columns."
             ),
         )
     with dl2:
         st.download_button(
-            "▲ Bullish Only (Excel)",
-            data=to_excel(bull_df),
+            "▲ BUY Signals (Excel)",
+            data=to_excel(buy_df),
             file_name=build_download_filename(
-                "bullish", universe=universe, selected_index=selected_index,
+                "buy", universe=universe, selected_index=selected_index,
                 dates=analysis_date, ext="xlsx",
             ),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width='stretch',
-            key="sysdata_dl_bull",
-            disabled=len(bull_df) == 0,
-            help=f"{len(bull_df)} symbols with Signal > 0 (bullish-leaning composite).",
+            key="sysdata_dl_buy",
+            disabled=len(buy_df) == 0,
+            help=f"{len(buy_df)} symbols firing the green triangle (weak close, z below the trigger).",
         )
     with dl3:
         st.download_button(
-            "▼ Bearish Only (Excel)",
-            data=to_excel(bear_df),
+            "◆ SELL Signals (Excel)",
+            data=to_excel(sell_df),
             file_name=build_download_filename(
-                "bearish", universe=universe, selected_index=selected_index,
+                "sell", universe=universe, selected_index=selected_index,
                 dates=analysis_date, ext="xlsx",
             ),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width='stretch',
-            key="sysdata_dl_bear",
-            disabled=len(bear_df) == 0,
-            help=f"{len(bear_df)} symbols with Signal < 0 (bearish-leaning composite).",
+            key="sysdata_dl_sell",
+            disabled=len(sell_df) == 0,
+            help=f"{len(sell_df)} symbols firing the yellow diamond (strong close, z above the trigger).",
         )
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
     # ── Raw Data Table ────────────────────────────────────────────────────
     ui.render_section_header(
-        "Raw Factor Frame",
-        f"{len(results_df)} symbols · sorted by Priority Long",
+        "Raw Signal Frame",
+        f"{len(results_df)} symbols · sorted by fade score (weakest closes first)",
         icon="list", accent="emerald",
     )
-    cols = ["DisplayName", "Price", "Signal", "SignalType",
-            "Intel_Confidence", "Intel_Stars", "Intel_Source",
-            "Abs_Strength", "Priority_Long",
-            "Priority_Long_pct", "F1_PriceMom", "F2_VolQual"]
+    cols = ["DisplayName", "Price", "SB_Z", "Signal", "Side", "Conviction",
+            "SB_State", "SB_Hold_Age", "SignalType", "SB_CLV", "SB_Rank_Pct"]
     if "% Chng Since" in results_df.columns and results_df["% Chng Since"].notna().any():
         cols.insert(2, "% Chng Since")
-    cols += ["Bar_Delta", "CVD", "CVD_Slope", "Delta_Z"]
-    l_cols = [c for c in results_df.columns
-              if c.startswith('L_') and (c[2:].replace('d', '').isdigit() or c == 'L_Today')]
-    cols += sorted(l_cols)
+    cols += ["Zone", "Bar_Delta", "CVD_Slope", "Delta_Z", "Abs_Strength",
+             "Vol_Regime", "Regime_Confidence"]
+    # The per-age event columns, so the frame carries the same signal history the
+    # Action Dashboard buckets by.
+    cols += [c for c in ("BUY_Today", "BUY_1d", "BUY_2d", "BUY_3d", "BUY_5d",
+                         "SELL_Today", "SELL_1d", "SELL_2d", "SELL_3d", "SELL_5d")
+             if c in results_df.columns]
+    cols += [c for c in ("Signal_Reason",) if c in results_df.columns]
     cols = [c for c in cols if c in results_df.columns]
-    # Rename internal factor column names to domain-readable labels for display
+    # Rename internal column names to domain-readable labels for display
     _col_display_names = {
-        "DisplayName":       "Symbol",
-        "SignalType":        "Set",
-        "Intel_Confidence":  "Intel Conf",
-        "Intel_Stars":       "Intel ★",
-        "Intel_Source":      "Intel Src",
-        "F1_PriceMom":       "Price Momentum",
-        "F2_VolQual":        "Vol Quality",
-        "Priority_Long_pct": "Long Priority %ile",
-        "Bar_Delta":         "Bar Δ",
-        "CVD_Slope":         "CVD Slope",
-        "Delta_Z":           "Δ-Z",
-        "Abs_Strength":      "Absorption ×",
+        "DisplayName":  "Symbol",
+        "SB_Z":         "Close-Loc z",
+        "Signal":       "Fade Score",
+        "SB_State":     "State",
+        "SB_Hold_Age":  "Hold Age",
+        "SignalType":   "Type",
+        "SB_CLV":       "Close Location",
+        "SB_Rank_Pct":  "Fade %ile",
+        "Bar_Delta":    "Bar Δ",
+        "CVD_Slope":    "CVD Slope",
+        "Delta_Z":      "Δ-Z",
+        "Abs_Strength": "Absorption ×",
+        "Signal_Reason": "Read",
     }
-    display_frame = results_df[cols].sort_values("Priority_Long", ascending=False).rename(columns=_col_display_names)
+    display_frame = (results_df[cols]
+                     .sort_values("Signal", ascending=False, na_position='last')
+                     .rename(columns=_col_display_names))
     _sysdata_colcfg = {
-        "Intel Conf": st.column_config.ProgressColumn(
-            help=("Conviction in the row's assigned side, in [0,1] — cross-sectional tail "
-                  "strength × live alpha-health × vol-regime suitability (engine.compute_ranking). "
-                  "NaN/empty = the row has no assigned side (middle of the cross-section)."),
+        "Close-Loc z": st.column_config.NumberColumn(
+            help=("The signal. Z-score of where the bar closed inside its own range, over the "
+                  "trailing lookback. Below −1.5σ fires BUY, above +1.5σ fires SELL."),
+            format="%+.2f",
+        ),
+        "Fade Score": st.column_config.NumberColumn(
+            help="−z. Positive = bullish (a weak close). This is what the tables rank on.",
+            format="%+.2f",
+        ),
+        "Close Location": st.column_config.NumberColumn(
+            help="((C−L) − (H−C)) / (H−L) in [−1, +1]. −1 = closed on the low, +1 = on the high.",
+            format="%+.3f",
+        ),
+        "Conviction": st.column_config.ProgressColumn(
+            help=("|z| magnitude × the instrument class's measured out-of-sample expectancy × the "
+                  "cost gate, in [0,1]. Not a probability — a relative weighting."),
             format="%.2f", min_value=0.0, max_value=1.0,
         ),
-        "Intel ★": st.column_config.NumberColumn(
-            help="Conviction rating 1–5 on fixed bands (5 = strongest). 0 = no assigned side.",
+        "Hold Age": st.column_config.NumberColumn(
+            help="Bars since the current hold window opened. Blank = no window open.",
+            format="%.0f",
         ),
     }
     st.dataframe(display_frame, width='stretch', height=500, column_config=_sysdata_colcfg)
@@ -5350,23 +4965,24 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
 
     # ── Signal Type Reference ─────────────────────────────────────────────
     ui.render_section_header(
-        "Signal Type Reference",
-        "The two order-flow signal sets — Set A · Set B",
+        "Signal Reference",
+        "The one screening condition, its two events, and where it holds",
         icon="info", accent="amber",
     )
     # One column per reference card so the three cards widen equally and fill the
     # row — a fixed 4-column grid would leave an empty slot / dead space on the right.
     ref_cols = st.columns(len(_SIGNAL_TYPE_REFERENCE))
     accent_var_map = {
-        "amber":  "var(--amber)",
-        "violet": "var(--violet)",
-        "cyan":   "var(--cyan)",
-        "rose":   "var(--rose)",
+        "amber":   "var(--amber)",
+        "violet":  "var(--violet)",
+        "cyan":    "var(--cyan)",
+        "rose":    "var(--rose)",
+        "emerald": _SB_BUY,
     }
-    # min-height + flex layout keeps all four cards visually equal regardless
-    # of body text length. Without it cards stretch to their own content because
-    # Streamlit's columns don't enforce a shared height.
-    SIG_CARD_MIN_H = "11rem"
+    # min-height + flex layout keeps all cards visually equal regardless of body text
+    # length. Without it cards stretch to their own content because Streamlit's columns
+    # don't enforce a shared height.
+    SIG_CARD_MIN_H = "14rem"
     for slot, (title, accent_key, body) in zip(ref_cols, _SIGNAL_TYPE_REFERENCE):
         with slot:
             color = accent_var_map.get(accent_key, "var(--ink-secondary)")
@@ -5415,36 +5031,30 @@ def main():
     if is_first_render:
         console.header("SANKET TERMINAL — Session Start", VERSION)
         console.item("Started", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        console.item("Ranking engine", "Cross-Sectional Momentum v5.1 (alpha-health monitored)")
+        console.item("Signal engine", "SB v8 — Close-Location Reversal (sb_v8.pine)")
 
     # Render sidebar and get parameters + run button state
-    sb = render_sidebar()
-    # Local aliases preserve the existing main() body unchanged; the win is that
-    # the data flow from the sidebar is now name-keyed (sb.field) instead of a
-    # 16-element positional tuple unpack.
-    universe           = sb.universe
-    selected_index     = sb.selected_index
-    analysis_date      = sb.analysis_date
-    reg_len            = sb.reg_len
-    wt_n1              = sb.wt_n1
-    wt_n2              = sb.wt_n2
-    wt2_len            = sb.wt2_len
-    wt2_type           = sb.wt2_type
-    levels             = sb.levels
-    timeframe          = sb.timeframe
-    mode               = sb.mode
-    start_date         = sb.start_date
-    end_date           = sb.end_date
-    run_clicked        = sb.run_clicked
-    corr_target_ticker = sb.corr_target_ticker
-    corr_lookback      = sb.corr_lookback
-    corr_method        = sb.corr_method
-    calib_settings     = sb.calib_settings
-    st.session_state["_calib_settings"] = calib_settings
-
-    # Per-universe profile sync now happens inside render_sidebar() right
-    # before the Passport renders, so the Passport reflects the new universe
-    # in the same render frame.
+    sbs = render_sidebar()
+    # Local aliases keep the main() body readable; the data flow from the sidebar is
+    # name-keyed (sbs.field) rather than a positional tuple unpack.
+    universe           = sbs.universe
+    selected_index     = sbs.selected_index
+    analysis_date      = sbs.analysis_date
+    reg_len            = sbs.reg_len
+    wt_n1              = sbs.wt_n1
+    wt_n2              = sbs.wt_n2
+    wt2_len            = sbs.wt2_len
+    wt2_type           = sbs.wt2_type
+    levels             = sbs.levels
+    timeframe          = sbs.timeframe
+    mode               = sbs.mode
+    start_date         = sbs.start_date
+    end_date           = sbs.end_date
+    run_clicked        = sbs.run_clicked
+    corr_target_ticker = sbs.corr_target_ticker
+    corr_lookback      = sbs.corr_lookback
+    corr_method        = sbs.corr_method
+    sb                 = sbs.sb           # resolved SB v8 settings for this run
 
     # ── Run button click — single-pass execution ─────────────────────────
     # Previously: click → set flag → st.rerun() → run analysis → st.rerun() → render body.
@@ -5460,30 +5070,20 @@ def main():
         st.session_state["run_screener_flag"] = False  # legacy guard, kept for safety
 
         if mode in ("Single Date", "Pulse Narrative"):
-            header_text = "Institutional Signal Screener" if mode == "Single Date" else "Pulse Narrative Analysis"
+            header_text = "SB v8 Signal Screener" if mode == "Single Date" else "Pulse Narrative Analysis"
             console.header(f"SANKET TERMINAL — {header_text}", VERSION)
             console.main_header("ANALYSIS RUN START", {
                 "Universe": universe, "Index": selected_index, "Timeframe": timeframe,
                 "Target Date": analysis_date, "Mode": mode,
+                "Instrument Class": sb.iclass,
             })
-            # ONE progress bar for the whole run. If a fresh edge measurement is
-            # needed it harvests into the first 40% ("Measuring Live Edge"), then the
-            # screener renders 40→100% ("Screening") into the SAME bar — no second bar.
-            # When the reading is cached (no harvest), the screener owns the full 0→100%.
+            # ONE progress bar for the whole run — the screener owns 0→100%.
             _run_slot = st.empty()
-            _calib_status = _ensure_alpha_health(
-                universe, selected_index, timeframe, analysis_date,
-                reg_len, wt_n1, wt_n2, levels, wt2_len, wt2_type, calib_settings,
-                external_progress_slot=_run_slot, progress_offset=0, progress_scale=40,
-            )
-            _harvested = _calib_status in ("measured", "harvest_empty")
             results_df = run_screener_analysis(
                 universe, selected_index, analysis_date,
                 reg_len, wt_n1, wt_n2, levels, timeframe,
                 wt2_len=wt2_len, wt2_type=wt2_type,
-                external_progress_slot=_run_slot,
-                progress_offset=(40 if _harvested else 0),
-                progress_scale=(60 if _harvested else 100),
+                external_progress_slot=_run_slot, sb=sb,
             )
             _run_slot.empty()
             if results_df is None:
@@ -5496,17 +5096,13 @@ def main():
                 "analysis_date": analysis_date,
                 "timeframe":     timeframe,
             }
-            # _ensure_alpha_health returns cached|measured|harvest_empty. The sidebar
-            # Engine Status card is repainted in-place at the end of this block (see
-            # _refresh_passport) so it reflects THIS run's reading immediately.
-            _ = _calib_status
 
         elif mode == "Historical Range":
-            console.header("SANKET TERMINAL — Bulk Range Intelligence", VERSION)
+            console.header("SANKET TERMINAL — Historical Signal Harvest", VERSION)
             run_timeseries_analysis(
                 universe, selected_index, start_date, end_date,
                 reg_len, wt_n1, wt_n2, levels, timeframe,
-                wt2_len=wt2_len, wt2_type=wt2_type,
+                wt2_len=wt2_len, wt2_type=wt2_type, sb=sb,
             )
             # Standalone harvest — no screener follows to consume the analyzed-frame
             # cache the harvest just populated, so release it here. (In the Single-Date
@@ -5516,15 +5112,9 @@ def main():
         elif mode == "Correlation Analysis":
             corr_data = run_correlation_analysis(
                 universe, selected_index, corr_target_ticker,
-                corr_lookback, corr_method, timeframe, analysis_date,
+                corr_lookback, corr_method, timeframe, analysis_date, sb=sb,
             )
             st.session_state["corr_data"] = corr_data
-
-        # The sidebar was painted BEFORE this run executed (single-pass render), so its
-        # Engine Status card still shows the PREVIOUS reading. Repaint that placeholder now
-        # that the run has set alpha_health_* / opt_results — keeps the passport truthful
-        # without costing a full st.rerun (which is what the single-pass design removed).
-        _refresh_passport()
 
     # ── Mode-change cleanup ──────────────────────────────────────────────
     last_mode = st.session_state.get("_last_mode")
@@ -5542,7 +5132,7 @@ def main():
         show_landing = True
 
     if show_landing:
-        ui.render_header("Sanket", "Market Signal Screener · Cross-Sectional Momentum Engine")
+        ui.render_header("Sanket", "Market Signal Screener · SB v8 Close-Location Reversal")
         if st.session_state.get("run_error"):
             st.error(st.session_state["run_error"])
         render_landing_page()
@@ -5554,12 +5144,14 @@ def main():
         # Display single-date results
         if mode in ["Single Date", "Pulse Narrative"] and st.session_state["results_df"] is not None:
             results_df = st.session_state["results_df"]
-            
+
             # Safety: Ensure required columns exist
             if 'SimpleName' not in results_df.columns and not results_df.empty:
                 results_df['SimpleName'] = results_df['Symbol'].str.replace(".NS", "", regex=False).str.lstrip("^")
-            for _col in ['LA_Today','LA_1d','LA_2d','LA_3d','LA_5d','SA_Today','SA_1d','SA_2d','SA_3d','SA_5d','LB_Today','LB_1d','LB_2d','LB_3d','LB_5d','SB_Today','SB_1d','SB_2d','SB_3d','SB_5d']:
-                if _col not in results_df.columns: results_df[_col] = "—"
+            for _col in ['BUY_Today', 'BUY_1d', 'BUY_2d', 'BUY_3d', 'BUY_5d',
+                         'SELL_Today', 'SELL_1d', 'SELL_2d', 'SELL_3d', 'SELL_5d']:
+                if _col not in results_df.columns:
+                    results_df[_col] = "—"
 
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
@@ -5572,73 +5164,92 @@ def main():
                     _pn_date    = analysis_date.strftime("%d %b %Y") if hasattr(analysis_date, "strftime") else str(analysis_date)
                     ui.render_section_header(
                         f"Pulse Narrative — {timeframe} Universe State",
-                        f"{_pn_n} / {_pn_total} symbols · {_pn_date} · Full universe ranking by momentum score",
+                        f"{_pn_n} / {_pn_total} symbols · {_pn_date} · {sb.iclass} · "
+                        f"full universe ranked by close-location fade score",
                         icon="zap", accent="amber"
                     )
-                    avg_delta = results_df['Delta_Z'].mean()
-                    avg_cvd_slope = results_df['CVD_Slope'].mean()
-                    strong_flow = len(results_df[results_df['Delta_Z'].abs() > 1.5])
-                    bullish_bias = (results_df['CVD_Slope'] > 0).sum() / len(results_df) * 100 if len(results_df) > 0 else 0
+                    _n = max(len(results_df), 1)
+                    avg_fade  = results_df['Signal'].mean()
+                    n_buy     = int((results_df['Side'] == 'Buy').sum())  if 'Side' in results_df.columns else 0
+                    n_sell    = int((results_df['Side'] == 'Sell').sum()) if 'Side' in results_df.columns else 0
+                    weak_bias = (results_df['Signal'] > 0).sum() / _n * 100
                     m1, m2, m3, m4 = st.columns(4)
-                    with m1: ui.render_metric_card("Universe Δ-Z", f"{avg_delta:+.2f}", "Avg signed delta z-score", "neutral")
-                    with m2: ui.render_metric_card("Universe CVD Slope", _human_vol(avg_cvd_slope), "Avg 3-bar flow build/drain", "neutral")
-                    with m3: ui.render_metric_card("Strong Flow", str(strong_flow), f"{strong_flow/len(results_df)*100 if len(results_df)>0 else 0:.0f}% Universe", "info")
-                    with m4: ui.render_metric_card("Flow Bias", f"{bullish_bias:.0f}%", "CVD slope > 0", "success" if bullish_bias > 50 else "danger")
+                    with m1: ui.render_metric_card("Universe Fade", _fmt_num(avg_fade, "{:+.3f}"),
+                                                   "Mean −z · >0 = closing weak", "neutral")
+                    with m2: ui.render_metric_card("▲ BUY Fires", str(n_buy),
+                                                   f"{n_buy/_n*100:.0f}% of universe past −{sb.thr:.1f}σ",
+                                                   "success" if n_buy else "neutral")
+                    with m3: ui.render_metric_card("◆ SELL Fires", str(n_sell),
+                                                   f"{n_sell/_n*100:.0f}% of universe past +{sb.thr:.1f}σ",
+                                                   "warning" if n_sell else "neutral")
+                    with m4: ui.render_metric_card("Weak-Close Breadth", f"{weak_bias:.0f}%",
+                                                   "symbols closing below their own mean",
+                                                   "success" if weak_bias > 50 else "danger")
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-                    bull_narr_tab, bear_narr_tab = st.tabs(["Bullish Priority Ranking", "Bearish Priority Ranking"])
-                    with bull_narr_tab:
-                        bull_priority_df = results_df.sort_values('Priority_Long', ascending=False)
-                        st.components.v1.html(_build_narrative_table_html(bull_priority_df, side='long'), height=min(1200, 150 + len(bull_priority_df) * 52))
-                    with bear_narr_tab:
-                        bear_priority_df = results_df.sort_values('Priority_Short', ascending=False)
-                        st.components.v1.html(_build_narrative_table_html(bear_priority_df, side='short'), height=min(1200, 150 + len(bear_priority_df) * 52))
+                    buy_narr_tab, sell_narr_tab = st.tabs(["Weakest Closes (buy side)", "Strongest Closes (sell side)"])
+                    with buy_narr_tab:
+                        buy_rank_df = results_df.sort_values('Priority_Long', ascending=False, na_position='last')
+                        st.components.v1.html(_build_narrative_table_html(buy_rank_df, side='buy', thr=sb.thr),
+                                              height=min(1200, 150 + len(buy_rank_df) * 52), scrolling=True)
+                    with sell_narr_tab:
+                        sell_rank_df = results_df.sort_values('Priority_Short', ascending=False, na_position='last')
+                        st.components.v1.html(_build_narrative_table_html(sell_rank_df, side='sell', thr=sb.thr),
+                                              height=min(1200, 150 + len(sell_rank_df) * 52), scrolling=True)
 
                 # ════ Pulse Narrative · TAB 2: SIGNAL STRENGTH ═════════════════════════════
                 with tab_strength:
                     ui.render_section_header(
-                        "Order-Flow Signal Strength",
-                        "Top 10 long / short candidates by momentum priority",
+                        "Close-Location Extremes",
+                        "Top 10 each side by |z| — the most stretched closes in the universe",
                         icon="zap", accent="amber",
                     )
-                    pn_top_longs  = results_df.sort_values('Priority_Long',  ascending=False).head(10)
-                    pn_top_shorts = results_df.sort_values('Priority_Short', ascending=False).head(10)
+                    pn_top_buys  = results_df.sort_values('Priority_Long',  ascending=False, na_position='last').head(10)
+                    pn_top_sells = results_df.sort_values('Priority_Short', ascending=False, na_position='last').head(10)
 
-                    pn_avg_delta  = results_df['Delta_Z'].abs().mean()
-                    pn_avg_abs    = results_df['Abs_Strength'].mean()
-                    pn_strong_p   = len(results_df[results_df['Delta_Z'].abs() > 1.5])
-                    pn_strong_t   = len(results_df[results_df['Abs_Strength'] > 1.8])
+                    _n = max(len(results_df), 1)
+                    _absz         = results_df['SB_Z'].abs() if 'SB_Z' in results_df.columns else pd.Series(dtype=float)
+                    pn_avg_absz   = _absz.mean()
+                    pn_max_absz   = _absz.max()
+                    pn_past_thr   = int((_absz > sb.thr).sum())
+                    pn_warming    = st.session_state.get("screener_run_stats", {}).get("warming_up", 0)
 
                     s1, s2, s3, s4 = st.columns(4)
-                    with s1: ui.render_metric_card("Avg Δ-Z",        f"{pn_avg_delta:.2f}", "Signed delta z-score (abs)", "neutral")
-                    with s2: ui.render_metric_card("Avg Absorption", f"{pn_avg_abs:.2f}×",  "|Δ| vs 20-bar avg",          "neutral")
-                    with s3: ui.render_metric_card("Strong Flow",    str(pn_strong_p),
-                                                   f"{pn_strong_p/len(results_df)*100:.0f}% of universe", "info")
-                    with s4: ui.render_metric_card("Absorption Hits", str(pn_strong_t),
-                                                   f"{pn_strong_t/len(results_df)*100:.0f}% of universe", "info")
+                    with s1: ui.render_metric_card("Avg |z|", _fmt_num(pn_avg_absz, "{:.2f}"),
+                                                   f"vs ±{sb.thr:.1f}σ trigger", "neutral")
+                    with s2: ui.render_metric_card("Max |z|", _fmt_num(pn_max_absz, "{:.2f}"),
+                                                   "most stretched close today", "info")
+                    with s3: ui.render_metric_card("Past Trigger", str(pn_past_thr),
+                                                   f"{pn_past_thr/_n*100:.0f}% of universe · ~9.3% is typical", "info")
+                    with s4: ui.render_metric_card("Class Edge", f"{sb.edge:+.3f}",
+                                                   f"{sb.hit:.1f}% hit · {sb.iclass}",
+                                                   "success" if sb.established else "warning")
+                    if pn_warming:
+                        st.caption(f"{pn_warming} symbol(s) excluded — fewer than {sb.min_bars} bars, "
+                                   "so the close-location z-score has no lookback yet.")
 
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                     pn_l, pn_s = st.columns(2)
                     with pn_l:
                         st.markdown(
-                            '<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.62rem; '
-                            'font-weight:600; text-transform:uppercase; letter-spacing:0.1em; '
-                            'color:var(--emerald); margin:0 0 0.4rem 0;">Top 10 Bullish</p>',
+                            f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.62rem; '
+                            f'font-weight:600; text-transform:uppercase; letter-spacing:0.1em; '
+                            f'color:{_SB_BUY}; margin:0 0 0.4rem 0;">▲ Top 10 Weakest Closes</p>',
                             unsafe_allow_html=True,
                         )
                         st.components.v1.html(
-                            _build_signal_strength_table_html(pn_top_longs, side='long'),
-                            height=150 + len(pn_top_longs) * 55,
+                            _build_signal_strength_table_html(pn_top_buys, side='buy', thr=sb.thr),
+                            height=150 + len(pn_top_buys) * 55,
                         )
                     with pn_s:
                         st.markdown(
-                            '<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.62rem; '
-                            'font-weight:600; text-transform:uppercase; letter-spacing:0.1em; '
-                            'color:var(--rose); margin:0 0 0.4rem 0;">Top 10 Bearish</p>',
+                            f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.62rem; '
+                            f'font-weight:600; text-transform:uppercase; letter-spacing:0.1em; '
+                            f'color:{_SB_SELL}; margin:0 0 0.4rem 0;">◆ Top 10 Strongest Closes</p>',
                             unsafe_allow_html=True,
                         )
                         st.components.v1.html(
-                            _build_signal_strength_table_html(pn_top_shorts, side='short'),
-                            height=150 + len(pn_top_shorts) * 55,
+                            _build_signal_strength_table_html(pn_top_sells, side='sell', thr=sb.thr),
+                            height=150 + len(pn_top_sells) * 55,
                         )
 
                 # ════ Pulse Narrative · TAB 3: SYSTEM DATA ════════════════════════════════
@@ -5646,184 +5257,179 @@ def main():
                     _render_system_data_tab(results_df, analysis_date,
                                             universe=universe, selected_index=selected_index)
             else:
-                tab_signals, tab_strength, tab_intel, tab_raw = st.tabs(["Action Dashboard", "Signal Strength", "Intelligence", "System Data"])
-                with tab_intel:
-                    _render_intelligence_tab(universe, selected_index, timeframe)
+                tab_signals, tab_strength, tab_raw = st.tabs(["Action Dashboard", "Signal Strength", "System Data"])
                 with tab_signals:
                     timeframe_label = "This Week's" if timeframe == 'Weekly' else "Today's"
                     _run_stats = st.session_state.get("screener_run_stats", {})
                     _n_analyzed = _run_stats.get("analyzed", len(results_df))
                     _n_universe = _run_stats.get("total_in_universe", _n_analyzed)
+                    _n_warming  = _run_stats.get("warming_up", 0)
                     _date_str   = analysis_date.strftime("%d %b %Y") if hasattr(analysis_date, "strftime") else str(analysis_date)
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
                         f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
-                        "Pullback-Resumption (A) · Gap-and-Go (B)",
+                        f"SB v8 close-location ±{sb.thr:.1f}σ · {sb.iclass}",
                         icon="zap",
                         accent="amber"
                     )
 
-                    # Meta Filter status banner (opt-in low-conviction suppression).
-                    _if_mode, _if_thr = _intel_filter_active()
-                    if _if_mode != "Off":
-                        _if_verb = "hiding" if _if_mode == "Hide" else "dimming"
-                        _if_src = "the momentum engine's Meta score (rank × edge-scaled conviction)"
+                    # Scope banner — the Pine's central honesty claim, surfaced where the
+                    # signals are actually read rather than buried in a reference tab.
+                    _scope_label, _scope_kind, _scope_note = _scope_state(sb)
+                    if not sb.established or not sb.cost_ok:
+                        _msgs = []
+                        if not sb.established:
+                            _msgs.append(
+                                f'<b>{html.escape(sb.iclass)}</b> is not holdout-confirmed — {html.escape(_scope_note)} '
+                                f'(measured edge {sb.edge:+.3f} vol, {sb.hit:.1f}% hit). Only US equity indices '
+                                f'and US sectors survived drift removal.'
+                            )
+                        if not sb.cost_ok:
+                            _msgs.append(
+                                f'At <b>{sb.cost_bps:.1f} bp</b> round-trip the event form is <b>net negative</b> '
+                                f'for this class (measured breakeven ~{10.0 if sb.established else 7.0:.0f} bp).'
+                            )
                         st.markdown(
-                            f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--amber); '
-                            f'background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22); '
-                            f'border-radius:6px; padding:0.45rem 0.7rem; margin:0 0 0.7rem 0;">'
-                            f'⚙ Meta Filter <b>{_if_mode}</b> — {_if_verb} signals with '
-                            f'Meta score &lt; <b>{_if_thr:.2f}</b> · scored by {_if_src}. '
-                            f'Today\'s fired signals use the Meta score; aged signals fall back to fire-bar Intel. '
-                            f'Adjust in the sidebar ▸ Alpha-Health Monitor.</div>',
+                            '<div style="font-family:var(--data); font-size:0.66rem; color:var(--amber); '
+                            'background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22); '
+                            'border-radius:6px; padding:0.5rem 0.7rem; margin:0 0 0.7rem 0; line-height:1.5;">'
+                            '⚠ ' + '<br>⚠ '.join(_msgs) + '</div>',
                             unsafe_allow_html=True,
                         )
 
-                    # Cross-set veto inputs. Both screeners are now LONG-ONLY bullish continuation
-                    # signals, so the short (SB) side never fires and the opposite-side veto below is
-                    # inert — a Set A long is no longer vetoed by anything. Kept for column compat.
-                    has_bullish_crossover = (results_df[['LB_Today', 'LB_1d', 'LB_2d', 'LB_3d', 'LB_5d']] != "—").any(axis=1)
-                    has_bearish_crossover = (results_df[['SB_Today', 'SB_1d', 'SB_2d', 'SB_3d', 'SB_5d']] != "—").any(axis=1)
-
-                    # Set A fires (short side retired → shorts_a_df is always empty).
-                    longs_a_df = results_df[(results_df['LA_5d'] != "—") & ~has_bearish_crossover].copy().sort_values('Priority_Long', ascending=False)
-                    shorts_a_df = results_df[(results_df['SA_5d'] != "—") & ~has_bullish_crossover].copy().sort_values('Priority_Short', ascending=False)
-
-                    # Set B fires
-                    longs_b_df = results_df[results_df['LB_5d'] != "—"].copy().sort_values('Priority_Long', ascending=False)
-                    shorts_b_df = results_df[results_df['SB_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False)
+                    # The two events, bucketed by how long ago they fired.
+                    buys_df  = results_df[results_df['BUY_5d']  != "—"].copy().sort_values('Priority_Long',  ascending=False, na_position='last')
+                    sells_df = results_df[results_df['SELL_5d'] != "—"].copy().sort_values('Priority_Short', ascending=False, na_position='last')
 
                     if timeframe == 'Weekly':
                         _age_order = ["This Week", "1 Week Ago", "2 Weeks Ago", "3 Weeks Ago", "Within 5 Weeks"]
                     else:
                         _age_order = ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
 
-                    has_signals = any(not df_.empty for df_ in [longs_a_df, shorts_a_df, longs_b_df, shorts_b_df])
+                    has_signals = not (buys_df.empty and sells_df.empty)
 
                     if has_signals:
-                        total_longs  = len(longs_a_df) + len(longs_b_df)
-                        total_shorts = len(shorts_a_df) + len(shorts_b_df)
-                        all_longs  = pd.concat([longs_a_df, longs_b_df]).drop_duplicates('Symbol').sort_values('Priority_Long', ascending=False)
-                        all_shorts = pd.concat([shorts_a_df, shorts_b_df]).drop_duplicates('Symbol').sort_values('Priority_Short', ascending=False)
+                        _fired_today_buy  = int((results_df['BUY_Today']  != "—").sum())
+                        _fired_today_sell = int((results_df['SELL_Today'] != "—").sum())
 
                         mc1, mc2, mc3, mc4 = st.columns(4)
-                        with mc1: ui.render_metric_card("Long Signals", str(total_longs), f"A:{len(longs_a_df)} B:{len(longs_b_df)}", "success")
-                        with mc2: ui.render_metric_card("Short Signals", str(total_shorts), f"A:{len(shorts_a_df)} B:{len(shorts_b_df)}", "danger")
+                        with mc1:
+                            ui.render_metric_card("▲ BUY Signals", str(len(buys_df)),
+                                                  f"{_fired_today_buy} fired {'this week' if timeframe == 'Weekly' else 'today'}",
+                                                  "success")
+                        with mc2:
+                            ui.render_metric_card("◆ SELL Signals", str(len(sells_df)),
+                                                  f"{_fired_today_sell} fired {'this week' if timeframe == 'Weekly' else 'today'}",
+                                                  "warning")
                         with mc3:
-                            strongest_long = all_longs.iloc[0] if not all_longs.empty else None
-                            ui.render_metric_card("Strongest Long", strongest_long['SimpleName'] if strongest_long is not None else "—", f"Signal: {strongest_long['Signal']:.1f}" if strongest_long is not None else "No signals", "info")
+                            _sb_top = buys_df.iloc[0] if not buys_df.empty else None
+                            ui.render_metric_card(
+                                "Weakest Close",
+                                _sb_top['SimpleName'] if _sb_top is not None else "—",
+                                (f"z {float(_sb_top['SB_Z']):+.2f}σ" if _sb_top is not None
+                                 and pd.notna(_sb_top.get('SB_Z')) else "no BUY signals"),
+                                "info")
                         with mc4:
-                            strongest_short = all_shorts.iloc[0] if not all_shorts.empty else None
-                            ui.render_metric_card("Strongest Short", strongest_short['SimpleName'] if strongest_short is not None else "—", f"Signal: {strongest_short['Signal']:.1f}" if strongest_short is not None else "No signals", "info")
+                            _ss_top = sells_df.iloc[0] if not sells_df.empty else None
+                            ui.render_metric_card(
+                                "Strongest Close",
+                                _ss_top['SimpleName'] if _ss_top is not None else "—",
+                                (f"z {float(_ss_top['SB_Z']):+.2f}σ" if _ss_top is not None
+                                 and pd.notna(_ss_top.get('SB_Z')) else "no SELL signals"),
+                                "info")
 
                         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-                        bull_tab, bear_tab = st.tabs(["Bullish Signals by Timing", "Bearish Signals by Timing"])
-                        with bull_tab:
-                            mom_bull_tab, cross_bull_tab, prio_bull_tab = st.tabs(["Set A", "Set B", "Priority Rank"])
-                            with mom_bull_tab:
-                                _, la_stats, _, _ = _bucket_signals_by_age(longs_a_df, side='long', condition_set='A', timeframe=timeframe)
-                                la_html = _build_signal_table_html(la_stats, side='long', timeframe=timeframe)
-                                _g = sum(1 for a in _age_order if la_stats[a]['count'] > 0)
-                                _r = sum(la_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(la_html, height=max(120 + _g * 60 + _r * 56, 150))
-                            with cross_bull_tab:
-                                _, lb_stats, _, _ = _bucket_signals_by_age(longs_b_df, side='long', condition_set='B', timeframe=timeframe)
-                                lb_html = _build_signal_table_html(lb_stats, side='long', timeframe=timeframe)
-                                _g = sum(1 for a in _age_order if lb_stats[a]['count'] > 0)
-                                _r = sum(lb_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(lb_html, height=max(70 + _g * 46 + _r * 44, 110))
-                            with prio_bull_tab:
-                                # Entire universe ranked by the LONG momentum priority —
-                                # not gated by any signal set; this is the engine ranking.
-                                _all_long = results_df.sort_values('Priority_Long', ascending=False)
-                                st.markdown(
-                                    '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
-                                    'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the long momentum priority '
-                                    '(cross-sectional score, alpha-health-scaled) — independent of signal sets A–B.</div>',
-                                    unsafe_allow_html=True,
-                                )
-                                st.components.v1.html(_build_signal_strength_table_html(_all_long, side='long'),
-                                                      height=min(150 + len(_all_long) * 55, 900), scrolling=True)
-                        with bear_tab:
-                            mom_bear_tab, cross_bear_tab, prio_bear_tab = st.tabs(["Set A", "Set B", "Priority Rank"])
-                            with mom_bear_tab:
-                                _, sa_stats, _, _ = _bucket_signals_by_age(shorts_a_df, side='short', condition_set='A', timeframe=timeframe)
-                                sa_html = _build_signal_table_html(sa_stats, side='short', timeframe=timeframe)
-                                _g = sum(1 for a in _age_order if sa_stats[a]['count'] > 0)
-                                _r = sum(sa_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(sa_html, height=max(70 + _g * 46 + _r * 44, 110))
-                            with cross_bear_tab:
-                                _, sb_stats, _, _ = _bucket_signals_by_age(shorts_b_df, side='short', condition_set='B', timeframe=timeframe)
-                                sb_html = _build_signal_table_html(sb_stats, side='short', timeframe=timeframe)
-                                _g = sum(1 for a in _age_order if sb_stats[a]['count'] > 0)
-                                _r = sum(sb_stats[a]['count'] for a in _age_order)
-                                st.components.v1.html(sb_html, height=max(70 + _g * 46 + _r * 44, 110))
-                            with prio_bear_tab:
-                                # Entire universe ranked by the SHORT momentum priority.
-                                _all_short = results_df.sort_values('Priority_Short', ascending=False)
-                                st.markdown(
-                                    '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
-                                    'padding:0.2rem 0 0.6rem 0;">Full universe ranked by the short momentum priority '
-                                    '(cross-sectional score, alpha-health-scaled) — independent of signal sets A–B.</div>',
-                                    unsafe_allow_html=True,
-                                )
-                                st.components.v1.html(_build_signal_strength_table_html(_all_short, side='short'),
-                                                      height=min(150 + len(_all_short) * 55, 900), scrolling=True)
+                        buy_tab, sell_tab = st.tabs(["▲ BUY Signals by Timing", "◆ SELL Signals by Timing"])
+
+                        def _render_age_table(df_, side_key):
+                            _, _stats, _trend, _tcol = _bucket_signals_by_age(
+                                df_, side=side_key, timeframe=timeframe)
+                            _html = _build_signal_table_html(_stats, side=side_key,
+                                                             timeframe=timeframe, thr=sb.thr)
+                            _g = sum(1 for a in _age_order if _stats[a]['count'] > 0)
+                            _r = sum(_stats[a]['count'] for a in _age_order)
+                            st.markdown(
+                                f'<div style="font-family:var(--data); font-size:0.66rem; '
+                                f'color:{_tcol}; padding:0.2rem 0 0.5rem 0;">{_trend} — newest fires vs older, by |z|.'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                            st.components.v1.html(_html, height=max(120 + _g * 60 + _r * 56, 160),
+                                                  scrolling=True)
+
+                        with buy_tab:
+                            st.markdown(
+                                f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
+                                f'padding:0.2rem 0 0.5rem 0;">Close-location z below <b>−{sb.thr:.1f}σ</b> — a weak close '
+                                f'to fade up. Entry is the next session\'s open; the measured horizon is 5–10 bars. '
+                                f'This is the holdout-confirmed side.</div>',
+                                unsafe_allow_html=True,
+                            )
+                            _render_age_table(buys_df, 'buy')
+                        with sell_tab:
+                            st.markdown(
+                                f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
+                                f'padding:0.2rem 0 0.5rem 0;">Close-location z above <b>+{sb.thr:.1f}σ</b> — a strong close. '
+                                f'The source indicator labels this side <b>CAUTION</b> rather than a short entry: its '
+                                f'drift-free holdout was +0.0094 with a CI of [−0.030, +0.052], so it did not confirm '
+                                f'out of sample.</div>',
+                                unsafe_allow_html=True,
+                            )
+                            _render_age_table(sells_df, 'sell')
                     else:
                         st.info(
-                            f"**No signals found** for {selected_index} on {analysis_date} ({timeframe}). "
-                            "All symbols were analyzed but none fired a Set A / Set B condition in the last 5 bars. "
-                            "Try an adjacent trading date or switch to a broader universe."
+                            f"**No signals fired** for {selected_index} on {analysis_date} ({timeframe}). "
+                            f"All {_n_analyzed} symbols were analyzed but none closed past ±{sb.thr:.1f}σ in the last "
+                            f"5 bars — at the measured threshold that is normal (~9.3% of days fire). "
+                            "Try an adjacent trading date, a broader universe, or the Signal Strength tab for the "
+                            "full ranking."
                         )
-
-
-                # Omni-channel base: include any stock with a signal in ANY set (A or B)
-                long_sets = ['LA_5d', 'LB_5d']
-                short_sets = ['SA_5d', 'SB_5d']
-                _longs_base = results_df[results_df[long_sets].ne("—").any(axis=1)].copy()
-                _shorts_base = results_df[results_df[short_sets].ne("—").any(axis=1)].copy()
-                top_longs = _longs_base.sort_values('Priority_Long', ascending=False).head(10)
-                top_shorts = _shorts_base.sort_values('Priority_Short', ascending=False).head(10)
+                        if _n_warming:
+                            st.caption(f"{_n_warming} symbol(s) excluded — fewer than {sb.min_bars} bars of history.")
 
                 # Action Dashboard's own Signal Strength + System Data tabs.
                 # Pulse Narrative has its own equivalents inside the `if` branch above
-                # (different filtering — full-universe top-N rather than signal-set filter),
+                # (different framing — universe extremes rather than fired-signal filter),
                 # so these blocks must NOT escape the `else:` indentation level — that would
                 # cause Pulse Narrative to register the same widget keys twice.
 
                 # ════ Action Dashboard · TAB 2: SIGNAL STRENGTH ═══════════════════════
                 with tab_strength:
                     ui.render_section_header(
-                        "Order-Flow Signal Strength",
-                        "Top signals ranked by momentum priority — Set A · Set B overlays",
+                        "Close-Location Ranking",
+                        f"Full universe ordered by fade score — the ±{sb.thr:.1f}σ trigger marks where it becomes actionable",
                         icon="zap",
                         accent="amber"
                     )
 
-                    # Strength metrics
-                    avg_delta = results_df['Delta_Z'].abs().mean()
-                    avg_abs = results_df['Abs_Strength'].mean()
-                    strong_flow_count = len(results_df[results_df['Delta_Z'].abs() > 1.5])
-                    absorb_count = len(results_df[results_df['Abs_Strength'] > 1.8])
+                    _n = max(len(results_df), 1)
+                    _absz = results_df['SB_Z'].abs() if 'SB_Z' in results_df.columns else pd.Series(dtype=float)
+                    avg_absz    = _absz.mean()
+                    past_thr    = int((_absz > sb.thr).sum())
+                    n_buy_all   = int((results_df['Side'] == 'Buy').sum())  if 'Side' in results_df.columns else 0
+                    n_sell_all  = int((results_df['Side'] == 'Sell').sum()) if 'Side' in results_df.columns else 0
 
                     col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-                    with col_s1: ui.render_metric_card("Avg Δ-Z", f"{avg_delta:.2f}", "Signed delta z-score", "neutral")
-                    with col_s2: ui.render_metric_card("Avg Absorption", f"{avg_abs:.2f}×", "|Δ| vs 20-bar avg", "neutral")
-                    with col_s3: ui.render_metric_card("Strong Flow", str(strong_flow_count), f"{strong_flow_count/len(results_df)*100:.0f}% of universe", "info")
-                    with col_s4: ui.render_metric_card("Absorption Hits", str(absorb_count), f"{absorb_count/len(results_df)*100:.0f}% of universe", "info")
-
+                    with col_s1: ui.render_metric_card("Avg |z|", _fmt_num(avg_absz, "{:.2f}"),
+                                                       f"vs ±{sb.thr:.1f}σ trigger", "neutral")
+                    with col_s2: ui.render_metric_card("Past Trigger", str(past_thr),
+                                                       f"{past_thr/_n*100:.0f}% of universe · ~9.3% typical", "info")
+                    with col_s3: ui.render_metric_card("▲ / ◆ Split", f"{n_buy_all} / {n_sell_all}",
+                                                       "weak closes vs strong closes", "info")
+                    with col_s4: ui.render_metric_card("Class Edge", f"{sb.edge:+.3f}",
+                                                       f"{sb.hit:.1f}% hit · {_scope_label.title()}",
+                                                       "success" if sb.established else "warning")
 
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
                     # ── column label renderer ──
-                    def _col_label(side_label, side):
-                        arrow = SVGS['LONG'].replace('currentColor', 'var(--emerald)') if side == 'long' else SVGS['SHORT'].replace('currentColor', 'var(--rose)')
-                        color = 'var(--emerald)' if side == 'long' else 'var(--rose)'
+                    def _col_label(side_label, side_key):
+                        _p = _side_palette(side_key)
                         return f"""
                         <p style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600;
-                                   text-transform:uppercase; letter-spacing:0.1em; color:{color};
+                                   text-transform:uppercase; letter-spacing:0.1em; color:{_p['accent_light']};
                                    margin:0 0 0.4rem 0; display:flex; align-items:center; gap:0.35rem;">
-                            {arrow} {side_label}
+                            {_p['mark']} {side_label}
                         </p>"""
 
                     st.markdown(f"""
@@ -5832,21 +5438,44 @@ def main():
                         <span style="font-family:var(--display); font-size:0.62rem; font-weight:700;
                                      letter-spacing:0.12em; text-transform:uppercase; color:#D4A853;
                                      padding:0.18rem 0.5rem; background:rgba(212,168,83,0.1);
-                                     border:1px solid rgba(212,168,83,0.3); border-radius:4px;">MOMENTUM ENGINE</span>
+                                     border:1px solid rgba(212,168,83,0.3); border-radius:4px;">SB v8 ENGINE</span>
                         <span style="font-family:var(--display); font-size:1rem; font-weight:700;
-                                     color:#F1F5F9; letter-spacing:0.04em;">Top 10 Rankings</span>
+                                     color:#F1F5F9; letter-spacing:0.04em;">Top 10 Each Side</span>
+                        <span style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:#6B7280;">
+                            most stretched closes in the universe · a blank Side means it has not crossed the trigger</span>
                     </div>
                     """, unsafe_allow_html=True)
 
+                    top_buys  = results_df.sort_values('Priority_Long',  ascending=False, na_position='last').head(10)
+                    top_sells = results_df.sort_values('Priority_Short', ascending=False, na_position='last').head(10)
+
                     _col_l, _col_s = st.columns(2)
                     with _col_l:
-                        st.markdown(_col_label("Top 10 Bullish", "long"), unsafe_allow_html=True)
-                        st.components.v1.html(_build_signal_strength_table_html(top_longs, side='long'), height=150 + len(top_longs)*55)
+                        st.markdown(_col_label("Top 10 Weakest Closes", "buy"), unsafe_allow_html=True)
+                        st.components.v1.html(
+                            _build_signal_strength_table_html(top_buys, side='buy', thr=sb.thr),
+                            height=150 + len(top_buys) * 55)
                     with _col_s:
-                        st.markdown(_col_label("Top 10 Bearish", "short"), unsafe_allow_html=True)
-                        st.components.v1.html(_build_signal_strength_table_html(top_shorts, side='short'), height=150 + len(top_shorts)*55)
+                        st.markdown(_col_label("Top 10 Strongest Closes", "sell"), unsafe_allow_html=True)
+                        st.components.v1.html(
+                            _build_signal_strength_table_html(top_sells, side='sell', thr=sb.thr),
+                            height=150 + len(top_sells) * 55)
 
-                # ════ Action Dashboard · TAB 4: SYSTEM DATA ═══════════════════════════
+                    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
+                        f'padding:0.2rem 0 0.6rem 0; line-height:1.55;">Full universe ranked by fade score '
+                        f'(−z). The ranking is continuous, but the measured edge is in the <b>event</b>: holding '
+                        f'a continuous position on this signal turns over daily, costs ~12%/yr at 3bp, and nets '
+                        f'−0.48 Sharpe. Only rows whose Side shows ▲ or ◆ have crossed the ±{sb.thr:.1f}σ trigger.</div>',
+                        unsafe_allow_html=True,
+                    )
+                    _all_ranked = results_df.sort_values('Priority_Long', ascending=False, na_position='last')
+                    st.components.v1.html(
+                        _build_signal_strength_table_html(_all_ranked, side='buy', thr=sb.thr),
+                        height=min(150 + len(_all_ranked) * 55, 900), scrolling=True)
+
+                # ════ Action Dashboard · TAB 3: SYSTEM DATA ═══════════════════════════
                 with tab_raw:
                     _render_system_data_tab(results_df, analysis_date,
                                             universe=universe, selected_index=selected_index)
@@ -5864,194 +5493,106 @@ def main():
         # Always render footer
         render_footer()
 
-def _passport_status_html(current_universe, current_index, current_timeframe) -> str:
-    """Engine-Status card (+ mismatch note) as HTML, built purely from session_state.
-
-    Extracted so the card can be REPAINTED into its placeholder after a run completes: the
-    single-pass render (no post-run st.rerun) paints the sidebar BEFORE the screener sets the
-    new alpha-health reading, so without a repaint the passport would lag one interaction.
-    """
-    res = st.session_state.get("opt_results") or {}
-    trailing_ic = st.session_state.get("alpha_health_ic", res.get("trailing_ic"))
-    health = st.session_state.get("alpha_health_mult", res.get("alpha_health"))
-    measured = trailing_ic is not None and isinstance(trailing_ic, (int, float))
-
-    cal_universe  = res.get("universe") or None
-    cal_index     = res.get("selected_index") or None
-    cal_timeframe = res.get("timeframe") or None
-    cal_label     = cal_index or cal_universe or "—"
-    cur_label     = (current_index or current_universe or "—")
-    universe_mismatch  = bool(res) and cal_label != "—" and cur_label != "—" and cal_label != cur_label
-    timeframe_mismatch = (bool(res) and cal_timeframe and current_timeframe
-                          and cal_timeframe != current_timeframe)
-    mismatch = universe_mismatch or timeframe_mismatch
-
-    t_stat = st.session_state.get("alpha_health_t", res.get("t_stat"))
-    if measured:
-        _lbl, card_class, _ = _edge_state(trailing_ic, t_stat)      # shared with the tab
-        state_label = _lbl.split(" — ")[0].split(" (")[0]           # compact sidebar label
-        ic_str     = f"{trailing_ic:+.3f}" + (f" · t{t_stat:+.1f}" if t_stat is not None else "")
-        health_str = f"{float(health):.2f}×" if isinstance(health, (int, float)) else "—"
-    else:
-        state_label = "Cold Start"
-        card_class  = "neutral"
-        ic_str      = "—"
-        health_str  = f"{float(health):.2f}×" if isinstance(health, (int, float)) else "—"
-    if mismatch:
-        card_class = "warning"
-    updated     = res.get("timestamp", "—") or "—"
-    ic_color    = "var(--emerald)" if (measured and trailing_ic > 0) else "var(--rose)" if measured else "var(--ink-secondary)"
-    cal_tf_disp = cal_timeframe or "—"
-
-    def _trim(s, n=22):
-        s = str(s)
-        return s if len(s) <= n else s[: n - 1] + "…"
-    cal_label_disp = _trim(cal_label)
-
-    html = f"""
-    <div class="metric-card {card_class}" style="
-            min-height:auto; padding:0.85rem 0.95rem; margin-bottom:0.7rem; animation:none;">
-        <h4 style="margin:0 0 0.3rem 0;">Momentum Engine</h4>
-        <h2 style="font-size:1.05rem; margin:0 0 0.7rem 0; letter-spacing:-0.01em;">{state_label}</h2>
-        <div style="display:flex; flex-direction:column; gap:0.32rem; padding-top:0.55rem;
-                    border-top:1px solid rgba(255,255,255,0.06);">
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Engine</span>
-                <span style="color:var(--ink-secondary); font-weight:500;">X-Sect Momentum v5.1</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Measured on</span>
-                <span style="color:var(--ink-secondary); font-weight:500; max-width:62%; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{cal_label_disp}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.62rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Depth</span>
-                <span style="color:var(--ink-secondary); font-weight:500;">{cal_tf_disp}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.65rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Trailing IC</span>
-                <span style="color:{ic_color}; font-weight:600;">{ic_str}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.65rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Alpha-Health</span>
-                <span style="color:var(--ink-secondary); font-weight:600;">{health_str}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:baseline; font-family:var(--data); font-size:0.6rem;">
-                <span style="color:var(--ink-tertiary); text-transform:uppercase; letter-spacing:0.1em; font-size:0.58rem;">Updated</span>
-                <span style="color:var(--ink-secondary);">{updated}</span>
-            </div>
-        </div>
-    </div>
-    """
-    if mismatch:
-        mismatch_lines = []
-        if universe_mismatch:
-            mismatch_lines.append(f"Edge measured on <b>{_trim(cal_label, 28)}</b><br>"
-                                  f"Active universe is <b>{_trim(cur_label, 28)}</b>")
-        if timeframe_mismatch:
-            mismatch_lines.append(f"Measured depth is <b>{cal_timeframe}</b><br>"
-                                  f"Active depth is <b>{current_timeframe}</b>")
-        html += f"""
-        <div style="font-family:var(--data); font-size:0.62rem; color:var(--amber);
-                    background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22);
-                    border-radius:6px; padding:0.55rem 0.65rem; margin-bottom:0.7rem; line-height:1.45;">
-            <span style="font-weight:700;">Reading is from a different universe / depth.</span><br>
-            {"<br>".join(mismatch_lines)}<br>
-            <span style="color:var(--ink-tertiary);">The alpha-health re-measures on the next run for
-            the current selection — or use Re-measure edge below.</span>
-        </div>
-        """
-    return html
-
-
-def _refresh_passport():
-    """Repaint the Engine-Status card into its sidebar placeholder from the latest
-    session_state. Called after a run sets the new alpha-health / opt_results so the sidebar
-    reflects THIS run (the single-pass render painted it before the analysis ran)."""
-    slot = st.session_state.get("_passport_slot")
-    args = st.session_state.get("_passport_args")
-    if slot is not None and args is not None:
-        try:
-            slot.markdown(_passport_status_html(*args), unsafe_allow_html=True)
-        except Exception:
-            pass
-
-
-def _render_model_passport_sidebar(current_universe: str, current_index, current_timeframe=None, analysis_mode=None):
+def _render_engine_status_sidebar(current_universe: str, current_index, current_timeframe) -> "SBSettings":
     """Sidebar Engine Status panel — visible in every mode.
 
-    The momentum engine is fixed and validated; there are no per-universe profiles to
-    manage. This panel surfaces the engine name, the live alpha-health / trailing-IC
-    reading from the last screener run, and the universe/timeframe it was measured on,
-    plus a single 'Re-measure edge' control.
+    Renders the Pine's dashboard as a sidebar card: the engine, the instrument class
+    DERIVED from the universe selection above, that class's measured out-of-sample
+    expectancy and hit rate, the scope verdict, and the cost gate. Below it, the four
+    parameters the Pine exposes as inputs — every default a measured plateau.
 
-    Caller must be inside a ``with st.sidebar:`` context. Returns the settings dict the
-    alpha-health monitor consumes: {force, lookback_days, horizons}.
+    Caller must be inside a ``with st.sidebar:`` context. Returns the resolved
+    :class:`SBSettings` for this run and stashes it in session state so renderers that
+    do not take it as an argument can read it back.
     """
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-title">Engine Status</div>', unsafe_allow_html=True)
 
-    # Paint the status card into a placeholder and stash it. The single-pass render paints
-    # the sidebar BEFORE the screener runs, so _refresh_passport() repaints this same slot
-    # once the run has set the new alpha-health reading — otherwise the card would keep
-    # showing the PREVIOUS run's values until the next interaction.
-    _passport_slot = st.empty()
-    _passport_slot.markdown(
-        _passport_status_html(current_universe, current_index, current_timeframe),
+    # ── Parameters (the Pine's four inputs) — resolved BEFORE the card so it reflects
+    # this frame's values. The instrument class and z-lookback are derived, not typed.
+    with st.expander("⚙ SB v8 Parameters", expanded=False):
+        st.markdown(
+            '<div style="font-family:var(--data); font-size:0.62rem; color:var(--ink-tertiary); '
+            'line-height:1.55; padding:0 0 0.55rem 0;">Every default is a <b>measured plateau</b>, '
+            'not a fitted value. The z-score lookback follows the timeframe and the instrument '
+            'class follows the universe — neither is a knob.</div>',
+            unsafe_allow_html=True,
+        )
+        sb_thr = st.slider(
+            "Signal threshold (σ)", min_value=0.5, max_value=3.0, step=0.1,
+            value=eng.SB_THRESHOLD, key="sb_p_thr",
+            help=("1.0 fires 44% of days and loses to costs. 2.0 fires 0.1% of days and failed "
+                  "holdout. 1.5 fires 9.3% of days and is net-positive in both eras."),
+        )
+        sb_horizon = st.slider(
+            "Hold horizon (bars)", min_value=1, max_value=40, step=1,
+            value=eng.SB_HORIZON, key="sb_p_horizon",
+            help="The edge lives at 5-10 days. Below 5 the turnover cost exceeds the gross edge.",
+        )
+        sb_cost = st.slider(
+            "Round-trip cost (bps)", min_value=0.0, max_value=50.0, step=0.5,
+            value=eng.SB_COST_BPS, key="sb_p_cost",
+            help=("Measured breakeven is ~7bp pooled across all 39 instruments; on US equity "
+                  "indices and sectors the event form is still net-positive past 10bp."),
+        )
+
+    sb = _sb_settings(current_universe, current_index, current_timeframe, {
+        "thr": sb_thr, "horizon": sb_horizon, "cost_bps": sb_cost,
+    })
+    st.session_state["sb_settings"] = sb
+
+    scope_label, scope_class, scope_note = _scope_state(sb)
+    edge_color = ("var(--emerald)" if sb.edge > 0.05
+                  else "var(--ink-secondary)" if sb.edge > 0.0 else "var(--rose)")
+    cost_color = "var(--emerald)" if sb.cost_ok else "var(--rose)"
+    cost_text  = f"{sb.cost_bps:.1f} bp · " + ("net +" if sb.cost_ok else "NET NEGATIVE")
+    card_class = scope_class if sb.cost_ok else "danger"
+    tf_note = " (extrapolated)" if current_timeframe == "Weekly" else ""
+
+    def _row(label, value, color="var(--ink-secondary)", size="0.62rem"):
+        return (
+            f'<div style="display:flex; justify-content:space-between; align-items:baseline; '
+            f'font-family:var(--data); font-size:{size};">'
+            f'<span style="color:var(--ink-tertiary); text-transform:uppercase; '
+            f'letter-spacing:0.1em; font-size:0.58rem;">{label}</span>'
+            f'<span style="color:{color}; font-weight:600; max-width:64%; text-align:right; '
+            f'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{value}</span></div>'
+        )
+
+    st.markdown(
+        f"""
+        <div class="metric-card {card_class}" style="
+                min-height:auto; padding:0.85rem 0.95rem; margin-bottom:0.7rem; animation:none;">
+            <h4 style="margin:0 0 0.3rem 0;">SB v8 · Close-Location</h4>
+            <h2 style="font-size:1.05rem; margin:0 0 0.7rem 0; letter-spacing:-0.01em;">{scope_label}</h2>
+            <div style="display:flex; flex-direction:column; gap:0.32rem; padding-top:0.55rem;
+                        border-top:1px solid rgba(255,255,255,0.06);">
+                {_row("Asset class", html.escape(sb.iclass))}
+                {_row("Class edge (OOS)", f"{sb.edge:+.3f} vol · {sb.hit:.1f}% hit", edge_color, "0.65rem")}
+                {_row("Trigger", f"±{sb.thr:.1f}σ · hold {sb.horizon}")}
+                {_row("Z lookback", f"{sb.z_look} bars{tf_note}")}
+                {_row("Cost gate", cost_text, cost_color, "0.65rem")}
+                {_row("Entry", "next session open")}
+            </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
-    st.session_state["_passport_slot"] = _passport_slot
-    st.session_state["_passport_args"] = (current_universe, current_index, current_timeframe)
 
-    # ── Alpha-Health controls — directly below the status card. The engine is fixed;
-    # the only knob is whether to force a fresh edge measurement this run.
-    calib_force = False
-    if analysis_mode in ("Single Date", "Pulse Narrative"):
-        with st.expander("⚙ Alpha-Health Monitor", expanded=False):
-            st.markdown(
-                '<div style="font-family:var(--data); font-size:0.62rem; color:var(--ink-tertiary); '
-                'line-height:1.55; padding:0 0 0.55rem 0;">The ranker measures its own realized edge '
-                '(trailing cross-sectional IC) once per day per universe and scales conviction by it. '
-                'Reuses today\'s reading otherwise.</div>',
-                unsafe_allow_html=True,
-            )
-            calib_force = st.checkbox(
-                "Re-measure edge this run", value=False, key="sb_calib_force",
-                help="Re-harvest the lookback panel and re-measure the trailing IC even if today's reading exists.",
-            )
+    if not sb.established:
+        st.markdown(
+            f'<div style="font-family:var(--data); font-size:0.62rem; color:var(--amber); '
+            f'background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22); '
+            f'border-radius:6px; padding:0.55rem 0.65rem; margin-bottom:0.7rem; line-height:1.45;">'
+            f'<span style="font-weight:700;">Scope warning.</span><br>'
+            f'{html.escape(scope_note)} for <b>{html.escape(sb.iclass)}</b>.<br>'
+            f'<span style="color:var(--ink-tertiary);">Only US equity indices and US sectors were '
+            f'holdout-confirmed after drift removal. Signals still fire here — the measured '
+            f'expectancy behind them does not.</span></div>',
+            unsafe_allow_html=True,
+        )
 
-            # ── Meta Filter (opt-in low-conviction suppression) ──
-            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-            st.markdown(
-                '<div style="font-family:var(--data); font-size:0.62rem; color:var(--ink-tertiary); '
-                'line-height:1.55; padding:0 0 0.4rem 0;">Filter fired signals by <b>Meta score</b> — the '
-                'momentum engine\'s rank × edge-scaled conviction. Dim greys low-conviction signals; '
-                'Hide removes them from the Action Dashboard. Off shows all signals.</div>',
-                unsafe_allow_html=True,
-            )
-            st.session_state.setdefault("intel_filter_threshold", 0.45)
-            st.session_state.setdefault("intel_filter_mode", "Dim")
-
-            intel_filter_mode = st.radio(
-                "Meta Filter", ["Off", "Dim", "Hide"],
-                horizontal=True, key="intel_filter_mode",
-                help="Off: show all. Dim: grey signals below the threshold. Hide: drop them entirely.",
-            )
-            intel_filter_threshold = st.slider(
-                "Min Meta Score", min_value=0.0, max_value=1.0,
-                step=0.05, key="intel_filter_threshold",
-                disabled=(intel_filter_mode == "Off"),
-                help="Fired signals with Meta score below this are dimmed or hidden.",
-            )
-
-    # Inline-harvest lookback ending at the analysis date: ~3y weekly, ~2y daily.
-    calib_lookback_days = 1095 if current_timeframe == "Weekly" else 730
-    _calib_settings = {
-        "force":         calib_force,
-        "lookback_days": calib_lookback_days,
-        "horizons":      eng.HOLD_HORIZONS,
-    }
-
-    return _calib_settings
+    return sb
 
 
 if __name__ == "__main__":

@@ -1,9 +1,133 @@
 # CHANGELOG
-### Sanket — Cross-Sectional Momentum Ranker
+### Sanket — SB v8 Close-Location Reversal
 
 All notable changes to the **Sanket** platform are documented here. Sanket is part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/thebullishvalue).
 
 Format: `[version] · date — release title`
+
+---
+
+## [v6.0.0] · 2026-08-10
+### One Screening Condition — SB v8 Close-Location Reversal
+
+A deliberate subtraction. The system now runs **one** signal, ported from
+[`sb_v8.pine`](sb_v8.pine): the z-score of where price closes inside its own bar range. Two
+events, and nothing else.
+
+```
+sb_clv = ((close - low) - (high - close)) / (high - low)
+SB_Z   = z-score of sb_clv over the trailing 252 bars (52 weekly)
+
+SB_Z < -1.5σ  →  ▲ BUY   (green triangle · weak close · fade up)
+SB_Z > +1.5σ  →  ◆ SELL  (yellow diamond · strong close)
+```
+
+The sign is the finding: **a strong close predicts weakness**, so the fade of a weak close is the
+buy. Measured on 39 instruments / 251,200 daily bars / 1993-2026, 66 Bonferroni-corrected tests,
+holdout 2014-2026 opened exactly once. Discovery IC -0.0634 (z -7.96, p_bonf 1.2e-13) — the
+strongest result in that study by four orders of magnitude, and negative.
+
+**Removed — the momentum engine.** The 12-1 cross-sectional momentum ranker, the reversion
+entry-timing overlay, `VOL_REGIME_MOM`, and the whole `_mom_*` / `_rev_*` feature family.
+`engine.py` was rewritten from scratch around SB v8.
+
+**Removed — Set A / Set B.** Both entry screeners are gone, along with `compute_signal_sets`, the
+`long_cond`/`short_cond`/`*_comp` booleans, and the `LA_`/`SA_`/`LB_`/`SB_` age columns. They are
+replaced by `BUY_Today…BUY_5d` and `SELL_Today…SELL_5d` — the same age-bucketing UI, now driven by
+the single condition.
+
+**Removed — the entire Intelligence layer.**
+- The **Intelligence tab** (Alpha-Health Monitor) and the signal-aging reference.
+- The **alpha-health monitor** itself: `_measure_trailing_ic`, `_ensure_alpha_health`,
+  `_edge_state`, the Engine Status passport (`_passport_status_html` / `_refresh_passport` /
+  `_render_model_passport_sidebar`), `engine.alpha_health`, `engine.cross_sectional_ic`, and the
+  `alpha_health_*` / `opt_results` session state. Conviction no longer scales by a live IC reading.
+- **Layer-2 Signal Intelligence** — `Intel_Confidence`, `Intel_Stars`, `Intel_Source`, and the
+  ◆/◇ Intel cells on every table.
+- **Layer-3 Meta Intelligence** — `Meta_Score`, `Meta_Tier`, `Meta_Source`, `Meta_Reason` and the
+  **Meta Filter** (Off/Dim/Hide + threshold slider).
+- The **Context / Entry** aging machinery: `_context_status`, `_cached_conf_series`,
+  `_fire_bar_metrics`, `_active_model_sig`, and the `intel_windows` / `intel_fire_cache` session
+  caches. (An `_entry_status` move-exhaustion read survives, rebuilt to key off the z that fired.)
+
+**Consequence:** the pre-screen harvest pass is gone. A Single-Date run is now a single pass over
+the universe with one progress bar, instead of a 0→40% edge-measurement harvest followed by a
+40→100% screen.
+
+**The instrument class is wired to the universe selector.** The Pine exposes instrument class as an
+input because the edge does not hold everywhere; `engine.instrument_class` derives it from the
+selected universe, so the expectancy the UI reports always matches the asset class on screen:
+
+| Universe | Class | OOS edge | Hit | Established? |
+|:---|:---|:---|:---|:---|
+| US Indexes | US index / ETF | **+0.121** | 57.5% | **yes** |
+| — | US sector ETF | **+0.068** | 54.9% | **yes** |
+| India Indexes · ETF Index | India index | +0.089 | 51.9% | no (n=239, CI includes zero) |
+| Global Indexes | International equity | +0.003 | 53.2% | no |
+| Commodities | Commodity | +0.028 | 51.0% | no |
+| Currency | FX | +0.035 | 51.9% | no |
+| Global Macro | Rates / Credit | -0.003 | 51.1% | no |
+| Crypto | Other / unknown | 0.000 | 50.0% | no |
+
+The sidebar Engine Status card shows the class, its edge and hit rate, the trigger, the z-lookback
+and the cost gate; a **scope warning banner** appears on the Action Dashboard whenever the active
+class is not holdout-confirmed.
+
+**New conviction model.** `|z| magnitude × class expectancy × cost gate` — and nothing else:
+
+```
+Conviction = clip(0.30 + 0.70·clip(|z|/3, 0, 1)) × class_factor × cost_factor
+class_factor: 1.00 established · 0.75 CI-includes-zero · 0.55 nominally positive · 0.40 zero/negative
+cost_factor:  1.00 within the class breakeven (~7bp pooled, ~10bp established), else 0.50
+```
+
+Deliberately absent: no per-name vol factor, no regime factor, no live-IC scaling. The Pine has no
+such terms. Conviction is labelled a relative weighting, not a probability, in every tooltip.
+
+**The SELL side ships with its caveat attached.** The source indicator labels the strong-close side
+CAUTION rather than a short entry: its drift-free holdout was +0.0094 with a CI of
+[-0.030, +0.052], i.e. it did **not** confirm out of sample. Sanket surfaces it as a sell signal as
+configured, and that caveat travels with it into the Action Dashboard tab description, the Signal
+Reference cards, the Excel legend, and `Signal_Reason`.
+
+**Warmup is a refusal, not a fudge.** A symbol needs `z_look + 2` bars before it can carry a signal
+(the Pine's own `dBars < zLook + 2` guard). Shorter histories are excluded from the screen with a
+"warming up" count surfaced in the run stats and a specific empty-state message when the whole
+universe is too short.
+
+**Four Pine inputs exposed** in a sidebar expander with the measured rationale in each tooltip:
+signal threshold (σ), hold horizon (bars), round-trip cost (bps). The z-lookback follows the
+timeframe (252 daily / 52 weekly) and the instrument class follows the universe — neither is a knob.
+All three parameters are folded into the analyzed-frame cache signature, so changing the threshold
+invalidates cached frames rather than serving stale conditions.
+
+**UI rebuilt around the two events.**
+- Signal colours now match the indicator's own markers (`#00E676` buy triangle, `#FFA726` sell
+  diamond), so the app and a TradingView chart read the same.
+- Tables gained **Close-Loc z** (coloured by SB v8 meaning, not price direction), **Side** (▲/◆/—),
+  **Conv**, and **Hold** ("day 3/10" through the measured window); they lost Intel, Meta and Context.
+- Aged signals report **the z that fired them**, not today's — via a per-symbol `Z_Hist`.
+- Action Dashboard: `▲ BUY Signals by Timing` / `◆ SELL Signals by Timing`, each with a
+  strengthening/weakening trend read computed on |z|.
+- Historical Range: buy/sell **breadth** charts and an `Avg Fired |z|` metric replace the L/S counts;
+  forward-return labels moved to the SB v8 horizons (`Ret_1b/5b/10b/21b`).
+- Correlation: `Trade Intelligence` → **Confluence Setups**; confluence is now
+  `|Corr| × normalised |fade score| × (0.5 + 0.5·Conviction)`.
+- Excel legend split into **THE SIGNAL** and **CONTEXT ONLY** blocks — the distinction matters more
+  than the ordering.
+
+**Weekly is flagged as an extrapolation.** The study was daily; `z_look` becomes 52 on Weekly (one
+year, the closest structural analogue) and the Engine Status card says so.
+
+**Retained as displayed context, never as signal inputs:** the regime engine (HMM + GARCH + CUSUM,
+per-name risk context — the "Regime Intelligence Engine" header was renamed to stop implying
+otherwise), the order-flow layer (inferred delta, CVD, `Delta_Z`, absorption, volume profile), and
+the flow zone. `Delta_Z` and `SB_Z` are cousins, not duplicates: the former z-scores the
+*volume-weighted* close location, the latter the raw close location. Only the latter is the signal.
+
+**`research.py` is now legacy.** It documents the cross-sectional momentum study the *previous*
+engine was built on and does not validate SB v8. The evidence for this engine is the
+[`sb_v8.pine`](sb_v8.pine) header.
 
 ---
 
