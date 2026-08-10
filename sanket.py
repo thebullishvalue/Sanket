@@ -33,6 +33,7 @@ import requests
 import io
 import urllib3
 import engine as eng
+import edge
 import warnings
 import logging
 import time
@@ -79,7 +80,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v6.0.0"
+VERSION = "v6.1.0"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -288,10 +289,11 @@ if _REGISTRY_KEY not in st.session_state:
     st.session_state[_REGISTRY_KEY] = {}
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SB v8 parameter resolution — the four inputs the Pine exposes, resolved per run.
-# Every default is a measured plateau (see engine.py), not a fitted value. The
-# instrument class is NOT a knob: it is derived from the selected universe so the
-# expectancy the UI reports always matches the asset class on screen.
+# SB v8 parameter resolution — the inputs the Pine exposes, resolved per run.
+# Every default is a measured plateau (see engine.py), not a fitted value. The z-score
+# lookback follows the timeframe. `iclass` is a DISPLAY LABEL only: it selects which of the
+# source study's published rows to show as a comparison beside the measurement that
+# `edge.py` makes on the user's own universe. Nothing computes from it.
 # ──────────────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class SBSettings:
@@ -300,7 +302,7 @@ class SBSettings:
     thr:      float
     horizon:  int
     cost_bps: float
-    iclass:   str
+    iclass:   str        # reference-row label, not an input to anything
 
     @property
     def params_sig(self) -> tuple:
@@ -308,32 +310,40 @@ class SBSettings:
         return (int(self.z_look), float(self.thr), int(self.horizon))
 
     @property
-    def edge(self) -> float:
+    def study_sig(self) -> tuple:
+        """Identity of an edge study: the parameters it was measured at."""
+        return (int(self.z_look), float(self.thr), int(self.horizon))
+
+    # ── The SOURCE STUDY's published numbers for the nearest class. Reference only. ──
+    @property
+    def prior_edge(self) -> float:
         return eng.class_edge(self.iclass)
 
     @property
-    def hit(self) -> float:
+    def prior_hit(self) -> float:
         return eng.class_hit(self.iclass)
 
     @property
-    def established(self) -> bool:
+    def prior_established(self) -> bool:
         return eng.is_established(self.iclass)
-
-    @property
-    def cost_ok(self) -> bool:
-        return eng.cost_ok(self.cost_bps, self.iclass)
 
     @property
     def min_bars(self) -> int:
         return eng.min_bars_for(self.z_look)
+
+    def cost_ok(self, study=None) -> bool:
+        """Cost gate — measured from `study` when one exists, else the pooled prior."""
+        return eng.cost_ok(self.cost_bps, study)
+
+    def cost_basis(self, study=None) -> str:
+        return eng.cost_basis(study)
 
 
 def _sb_settings(universe, selected_index, timeframe, overrides=None) -> SBSettings:
     """Resolve the active SB v8 settings for a (universe, timeframe) selection.
 
     ``overrides`` is the sidebar dict ({thr, horizon, cost_bps}); anything absent falls
-    back to the measured default. The z-score lookback follows the timeframe and the
-    instrument class follows the universe — neither is a user knob.
+    back to the measured default.
     """
     o = overrides or {}
     return SBSettings(
@@ -353,21 +363,450 @@ def _active_sb_settings() -> SBSettings:
     return _sb_settings(None, None, "Daily")
 
 
-# Scope banding for the instrument class, shared by the sidebar card and the reference
-# tab so a class can never read "validated" in one place and "unproven" in another.
-def _scope_state(sb: SBSettings) -> tuple:
-    """(label, css_class, note) describing how far this asset class was validated."""
-    if sb.established:
-        return ("VALIDATED OOS", "success",
-                "drift-free holdout CI excluded zero")
-    if sb.edge >= 0.05:
-        return ("POSITIVE, UNCONFIRMED", "warning",
-                "positive expectancy but the CI includes zero")
-    if sb.edge > 0.0:
-        return ("NOT ESTABLISHED", "warning",
-                "nominally positive, did not survive holdout")
-    return ("NO EDGE MEASURED", "danger",
-            "zero or negative expectancy for this class")
+# ══════════════════════════════════════════════════════════════════════════════
+# EDGE STUDY — measured expectancy for the universe on screen
+#
+# Replaces what used to be a hardcoded eight-row lookup of the source study's per-class
+# results. See edge.py for the method and why each step exists.
+#
+# Everything here is shaped by the deployment target: Streamlit Community Cloud, ~1 GB RAM
+# on a shared vCPU. The naive implementation — fetch 15 years for 500 symbols, run the full
+# analysis pipeline, hold the panel — is ~500 MB and OOMs. Three choices avoid that:
+#
+#   1. LEAN     the study computes the close-location z and forward returns ONLY. No volume
+#               profile (a Python double loop, the app's slowest path), no regime engine, no
+#               order flow. The study does not need them.
+#   2. STREAMING symbols are fetched and reduced in chunks; each chunk's frames are released
+#               before the next is fetched. What accumulates is event tuples at a ~9% fire
+#               rate — a few MB, not a panel.
+#   3. SAMPLED  large universes are sampled. This costs almost nothing statistically because
+#               the participation ratio saturates: 500 correlated NSE equities carry ~15-20
+#               independent observations per date, not 500. Sampling is reported, not hidden.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ~15 years. The power arithmetic: resolving an effect of e needs n_eff ~ (1.96/e)^2, and
+# n_eff = (n_dates / horizon) x participation_ratio. At 15y daily with a 10-bar horizon and
+# a typical equity participation ratio of ~10, n_eff ~ 3500 → resolves ~0.033. The screener's
+# own 900-day window would give n_eff ~260 → resolves only ~0.12, i.e. nothing but the single
+# largest effect the source study ever found. Hence a separate, deeper fetch.
+_STUDY_YEARS = 15
+_STUDY_SYMBOL_CAP = 80      # sampling cap; the participation ratio saturates well below this
+_STUDY_CHUNK = 20           # symbols per yfinance request — bounds the download memory spike
+_STUDY_CORR_BARS = 1000     # bars used for the participation-ratio correlation matrix
+_STUDY_MIN_SYMBOLS = 5      # below this the cross-section is too thin to study at all
+
+_EDGE_KEY = "edge_studies"          # session cache: {key: EdgeStudy}
+_EDGE_DISK_DIR = ".sanket_cache"    # ephemeral on Streamlit Cloud; treated as best-effort
+
+
+def _edge_key(universe, selected_index, timeframe, sb: SBSettings) -> str:
+    """Cache identity for a study: universe + timeframe + the parameters it was measured at."""
+    parts = [str(universe), str(selected_index), str(timeframe),
+             f"z{sb.z_look}", f"t{sb.thr:g}", f"h{sb.horizon}"]
+    return _slug("__".join(parts))
+
+
+def _edge_cache_get(key: str):
+    """Session cache first, then the best-effort disk cache. None on a miss."""
+    mem = st.session_state.setdefault(_EDGE_KEY, {})
+    hit = mem.get(key)
+    if hit is not None:
+        return hit
+    # Disk is a courtesy: on Streamlit Cloud the container filesystem is wiped on restart,
+    # so a miss here is normal and never an error.
+    try:
+        import json
+        path = os.path.join(_EDGE_DISK_DIR, f"{key}.json")
+        if os.path.exists(path):
+            with open(path, "r") as fh:
+                study = edge.EdgeStudy.from_dict(json.load(fh))
+            mem[key] = study
+            console.detail(f"Edge study: loaded from disk cache ({key})")
+            return study
+    except Exception as e:
+        console.detail(f"Edge study: disk cache read skipped ({type(e).__name__}: {e})")
+    return None
+
+
+def _edge_cache_put(key: str, study) -> None:
+    st.session_state.setdefault(_EDGE_KEY, {})[key] = study
+    try:
+        import json
+        os.makedirs(_EDGE_DISK_DIR, exist_ok=True)
+        with open(os.path.join(_EDGE_DISK_DIR, f"{key}.json"), "w") as fh:
+            json.dump(study.to_dict(), fh)
+    except Exception as e:
+        console.detail(f"Edge study: disk cache write skipped ({type(e).__name__}: {e})")
+
+
+def _active_edge_study(universe=None, selected_index=None, timeframe=None, sb=None):
+    """The study matching the current selection, or None if it has not been measured."""
+    if sb is None:
+        sb = _active_sb_settings()
+    if universe is None:
+        meta = st.session_state.get("screener_meta") or {}
+        universe = meta.get("universe")
+        selected_index = meta.get("selected_index")
+        timeframe = meta.get("timeframe", "Daily")
+    return _edge_cache_get(_edge_key(universe, selected_index, timeframe, sb))
+
+
+# CSS kind per verdict rung, so a verdict can never read "success" in one place and
+# "danger" in another. edge.VERDICTS is the source of truth.
+def _verdict_kind(label: str) -> str:
+    return (edge.VERDICTS.get(label) or ("neutral", ""))[0]
+
+
+def _study_state(study, side: str = "buy") -> tuple:
+    """(label, css_kind, detail) for the active universe — MEASURED, or 'not measured'.
+
+    This replaces the old ``_scope_state``, which read a hardcoded per-class constant and
+    announced a verdict the app had never actually tested. When no study exists the honest
+    answer is that we do not know, not that the asset class is unproven.
+    """
+    if study is None:
+        return ("NOT MEASURED", "neutral",
+                "expectancy has not been measured on this universe yet — "
+                "tick “Measure edge” in the sidebar")
+    return study.verdict(side)
+
+
+def _study_summary_line(study, side: str = "buy") -> str:
+    """One-line measured read for a side: 'edge [CI] · n_eff · MDE', or a not-measured note."""
+    if study is None:
+        return "not measured on this universe"
+    r = study.get(side, "holdout") or study.get(side, "full")
+    if r is None:
+        return "no events measured for this side"
+    return (f"{r.edge:+.3f} [{r.ci_lo:+.3f},{r.ci_hi:+.3f}] vol · {r.hit:.1f}% hit · "
+            f"n_eff {r.n_eff:.0f} · resolves ≥{r.mde:.3f}")
+
+
+def _render_measured_banner(sb: SBSettings, study) -> None:
+    """Banner above the signals: what we MEASURED on these symbols, or that we haven't.
+
+    Replaces the old hardcoded scope warning. Three states, and the distinction between the
+    second and third is the whole point of this design:
+      * not measured  — we do not know; say so, and say how to find out.
+      * measured, edge confirmed — a green line stating the interval and the power.
+      * measured, no edge / gross-only / anti — an amber line stating the interval, and
+        stating plainly that signals still fire because this is a measurement, not a filter.
+    """
+    cost_gate_ok = sb.cost_ok(study)
+
+    if study is None:
+        st.markdown(
+            '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
+            'background:rgba(255,255,255,0.02); border:1px solid var(--border); '
+            'border-radius:6px; padding:0.5rem 0.7rem; margin:0 0 0.7rem 0; line-height:1.5;">'
+            'ⓘ <b>Expectancy has not been measured on this universe.</b> The signals below are '
+            'the pre-declared rule; whether it carries an edge <i>on these symbols</i> is an '
+            'open question until you measure it. Tick <b>Measure edge on the next run</b> in the '
+            'sidebar ▸ Edge Study.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    lines = []
+    for side, mark in (("buy", "▲ BUY"), ("sell", "◆ SELL")):
+        lbl, _kind, detail = study.verdict(side)
+        lines.append(f'<b>{mark} {html.escape(lbl)}</b> — {html.escape(detail)}')
+    if not cost_gate_ok:
+        lines.append(
+            f'<b>Cost gate failed</b> — at {sb.cost_bps:.1f} bp round-trip the measured net '
+            f'edge is not positive, so conviction is halved. Basis: '
+            f'{html.escape(sb.cost_basis(study))}.'
+        )
+
+    buy_label = study.verdict("buy")[0]
+    good = buy_label == "CONFIRMED" and cost_gate_ok
+    colour = "var(--emerald)" if good else "var(--amber)"
+    bg = "rgba(0,230,118,0.07)" if good else "rgba(212,168,83,0.08)"
+    border = "rgba(0,230,118,0.22)" if good else "rgba(212,168,83,0.22)"
+    icon = "✓" if good else "⚠"
+
+    tail = ""
+    if not good:
+        tail = ('<br><span style="color:var(--ink-tertiary);">Signals still fire at full '
+                'conviction — this is a measurement, not a filter.</span>')
+    cover = (f'<br><span style="color:var(--ink-tertiary);">Measured on '
+             f'{study.n_symbols_studied} of {study.n_symbols_universe} symbols, '
+             f'{study.start} to {study.end}, {study.part_ratio:.1f} independent names, '
+             f'holdout from {study.split_date}.'
+             + (f' {html.escape(study.note)}' if study.note else '') + '</span>')
+
+    st.markdown(
+        f'<div style="font-family:var(--data); font-size:0.66rem; color:{colour}; '
+        f'background:{bg}; border:1px solid {border}; border-radius:6px; '
+        f'padding:0.5rem 0.7rem; margin:0 0 0.7rem 0; line-height:1.5;">'
+        + f'{icon} ' + f'<br>{icon} '.join(lines) + tail + cover + '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_edge_study_panel(sb: SBSettings, study) -> None:
+    """Full Edge Study readout — the numbers behind the verdict, per side and per era."""
+    ui.render_section_header(
+        "Edge Study",
+        "Measured out-of-sample expectancy for the symbols on screen",
+        icon="activity", accent="violet",
+    )
+    if study is None:
+        ui.render_interpretation_card(
+            "Not measured on this universe yet",
+            "SB v8 is a fixed, pre-declared rule; whether it carries an edge on THESE symbols "
+            "is a separate empirical question. Tick “Measure edge on the next run” in the "
+            "sidebar ▸ Edge Study. It runs an event study over ~"
+            f"{_STUDY_YEARS} years: each instrument's own drift removed within era, "
+            "vol-normalised, block-bootstrapped over dates, with the effective sample size and "
+            "minimum detectable effect reported. Slow once per universe, then cached.",
+            "neutral",
+        )
+        return
+
+    rows = []
+    for side, mark in (("buy", "▲ BUY"), ("sell", "◆ SELL")):
+        for era in ("discovery", "holdout", "full"):
+            r = study.get(side, era)
+            if r is None:
+                continue
+            rows.append({
+                "Side": mark, "Era": era.title(),
+                "Edge (vol)": r.edge, "CI low": r.ci_lo, "CI high": r.ci_hi,
+                "Net": r.net, "Hit %": r.hit,
+                "Events": r.n_events, "Dates": r.n_dates,
+                "n_eff": r.n_eff, "Resolves ≥": r.mde,
+                "Significant": "yes" if r.significant else ("ANTI" if r.anti else "no"),
+            })
+    if not rows:
+        st.info("The study ran but no events fired in the measured history.")
+        return
+
+    v_buy, v_sell = study.verdict("buy"), study.verdict("sell")
+    m1, m2, m3, m4 = st.columns(4)
+    with m1: ui.render_metric_card("▲ BUY", v_buy[0], _study_summary_line(study, "buy"),
+                                   _verdict_kind(v_buy[0]))
+    with m2: ui.render_metric_card("◆ SELL", v_sell[0], _study_summary_line(study, "sell"),
+                                   _verdict_kind(v_sell[0]))
+    with m3: ui.render_metric_card("Independence", f"{study.part_ratio:.1f}",
+                                   f"of {study.n_symbols_studied} names studied", "info")
+    with m4: ui.render_metric_card("Fire Rate", f"{study.fire_rate*100:.2f}%",
+                                   "of bars · source study ~9.3%", "info")
+
+    st.dataframe(
+        pd.DataFrame(rows), width='stretch', hide_index=True,
+        column_config={
+            "Edge (vol)": st.column_config.NumberColumn(
+                help="Mean drift-free, vol-normalised return following an event. GROSS.",
+                format="%+.4f"),
+            "CI low": st.column_config.NumberColumn(
+                help="Block-bootstrap 95% lower bound. An edge is claimed only when this is > 0.",
+                format="%+.4f"),
+            "CI high": st.column_config.NumberColumn(format="%+.4f"),
+            "Net": st.column_config.NumberColumn(
+                help=f"Edge minus the cost charge at {sb.cost_bps:.1f} bp, converted into the "
+                     "same vol units using each instrument's own h-bar sigma.",
+                format="%+.4f"),
+            "Hit %": st.column_config.NumberColumn(
+                help="Share of events where the signal beat that symbol's own drift.",
+                format="%.1f"),
+            "n_eff": st.column_config.NumberColumn(
+                help="Independent observations = (dates / horizon) × participation ratio. "
+                     "Not the event count — overlapping returns and a correlated cross-section "
+                     "both reduce it.",
+                format="%.0f"),
+            "Resolves ≥": st.column_config.NumberColumn(
+                help="Minimum detectable effect at this power (1.96·σ/√n_eff). A 'no edge' "
+                     "verdict only means anything when this is smaller than the effect you "
+                     "would care about.",
+                format="%.4f"),
+        },
+    )
+
+    _pe, _ph, _pest = study.prior()
+    st.markdown(
+        f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
+        f'padding:0.7rem 0 0.1rem 0; line-height:1.6;">'
+        f'<b style="color:var(--ink-secondary);">Method.</b> Event study at the pre-declared '
+        f'parameters (±{study.thr:.1f}σ, {study.z_look}-bar lookback, {study.horizon}-bar hold, '
+        f'entry the bar after the signal). Each instrument\'s own mean forward return is removed '
+        f'<i>within era</i>, so a rising market cannot read as edge; the residual is divided by '
+        f'that instrument\'s own sigma so asset classes are comparable. Confidence intervals come '
+        f'from a block bootstrap over <i>dates</i> — blocks absorb the overlap between '
+        f'{study.horizon}-bar forward returns, whole dates absorb the cross-sectional '
+        f'correlation. Parameters are never tuned here: this measures a fixed rule, it does not '
+        f'search for a better one.<br><br>'
+        f'<b style="color:var(--ink-secondary);">Reference prior.</b> The source study measured '
+        f'<b>{html.escape(study.iclass)}</b> — the nearest asset class it covered — at '
+        f'<b>{_pe:+.3f}</b> vol, {_ph:.1f}% hit'
+        f'{" (established)" if _pest else " (not established)"}, on its own 39 instruments over '
+        f'1993–2026. Shown only so the two can be compared. Nothing in this app computes from it.'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _study_sample(symbols: list, cap: int = _STUDY_SYMBOL_CAP) -> list:
+    """Deterministically sample a large universe down to `cap` symbols.
+
+    Fixed-seed random sampling rather than "first N": taking the head of an NSE constituent
+    list would bias the study toward one alphabetical slice (and, since those lists are often
+    sector-ordered, toward one sector). Seeded from the symbol set so the same universe always
+    yields the same sample — a study that changed answer on every run would be worthless.
+    """
+    if len(symbols) <= cap:
+        return list(symbols)
+    seed = abs(hash(frozenset(symbols))) % (2 ** 32)
+    rng = np.random.default_rng(seed)
+    idx = rng.choice(len(symbols), size=cap, replace=False)
+    return [symbols[i] for i in sorted(idx)]
+
+
+def _fetch_study_chunk(symbols: list, start, end):
+    """Deep-history OHLCV for one chunk of symbols. Returns {ticker: frame}.
+
+    Separate from ``fetch_batch_data`` because that path is tuned for the screener: it caps
+    history, appends a live intraday bar, and is memoised for 5 minutes. The study wants the
+    opposite — long history, completed bars only, no live append (a forming bar has no
+    forward return anyway).
+    """
+    try:
+        raw = yf.download(symbols, start=start, end=end, progress=False,
+                          auto_adjust=True, group_by="ticker", threads=True)
+    except Exception as e:
+        console.detail(f"Edge study: chunk fetch failed ({type(e).__name__}: {e})")
+        return {}
+    if raw is None or (hasattr(raw, "empty") and raw.empty):
+        return {}
+    out = {}
+    if isinstance(raw, pd.DataFrame) and isinstance(raw.columns, pd.MultiIndex):
+        for t in symbols:
+            try:
+                f = raw.xs(t, level=0, axis=1)
+            except KeyError:
+                continue
+            if f.empty or f["Close"].isnull().all():
+                continue
+            f = f.dropna(subset=["Close"])
+            f.index = pd.to_datetime(f.index)
+            if f.index.tz is not None:
+                f.index = f.index.tz_convert(None)
+            out[t] = f
+    elif isinstance(raw, pd.DataFrame) and len(symbols) == 1:
+        f = raw.dropna(subset=["Close"])
+        f.index = pd.to_datetime(f.index)
+        if f.index.tz is not None:
+            f.index = f.index.tz_convert(None)
+        out[symbols[0]] = f
+    return out
+
+
+def run_edge_study(universe, selected_index, timeframe, sb: SBSettings,
+                   progress_slot=None, progress_offset=0, progress_scale=100):
+    """Measure SB v8's out-of-sample expectancy on this universe. Returns an EdgeStudy.
+
+    Streams chunk-by-chunk so peak memory stays a few MB regardless of universe size (see
+    the section header). Partial coverage is reported rather than fatal: if a chunk fails to
+    fetch — yfinance rate-limits shared cloud IPs — the study proceeds on what arrived and
+    flags itself ``partial``.
+    """
+    def _p(pct, label, sub):
+        if progress_slot is not None:
+            progress_bar(progress_slot, int(progress_offset + pct * progress_scale / 100),
+                         label, sub)
+
+    console.start_phase("EDGE STUDY", 1, 1)
+    console.section("Measuring expectancy on this universe")
+
+    all_symbols = _universe_symbols(universe, selected_index)
+    if not all_symbols:
+        console.error("Edge study: could not resolve the universe")
+        return None
+    symbols = _study_sample(all_symbols)
+    sampled = len(symbols) < len(all_symbols)
+
+    end = _today_ist() + datetime.timedelta(days=1)
+    start = end - datetime.timedelta(days=int(_STUDY_YEARS * 365.25))
+    console.item("Universe", f"{len(all_symbols)} symbols"
+                             + (f" → sampled {len(symbols)}" if sampled else ""))
+    console.item("History", f"{start} to {end} (~{_STUDY_YEARS}y)")
+    console.item("Parameters", f"z_look {sb.z_look} · ±{sb.thr:.1f}σ · hold {sb.horizon} · "
+                               f"{sb.cost_bps:.1f}bp")
+
+    _p(3, "Measuring Edge", f"{len(symbols)} symbols · ~{_STUDY_YEARS}y")
+
+    events, baselines, ret_cols, bar_counts = [], {}, {}, []
+    n_failed_chunks = 0
+    chunks = [symbols[i:i + _STUDY_CHUNK] for i in range(0, len(symbols), _STUDY_CHUNK)]
+
+    for ci, chunk in enumerate(chunks):
+        _p(3 + (ci / max(len(chunks), 1)) * 82, "Measuring Edge",
+           f"chunk {ci + 1}/{len(chunks)} · {len(baselines)} symbols reduced")
+        data = _fetch_study_chunk(chunk, start, end)
+        if not data:
+            n_failed_chunks += 1
+            continue
+        for tkr, f in data.items():
+            try:
+                if timeframe == "Weekly":
+                    f = resample_to_weekly(f)
+                if len(f) < sb.min_bars + sb.horizon + 2:
+                    continue
+                ev = edge.symbol_events(f["Close"], f["High"], f["Low"],
+                                        sb.z_look, sb.thr, sb.horizon)
+                base = edge.symbol_baseline(f["Close"], sb.horizon)
+                if base.empty:
+                    continue
+                baselines[tkr] = base
+                bar_counts.append(len(f))
+                ret_cols[tkr] = f["Close"].pct_change().tail(_STUDY_CORR_BARS)
+                if not ev.empty:
+                    events.append(ev.assign(symbol=tkr))
+            except Exception as e:
+                console.detail(f"Edge study: {tkr} reduced with error ({type(e).__name__}: {e})")
+                continue
+        # Release the chunk's frames before fetching the next one — this is what keeps peak
+        # memory flat instead of growing with the universe.
+        del data
+
+    if len(baselines) < _STUDY_MIN_SYMBOLS:
+        console.warning(f"Edge study: only {len(baselines)} symbols usable — "
+                        f"cross-section too thin to measure")
+        console.end_phase("EDGE STUDY")
+        return None
+
+    _p(88, "Measuring Edge", "bootstrapping confidence intervals")
+    ev_all = pd.concat(events, ignore_index=True) if events else pd.DataFrame(
+        columns=["date", "side", "fwd", "symbol"])
+    ret_matrix = pd.DataFrame(ret_cols)
+
+    study = edge.measure(
+        ev_all, baselines, ret_matrix,
+        universe=universe, selected_index=selected_index, timeframe=timeframe,
+        iclass=sb.iclass, z_look=sb.z_look, thr=sb.thr, horizon=sb.horizon,
+        cost_bps=sb.cost_bps,
+        n_symbols_universe=len(all_symbols),
+        n_bars_median=int(np.median(bar_counts)) if bar_counts else 0,
+        partial=bool(n_failed_chunks),
+        measured_at=datetime.datetime.now(_IST).strftime("%Y-%m-%d %H:%M"),
+    )
+    if sampled:
+        study.note = (f"measured on a fixed-seed random sample of {len(baselines)} of "
+                      f"{len(all_symbols)} symbols").strip()
+    if n_failed_chunks:
+        study.note = (study.note + " · " if study.note else "") + \
+                     f"{n_failed_chunks} of {len(chunks)} fetch chunks failed"
+
+    for side in ("buy", "sell"):
+        lbl, _kind, detail = study.verdict(side)
+        console.item(f"{side.upper()} verdict", f"{lbl} — {detail}")
+    console.item("Coverage", f"{study.n_symbols_studied} symbols · {study.start} to "
+                             f"{study.end} · participation ratio {study.part_ratio:.1f}")
+    console.item("Fire rate", f"{study.fire_rate*100:.2f}% of bars "
+                              f"(source study measured ~9.3%)")
+    console.end_phase("EDGE STUDY")
+    _p(100, "Edge Measured", f"{study.n_symbols_studied} symbols")
+    return study
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1048,6 +1487,38 @@ def get_crypto_symbols(crypto_name=None):
 def get_etf_symbols():
     """Return the fixed ETF universe for analysis"""
     return ETF_LIST, f"✓ Loaded {len(ETF_LIST)} ETFs"
+
+
+def resolve_universe(universe, selected_index):
+    """Universe selection → (symbols, message). Single dispatch for every analysis path.
+
+    The screener, the range harvest, correlation and the edge study must all study the SAME
+    symbols for a given selection, or a measured expectancy would describe a different set
+    than the one on screen.
+    """
+    if universe == "India Indexes":
+        return get_index_stock_list(selected_index)
+    if universe == "Global Indexes":
+        return get_global_index_symbols()
+    if universe == "US Indexes":
+        return get_us_index_symbols(selected_index)
+    if universe == "Commodities":
+        return get_commodity_symbols(None)
+    if universe == "Currency":
+        return get_currency_symbols(None)
+    if universe == "Crypto":
+        return get_crypto_symbols(None)
+    if universe == "ETF Index":
+        return get_etf_symbols()
+    if universe == "Global Macro":
+        return get_global_macro_symbols()
+    return None, f"Unknown universe: {universe}"
+
+
+def _universe_symbols(universe, selected_index):
+    """Just the symbol list (no message), or None. Used by the edge study."""
+    syms, _msg = resolve_universe(universe, selected_index)
+    return list(syms) if syms else None
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1958,7 +2429,8 @@ class SidebarState:
     corr_target_ticker: Optional[str]
     corr_lookback: int
     corr_method: str
-    sb: "SBSettings"   # resolved SB v8 config for this run (params + derived instrument class)
+    sb: "SBSettings"       # resolved SB v8 config for this run
+    measure_edge: bool     # user asked to (re)measure expectancy on this universe
 
 
 def render_sidebar() -> SidebarState:
@@ -2102,7 +2574,7 @@ def render_sidebar() -> SidebarState:
         # instrument class derived from the universe above, that class's measured
         # out-of-sample expectancy, and the four Pine parameters. Returns the resolved
         # SBSettings for this run.
-        sb = _render_engine_status_sidebar(universe, selected_index, timeframe)
+        sb, measure_edge = _render_engine_status_sidebar(universe, selected_index, timeframe)
 
         # System Spec Card — always rendered as the LAST block in the sidebar.
         try:
@@ -2159,6 +2631,7 @@ def render_sidebar() -> SidebarState:
             corr_lookback=corr_lookback,
             corr_method=corr_method,
             sb=sb,
+            measure_edge=measure_edge,
         )
 
 
@@ -2166,16 +2639,17 @@ def render_sidebar() -> SidebarState:
 # MAIN SCREENER FUNCTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True, external_progress_slot=None, progress_offset=0, progress_scale=100, wt2_len=20, wt2_type="ALMA", sb=None):
+def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True, external_progress_slot=None, progress_offset=0, progress_scale=100, wt2_len=20, wt2_type="ALMA", sb=None, study=None):
     """Execute the SB v8 screen and return the ranked cross-section.
 
     Fetches market data for the universe, computes the per-symbol close-location z-score
     (plus order-flow / regime context), then ranks the whole cross-section by the fade
-    score and gates conviction on the instrument class's measured expectancy and the cost
-    gate (engine.compute_ranking).
+    score (engine.compute_ranking).
 
     Args:
         sb: the run's :class:`SBSettings`; ``None`` resolves defaults for this universe.
+        study: an optional :class:`edge.EdgeStudy` measured on this universe. Used for the
+            cost gate and the per-row read; never to filter or scale a signal.
         external_progress_slot: Optional Streamlit container for external progress tracking (e.g., from correlation analysis)
         progress_offset: Starting percentage for external progress tracking (default 0)
         progress_scale: Scale factor for progress percentage within external slot (default 100 = full)
@@ -2197,24 +2671,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.item("Selected Index", selected_index)
     console.item("Timeframe", timeframe)
 
-    if universe == "India Indexes":
-        stock_list, msg = get_index_stock_list(selected_index)
-    elif universe == "Global Indexes":
-        stock_list, msg = get_global_index_symbols()
-    elif universe == "US Indexes":
-        stock_list, msg = get_us_index_symbols(selected_index)
-    elif universe == "Commodities":
-        stock_list, msg = get_commodity_symbols(None)
-    elif universe == "Currency":
-        stock_list, msg = get_currency_symbols(None)
-    elif universe == "Crypto":
-        stock_list, msg = get_crypto_symbols(None)
-    elif universe == "ETF Index":
-        stock_list, msg = get_etf_symbols()
-    elif universe == "Global Macro":
-        stock_list, msg = get_global_macro_symbols()
-    else:
-        stock_list, msg = None, f"Unknown universe: {universe}"
+    stock_list, msg = resolve_universe(universe, selected_index)
 
     if not stock_list:
         console.error(msg)
@@ -2249,9 +2706,15 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.item("Timeframe", timeframe)
     console.item("Z-score lookback", f"{sb.z_look} bars (needs {sb.min_bars} to signal)")
     console.item("Trigger", f"±{sb.thr:.1f}σ · hold {sb.horizon} bars · entry next open")
-    console.item("Instrument class", f"{sb.iclass} · OOS edge {sb.edge:+.3f} vol · {sb.hit:.1f}% hit"
-                                     + ("" if sb.established else " (NOT established)"))
-    console.item("Cost gate", f"{sb.cost_bps:.1f} bp · " + ("net positive" if sb.cost_ok else "NET NEGATIVE"))
+    _vl, _vk, _vd = _study_state(study, "buy")
+    console.item("Measured edge (buy)", f"{_vl} — {_study_summary_line(study, 'buy')}")
+    console.item("Measured edge (sell)", f"{_study_state(study, 'sell')[0]} — "
+                                         f"{_study_summary_line(study, 'sell')}")
+    console.item("Reference class", f"{sb.iclass} · source study {sb.prior_edge:+.3f} vol · "
+                                    f"{sb.prior_hit:.1f}% hit (prior, not applied)")
+    console.item("Cost gate", f"{sb.cost_bps:.1f} bp · "
+                              + ("net positive" if sb.cost_ok(study) else "NET NEGATIVE")
+                              + f" · basis {sb.cost_basis(study)}")
     console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (20 * progress_scale / 100)
@@ -2510,19 +2973,19 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     results_df = pd.DataFrame(results)
 
     # Cross-sectional ranking (engine.py): order by the fade score (-z), assign Side from
-    # which side of ±thr the close location landed, and gate conviction on |z| × the
-    # instrument class's measured OOS expectancy × the cost gate. One call emits the whole
-    # UI contract (SB_Score, Side, Conviction, Priority_*, Signal_Reason).
+    # which side of ±thr the close location landed, and set conviction from |z| × the cost
+    # gate. The measured expectancy (`study`) informs the cost gate and the per-row read; it
+    # never scales or filters a signal. One call emits the whole UI contract.
     if not results_df.empty:
-        results_df = eng.compute_ranking(results_df, iclass=sb.iclass,
-                                         cost_bps=sb.cost_bps, thr=sb.thr)
+        results_df = eng.compute_ranking(results_df, cost_bps=sb.cost_bps,
+                                         thr=sb.thr, study=study)
 
     return results_df
 
 
 def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe, wt2_len=20, wt2_type="ALMA",
                             external_progress_slot=None, progress_offset=0, progress_scale=100,
-                            sb=None):
+                            sb=None, study=None):
     """Compute the per-(date, symbol) SB v8 frame for a date range.
 
     Pure compute path: fetches history, runs the full / regime analyses on every symbol,
@@ -2550,24 +3013,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     console.item("End Date", end_date)
     console.item("Timeframe", timeframe)
 
-    if universe == "India Indexes":
-        stock_list, _ = get_index_stock_list(selected_index)
-    elif universe == "Global Indexes":
-        stock_list, _ = get_global_index_symbols()
-    elif universe == "US Indexes":
-        stock_list, _ = get_us_index_symbols(selected_index)
-    elif universe == "Commodities":
-        stock_list, _ = get_commodity_symbols(None)
-    elif universe == "Currency":
-        stock_list, _ = get_currency_symbols(None)
-    elif universe == "Crypto":
-        stock_list, _ = get_crypto_symbols(None)
-    elif universe == "ETF Index":
-        stock_list, _ = get_etf_symbols()
-    elif universe == "Global Macro":
-        stock_list, _ = get_global_macro_symbols()
-    else:
-        stock_list = None
+    stock_list, _ = resolve_universe(universe, selected_index)
 
     if not stock_list:
         console.error("Failed to retrieve stock list")
@@ -3097,7 +3543,7 @@ def render_timeseries_dashboard():
 # CORRELATION MODE ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_correlation_analysis(universe, selected_index, target_ticker, lookback, method, timeframe, analysis_date=None, sb=None):
+def run_correlation_analysis(universe, selected_index, target_ticker, lookback, method, timeframe, analysis_date=None, sb=None, study=None):
     """Execute correlation analysis between universe constituents and a target asset.
 
     Returns a dict with correlation data, rolling correlations, prices, and returns,
@@ -3112,23 +3558,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
     try:
         # Fetch universe symbols
-        if universe == "India Indexes":
-            stock_list, msg = get_index_stock_list(selected_index)
-        elif universe == "Global Indexes":
-            stock_list, msg = get_global_index_symbols()
-        elif universe == "US Indexes":
-            stock_list, msg = get_us_index_symbols(selected_index)
-        elif universe == "Commodities":
-            stock_list, msg = get_commodity_symbols(None)
-        elif universe == "Currency":
-            stock_list, msg = get_currency_symbols(None)
-        elif universe == "Crypto":
-            stock_list, msg = get_crypto_symbols(None)
-        elif universe == "ETF Index":
-            stock_list, msg = get_etf_symbols()
-        else:
-            st.error(f"Universe '{universe}' not supported")
-            return None
+        stock_list, msg = resolve_universe(universe, selected_index)
 
         if not stock_list:
             st.error(f"Failed to fetch universe symbols: {msg}")
@@ -3318,7 +3748,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 _corr_reg_len, _corr_n1, _corr_n2, _corr_levels, timeframe,
                 show_progress=False, external_progress_slot=progress_slot,
                 progress_offset=60, progress_scale=30,
-                wt2_len=_corr_wt2_len, wt2_type=_corr_wt2_type, sb=sb,
+                wt2_len=_corr_wt2_len, wt2_type=_corr_wt2_type, sb=sb, study=study,
             )
 
         progress_bar(progress_slot, 90, "Building Results DataFrame", "Computing Divergence Metrics")
@@ -4817,23 +5247,29 @@ _SIGNAL_TYPE_REFERENCE = [
      "was +0.0094 with a CI of [−0.030, +0.052] — it did NOT confirm out of sample. Sanket surfaces "
      "it as a sell signal as configured; treat it as stronger evidence for trimming longs than for "
      "initiating shorts."),
-    ("Scope · which asset classes this holds on", "violet",
-     "The edge is drift-free and holdout-confirmed ONLY on US equity indices (+0.121, 57.5% hit) "
-     "and US sector ETFs (+0.068, 54.9%). India indices read +0.089 but n=239 and the CI includes "
-     "zero. Commodities, FX, rates, credit and international equity did not survive. Your universe "
-     "selection sets the instrument class, and the Engine Status card in the sidebar states which "
-     "case you are in — believe it. The measurement was made on index/ETF-level instruments, so on "
-     "a constituent universe (individual stocks) read the class edge as indicative of the asset "
-     "class rather than measured on those names. There is NO intraday edge here; none is claimed."),
+    ("Scope · measured on YOUR universe, not inherited", "violet",
+     "Whether this rule carries an edge is a question about your symbols, so the app measures it "
+     "on them rather than quoting a class average. The Edge Study below runs an event study over "
+     "~15 years: each instrument's own drift removed within era (so a rising market cannot read "
+     "as edge), vol-normalised, confidence intervals from a block bootstrap over dates (so "
+     "overlapping returns and a correlated cross-section cannot fake significance), with the "
+     "effective sample size and minimum detectable effect stated. Parameters are never tuned to "
+     "your data — that would fit noise. If the interval straddles zero, the app says so and still "
+     "fires the signals: it is a measurement, not a filter. There is NO intraday edge here; none "
+     "is claimed."),
 ]
 
 
-def _render_system_data_tab(results_df, analysis_date, universe=None, selected_index=None):
+def _render_system_data_tab(results_df, analysis_date, universe=None, selected_index=None,
+                            sb=None, study=None):
     """System Data tab — exports, raw factor frame, and the signal-type legend.
 
     Used by both Single Date and Pulse Narrative modes (their tab_raw share content).
-    Universe context is threaded through so download filenames stay self-describing.
+    Universe context is threaded through so download filenames stay self-describing; ``sb``
+    and ``study`` drive the Edge Study readout at the bottom.
     """
+    if sb is None:
+        sb = _active_sb_settings()
     ui.render_section_header(
         "System Data",
         "Exports, raw factor frame, and reference legends",
@@ -5006,6 +5442,10 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
             </div>
             """, unsafe_allow_html=True)
 
+    # ── Edge Study ────────────────────────────────────────────────────────
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    _render_edge_study_panel(sb, study)
+
 
 def main():
     """Main app entry point with state-based flow."""
@@ -5055,6 +5495,7 @@ def main():
     corr_lookback      = sbs.corr_lookback
     corr_method        = sbs.corr_method
     sb                 = sbs.sb           # resolved SB v8 settings for this run
+    measure_edge       = sbs.measure_edge
 
     # ── Run button click — single-pass execution ─────────────────────────
     # Previously: click → set flag → st.rerun() → run analysis → st.rerun() → render body.
@@ -5069,13 +5510,38 @@ def main():
         st.session_state["run_error"] = None
         st.session_state["run_screener_flag"] = False  # legacy guard, kept for safety
 
+        # ── Edge study (opt-in) ──────────────────────────────────────────
+        # Runs before whatever else this click asked for, because the screener's cost gate
+        # and the reported verdicts read from it. Explicitly opt-in rather than automatic:
+        # it is a deep fetch, and on a shared cloud IP an unprompted one is a good way to
+        # get rate-limited mid-screen. A failed study is never fatal — the run proceeds and
+        # the UI says "not measured".
+        _study_slot = None
+        if measure_edge:
+            console.header("SANKET TERMINAL — Edge Study", VERSION)
+            _study_slot = st.empty()
+            _new_study = run_edge_study(universe, selected_index, timeframe, sb,
+                                        progress_slot=_study_slot)
+            if _new_study is not None:
+                _edge_cache_put(_edge_key(universe, selected_index, timeframe, sb), _new_study)
+            else:
+                st.warning(
+                    "**Edge study could not complete.** Not enough history came back to "
+                    "measure expectancy on this universe (a common cause is yfinance "
+                    "rate-limiting a deep request from a shared cloud IP). The screen below "
+                    "still runs; the expectancy simply reads as not measured."
+                )
+            _study_slot.empty()
+
+        study = _edge_cache_get(_edge_key(universe, selected_index, timeframe, sb))
+
         if mode in ("Single Date", "Pulse Narrative"):
             header_text = "SB v8 Signal Screener" if mode == "Single Date" else "Pulse Narrative Analysis"
             console.header(f"SANKET TERMINAL — {header_text}", VERSION)
             console.main_header("ANALYSIS RUN START", {
                 "Universe": universe, "Index": selected_index, "Timeframe": timeframe,
                 "Target Date": analysis_date, "Mode": mode,
-                "Instrument Class": sb.iclass,
+                "Measured edge": _study_state(study, "buy")[0],
             })
             # ONE progress bar for the whole run — the screener owns 0→100%.
             _run_slot = st.empty()
@@ -5083,7 +5549,7 @@ def main():
                 universe, selected_index, analysis_date,
                 reg_len, wt_n1, wt_n2, levels, timeframe,
                 wt2_len=wt2_len, wt2_type=wt2_type,
-                external_progress_slot=_run_slot, sb=sb,
+                external_progress_slot=_run_slot, sb=sb, study=study,
             )
             _run_slot.empty()
             if results_df is None:
@@ -5102,7 +5568,7 @@ def main():
             run_timeseries_analysis(
                 universe, selected_index, start_date, end_date,
                 reg_len, wt_n1, wt_n2, levels, timeframe,
-                wt2_len=wt2_len, wt2_type=wt2_type, sb=sb,
+                wt2_len=wt2_len, wt2_type=wt2_type, sb=sb, study=study,
             )
             # Standalone harvest — no screener follows to consume the analyzed-frame
             # cache the harvest just populated, so release it here. (In the Single-Date
@@ -5112,7 +5578,7 @@ def main():
         elif mode == "Correlation Analysis":
             corr_data = run_correlation_analysis(
                 universe, selected_index, corr_target_ticker,
-                corr_lookback, corr_method, timeframe, analysis_date, sb=sb,
+                corr_lookback, corr_method, timeframe, analysis_date, sb=sb, study=study,
             )
             st.session_state["corr_data"] = corr_data
 
@@ -5130,6 +5596,12 @@ def main():
         show_landing = True
     elif mode == "Historical Range" and not st.session_state.get("timeseries_done"):
         show_landing = True
+
+    # The measured study for the current selection, if one exists (a prior run may have
+    # measured it, or the disk cache may have survived). Renderers read this instead of a
+    # hardcoded class constant.
+    study = _edge_cache_get(_edge_key(universe, selected_index, timeframe, sb))
+    _mv_label, _mv_kind, _mv_detail = _study_state(study, "buy")
 
     if show_landing:
         ui.render_header("Sanket", "Market Signal Screener · SB v8 Close-Location Reversal")
@@ -5220,9 +5692,14 @@ def main():
                                                    "most stretched close today", "info")
                     with s3: ui.render_metric_card("Past Trigger", str(pn_past_thr),
                                                    f"{pn_past_thr/_n*100:.0f}% of universe · ~9.3% is typical", "info")
-                    with s4: ui.render_metric_card("Class Edge", f"{sb.edge:+.3f}",
-                                                   f"{sb.hit:.1f}% hit · {sb.iclass}",
-                                                   "success" if sb.established else "warning")
+                    with s4:
+                        _r = (study.get("buy", "holdout") or study.get("buy", "full")) if study else None
+                        ui.render_metric_card(
+                            "Measured Edge",
+                            f"{_r.edge:+.3f}" if _r is not None else "—",
+                            (f"{_r.hit:.1f}% hit · {_mv_label}" if _r is not None
+                             else "not measured on this universe"),
+                            _mv_kind)
                     if pn_warming:
                         st.caption(f"{pn_warming} symbol(s) excluded — fewer than {sb.min_bars} bars, "
                                    "so the close-location z-score has no lookback yet.")
@@ -5255,7 +5732,8 @@ def main():
                 # ════ Pulse Narrative · TAB 3: SYSTEM DATA ════════════════════════════════
                 with tab_raw:
                     _render_system_data_tab(results_df, analysis_date,
-                                            universe=universe, selected_index=selected_index)
+                                            universe=universe, selected_index=selected_index,
+                                            sb=sb, study=study)
             else:
                 tab_signals, tab_strength, tab_raw = st.tabs(["Action Dashboard", "Signal Strength", "System Data"])
                 with tab_signals:
@@ -5268,34 +5746,16 @@ def main():
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
                         f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
-                        f"SB v8 close-location ±{sb.thr:.1f}σ · {sb.iclass}",
+                        f"SB v8 close-location ±{sb.thr:.1f}σ · measured: {_mv_label}",
                         icon="zap",
                         accent="amber"
                     )
 
-                    # Scope banner — the Pine's central honesty claim, surfaced where the
-                    # signals are actually read rather than buried in a reference tab.
-                    _scope_label, _scope_kind, _scope_note = _scope_state(sb)
-                    if not sb.established or not sb.cost_ok:
-                        _msgs = []
-                        if not sb.established:
-                            _msgs.append(
-                                f'<b>{html.escape(sb.iclass)}</b> is not holdout-confirmed — {html.escape(_scope_note)} '
-                                f'(measured edge {sb.edge:+.3f} vol, {sb.hit:.1f}% hit). Only US equity indices '
-                                f'and US sectors survived drift removal.'
-                            )
-                        if not sb.cost_ok:
-                            _msgs.append(
-                                f'At <b>{sb.cost_bps:.1f} bp</b> round-trip the event form is <b>net negative</b> '
-                                f'for this class (measured breakeven ~{10.0 if sb.established else 7.0:.0f} bp).'
-                            )
-                        st.markdown(
-                            '<div style="font-family:var(--data); font-size:0.66rem; color:var(--amber); '
-                            'background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22); '
-                            'border-radius:6px; padding:0.5rem 0.7rem; margin:0 0 0.7rem 0; line-height:1.5;">'
-                            '⚠ ' + '<br>⚠ '.join(_msgs) + '</div>',
-                            unsafe_allow_html=True,
-                        )
+                    # Measured-expectancy banner. Every claim here comes from the study run
+                    # on THESE symbols — there is no per-class constant left to inherit. When
+                    # nothing has been measured the banner says exactly that rather than
+                    # announcing a verdict the app never tested.
+                    _render_measured_banner(sb, study)
 
                     # The two events, bucketed by how long ago they fired.
                     buys_df  = results_df[results_df['BUY_5d']  != "—"].copy().sort_values('Priority_Long',  ascending=False, na_position='last')
@@ -5416,9 +5876,14 @@ def main():
                                                        f"{past_thr/_n*100:.0f}% of universe · ~9.3% typical", "info")
                     with col_s3: ui.render_metric_card("▲ / ◆ Split", f"{n_buy_all} / {n_sell_all}",
                                                        "weak closes vs strong closes", "info")
-                    with col_s4: ui.render_metric_card("Class Edge", f"{sb.edge:+.3f}",
-                                                       f"{sb.hit:.1f}% hit · {_scope_label.title()}",
-                                                       "success" if sb.established else "warning")
+                    with col_s4:
+                        _r4 = (study.get("buy", "holdout") or study.get("buy", "full")) if study else None
+                        ui.render_metric_card(
+                            "Measured Edge",
+                            f"{_r4.edge:+.3f}" if _r4 is not None else "—",
+                            (f"{_r4.hit:.1f}% hit · {_mv_label}" if _r4 is not None
+                             else "not measured on this universe"),
+                            _mv_kind)
 
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
@@ -5478,7 +5943,8 @@ def main():
                 # ════ Action Dashboard · TAB 3: SYSTEM DATA ═══════════════════════════
                 with tab_raw:
                     _render_system_data_tab(results_df, analysis_date,
-                                            universe=universe, selected_index=selected_index)
+                                            universe=universe, selected_index=selected_index,
+                                            sb=sb, study=study)
 
         # ── Bulk-range dashboard (Historical Range only) ──
         # Re-renders on every Streamlit run from session-state ts_results_df,
@@ -5493,29 +5959,30 @@ def main():
         # Always render footer
         render_footer()
 
-def _render_engine_status_sidebar(current_universe: str, current_index, current_timeframe) -> "SBSettings":
+def _render_engine_status_sidebar(current_universe: str, current_index,
+                                  current_timeframe) -> tuple:
     """Sidebar Engine Status panel — visible in every mode.
 
-    Renders the Pine's dashboard as a sidebar card: the engine, the instrument class
-    DERIVED from the universe selection above, that class's measured out-of-sample
-    expectancy and hit rate, the scope verdict, and the cost gate. Below it, the four
-    parameters the Pine exposes as inputs — every default a measured plateau.
+    Shows the SB v8 parameters and, where the hardcoded per-class expectancy used to sit,
+    the **measured** verdict for the universe on screen (or an honest "not measured yet").
+    The source study's number for the nearest asset class is shown underneath as a labelled
+    comparison, never as the operative value.
 
-    Caller must be inside a ``with st.sidebar:`` context. Returns the resolved
-    :class:`SBSettings` for this run and stashes it in session state so renderers that
-    do not take it as an argument can read it back.
+    Caller must be inside a ``with st.sidebar:`` context. Returns
+    ``(SBSettings, measure_requested)`` and stashes the settings in session state so
+    renderers that do not take them as an argument can read them back.
     """
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-title">Engine Status</div>', unsafe_allow_html=True)
 
-    # ── Parameters (the Pine's four inputs) — resolved BEFORE the card so it reflects
-    # this frame's values. The instrument class and z-lookback are derived, not typed.
+    # ── Parameters (the Pine's inputs) — resolved BEFORE the card so it reflects this
+    # frame's values. The z-lookback is derived from the timeframe, not typed.
     with st.expander("⚙ SB v8 Parameters", expanded=False):
         st.markdown(
             '<div style="font-family:var(--data); font-size:0.62rem; color:var(--ink-tertiary); '
             'line-height:1.55; padding:0 0 0.55rem 0;">Every default is a <b>measured plateau</b>, '
-            'not a fitted value. The z-score lookback follows the timeframe and the instrument '
-            'class follows the universe — neither is a knob.</div>',
+            'not a fitted value. The z-score lookback follows the timeframe. Changing these '
+            'invalidates any edge study measured at the old values.</div>',
             unsafe_allow_html=True,
         )
         sb_thr = st.slider(
@@ -5532,8 +5999,10 @@ def _render_engine_status_sidebar(current_universe: str, current_index, current_
         sb_cost = st.slider(
             "Round-trip cost (bps)", min_value=0.0, max_value=50.0, step=0.5,
             value=eng.SB_COST_BPS, key="sb_p_cost",
-            help=("Measured breakeven is ~7bp pooled across all 39 instruments; on US equity "
-                  "indices and sectors the event form is still net-positive past 10bp."),
+            help=("Charged against each instrument's own h-bar sigma, so the same bps costs more "
+                  "on a low-volatility instrument. Once an edge study exists the cost gate uses "
+                  "its measured net; until then it falls back to the source study's ~7bp pooled "
+                  "breakeven."),
         )
 
     sb = _sb_settings(current_universe, current_index, current_timeframe, {
@@ -5541,12 +6010,16 @@ def _render_engine_status_sidebar(current_universe: str, current_index, current_
     })
     st.session_state["sb_settings"] = sb
 
-    scope_label, scope_class, scope_note = _scope_state(sb)
-    edge_color = ("var(--emerald)" if sb.edge > 0.05
-                  else "var(--ink-secondary)" if sb.edge > 0.0 else "var(--rose)")
-    cost_color = "var(--emerald)" if sb.cost_ok else "var(--rose)"
-    cost_text  = f"{sb.cost_bps:.1f} bp · " + ("net +" if sb.cost_ok else "NET NEGATIVE")
-    card_class = scope_class if sb.cost_ok else "danger"
+    study = _edge_cache_get(_edge_key(current_universe, current_index, current_timeframe, sb))
+    buy_label, buy_kind, buy_detail = _study_state(study, "buy")
+    sell_label = _study_state(study, "sell")[0]
+
+    cost_gate_ok = sb.cost_ok(study)
+    cost_color = "var(--emerald)" if cost_gate_ok else "var(--rose)"
+    cost_text = f"{sb.cost_bps:.1f} bp · " + ("net +" if cost_gate_ok else "NET NEGATIVE")
+    card_class = _verdict_kind(buy_label) if study is not None else "neutral"
+    if not cost_gate_ok:
+        card_class = "danger"
     tf_note = " (extrapolated)" if current_timeframe == "Weekly" else ""
 
     def _row(label, value, color="var(--ink-secondary)", size="0.62rem"):
@@ -5559,16 +6032,38 @@ def _render_engine_status_sidebar(current_universe: str, current_index, current_
             f'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{value}</span></div>'
         )
 
+    # ── Measured rows (or the honest absence of a measurement) ──
+    if study is not None:
+        _rb = study.get("buy", "holdout") or study.get("buy", "full")
+        _rs = study.get("sell", "holdout") or study.get("sell", "full")
+        _bc = ("var(--emerald)" if _rb is not None and _rb.significant
+               else "var(--rose)" if _rb is not None and _rb.anti else "var(--ink-secondary)")
+        _sc = ("var(--emerald)" if _rs is not None and _rs.significant
+               else "var(--rose)" if _rs is not None and _rs.anti else "var(--ink-secondary)")
+        measured_rows = (
+            _row("▲ Buy edge", (f"{_rb.edge:+.3f} [{_rb.ci_lo:+.2f},{_rb.ci_hi:+.2f}]"
+                                if _rb is not None else "—"), _bc, "0.65rem")
+            + _row("◆ Sell edge", (f"{_rs.edge:+.3f} [{_rs.ci_lo:+.2f},{_rs.ci_hi:+.2f}]"
+                                   if _rs is not None else "—"), _sc, "0.65rem")
+            + _row("Sell verdict", sell_label)
+            + _row("Power", (f"n_eff {_rb.n_eff:.0f} · ≥{_rb.mde:.3f}" if _rb is not None else "—"))
+            + _row("Studied", f"{study.n_symbols_studied}/{study.n_symbols_universe} syms · "
+                              f"{study.start[:4]}–{study.end[:4]}")
+            + _row("Independence", f"{study.part_ratio:.1f} of {study.n_symbols_studied} names")
+            + _row("Fire rate", f"{study.fire_rate*100:.2f}% of bars")
+        )
+    else:
+        measured_rows = _row("Measured edge", "not measured yet", "var(--ink-tertiary)")
+
     st.markdown(
         f"""
         <div class="metric-card {card_class}" style="
                 min-height:auto; padding:0.85rem 0.95rem; margin-bottom:0.7rem; animation:none;">
-            <h4 style="margin:0 0 0.3rem 0;">SB v8 · Close-Location</h4>
-            <h2 style="font-size:1.05rem; margin:0 0 0.7rem 0; letter-spacing:-0.01em;">{scope_label}</h2>
+            <h4 style="margin:0 0 0.3rem 0;">SB v8 · measured on this universe</h4>
+            <h2 style="font-size:1.05rem; margin:0 0 0.7rem 0; letter-spacing:-0.01em;">{buy_label}</h2>
             <div style="display:flex; flex-direction:column; gap:0.32rem; padding-top:0.55rem;
                         border-top:1px solid rgba(255,255,255,0.06);">
-                {_row("Asset class", html.escape(sb.iclass))}
-                {_row("Class edge (OOS)", f"{sb.edge:+.3f} vol · {sb.hit:.1f}% hit", edge_color, "0.65rem")}
+                {measured_rows}
                 {_row("Trigger", f"±{sb.thr:.1f}σ · hold {sb.horizon}")}
                 {_row("Z lookback", f"{sb.z_look} bars{tf_note}")}
                 {_row("Cost gate", cost_text, cost_color, "0.65rem")}
@@ -5579,20 +6074,62 @@ def _render_engine_status_sidebar(current_universe: str, current_index, current_
         unsafe_allow_html=True,
     )
 
-    if not sb.established:
+    # ── The measurement control + the reference prior ──
+    with st.expander("🔬 Edge Study", expanded=(study is None)):
+        if study is not None:
+            st.markdown(
+                f'<div style="font-family:var(--data); font-size:0.62rem; '
+                f'color:var(--ink-tertiary); line-height:1.55; padding:0 0 0.5rem 0;">'
+                f'<b style="color:var(--ink-secondary);">▲ buy</b> {html.escape(buy_detail)}<br>'
+                f'<b style="color:var(--ink-secondary);">◆ sell</b> '
+                f'{html.escape(_study_state(study, "sell")[2])}<br>'
+                f'Measured {html.escape(study.measured_at)} · split {study.split_date}'
+                + (f'<br><span style="color:var(--amber);">{html.escape(study.note)}</span>'
+                   if study.note else '')
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div style="font-family:var(--data); font-size:0.62rem; '
+                f'color:var(--ink-tertiary); line-height:1.55; padding:0 0 0.5rem 0;">'
+                f'Measures SB v8\'s out-of-sample expectancy on <b>these symbols</b>: event '
+                f'study at the pre-declared parameters, each instrument\'s own drift removed '
+                f'within era, vol-normalised, block-bootstrapped over dates. Fetches ~'
+                f'{_STUDY_YEARS}y of history (sampled to {_STUDY_SYMBOL_CAP} symbols on a large '
+                f'universe) — slow once, then cached.</div>',
+                unsafe_allow_html=True,
+            )
+        measure_requested = st.checkbox(
+            "Measure edge on the next run", value=False, key="sb_measure_edge",
+            help=("Runs the study as part of the next RUN, then caches the result for this "
+                  "universe + timeframe + parameters. Re-tick to re-measure."),
+        )
+        # The source study's published row — comparison only, never applied.
+        st.markdown(
+            f'<div style="font-family:var(--data); font-size:0.58rem; color:var(--ink-tertiary); '
+            f'line-height:1.5; padding:0.5rem 0 0 0; border-top:1px solid var(--border-subtle);">'
+            f'<span style="text-transform:uppercase; letter-spacing:0.1em;">Reference prior</span>'
+            f'<br>The source study measured <b>{html.escape(sb.iclass)}</b> at '
+            f'<b>{sb.prior_edge:+.3f}</b> vol · {sb.prior_hit:.1f}% hit'
+            f'{" (established)" if sb.prior_established else " (not established)"} on its own 39 '
+            f'instruments. Shown for comparison; it is not used to compute anything here.</div>',
+            unsafe_allow_html=True,
+        )
+
+    if study is not None and buy_label in ("NO EDGE", "ANTI-PREDICTS", "GROSS ONLY"):
         st.markdown(
             f'<div style="font-family:var(--data); font-size:0.62rem; color:var(--amber); '
             f'background:rgba(212,168,83,0.08); border:1px solid rgba(212,168,83,0.22); '
             f'border-radius:6px; padding:0.55rem 0.65rem; margin-bottom:0.7rem; line-height:1.45;">'
-            f'<span style="font-weight:700;">Scope warning.</span><br>'
-            f'{html.escape(scope_note)} for <b>{html.escape(sb.iclass)}</b>.<br>'
-            f'<span style="color:var(--ink-tertiary);">Only US equity indices and US sectors were '
-            f'holdout-confirmed after drift removal. Signals still fire here — the measured '
-            f'expectancy behind them does not.</span></div>',
+            f'<span style="font-weight:700;">Measured on your data: {html.escape(buy_label)}.</span>'
+            f'<br>{html.escape(buy_detail)}<br>'
+            f'<span style="color:var(--ink-tertiary);">Signals still fire at full conviction — '
+            f'this is a measurement, not a filter.</span></div>',
             unsafe_allow_html=True,
         )
 
-    return sb
+    return sb, measure_requested
 
 
 if __name__ == "__main__":

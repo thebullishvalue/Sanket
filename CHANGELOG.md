@@ -7,6 +7,129 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v6.1.0] · 2026-08-10
+### Expectancy Is Measured, Not Hardcoded
+
+v6.0.0 shipped the SB v8 signal with the source study's per-class expectancy wired in as a
+lookup of eight frozen constants, used to scale conviction. That was the weakest part of the
+design and it is now gone from every operative path.
+
+**Why it had to go.** Eight numbers from someone else's 39 instruments could not cover a
+universe the study never touched (NSE F&O single names, NSE thematic ETFs, crypto); they applied
+an *asset-class* claim to *instrument-level* decisions; they could not report that the edge had
+stopped working, while the study's own headline is that it decayed 4x since the 1990s; and they
+were unfalsifiable in-product — you could not check them against your own data. A screen that
+announces "this asset class is unproven" on authority it never earned is not institutional
+fidelity, it is inherited assertion.
+
+**New module: `edge.py`.** Measures SB v8's out-of-sample expectancy on the user's own symbols,
+at the **pre-declared** parameters, using the methodology that makes the source numbers
+credible. Seven steps, each killing one specific way of fooling yourself:
+
+1. **Event study at the declared horizon** — enter the bar after the signal closes, hold
+   `horizon` (the study's EXEC-B). Not a continuous IC: a continuous position on this signal
+   nets -0.48 Sharpe, so measuring that form answers a question nobody trades.
+2. **Drift removal, within era** — subtract each symbol's own mean forward return, computed
+   inside the era being measured. Without it every long signal on an equity universe in a bull
+   market prints a profit and you have measured beta. Computing it *within* era also stops the
+   discovery period's drift leaking into the holdout.
+3. **Volatility normalisation** — divide by the symbol's own forward sigma, so FX, bond ETFs and
+   small-cap equities land on one scale.
+4. **Sign folding** — a buy scores positive when it beat the symbol's drift, a sell when it fell
+   short, so both sides read "positive = the signal was right".
+5. **Block bootstrap over DATES** — resampling contiguous blocks of whole dates handles the
+   h-bar forward-return overlap (blocks) and the within-date cross-sectional correlation (whole
+   dates) in one move. Vectorised via per-date sums, so 2000 resamples is milliseconds.
+6. **Costs charged in the same units** — `cost_bps/1e4 / sigma_h`. This is why the edge dies on
+   low-volatility instruments: 3bp against a 4% 10-day sigma is 0.008 vol units, against a 1%
+   sigma it is 0.030. A per-class cost table could not express that.
+7. **Power stated, never assumed** — `n_eff = (n_dates / horizon) x participation_ratio`, where
+   the participation ratio is the eigenvalue-based effective number of independent names
+   (`(sum L)^2 / sum L^2` of the correlation matrix), **measured from the data**. A minimum
+   detectable effect follows from it.
+
+**The CI decides, not a p-value.** Verdict ladder: `CONFIRMED` (holdout CI excludes zero and
+survives costs) · `GROSS ONLY` · `DISCOVERY ONLY` · `NO EDGE` · `ANTI-PREDICTS` ·
+`UNDERPOWERED`. That last rung is deliberate: when the MDE exceeds the largest effect ever
+measured for this signal the test is vacuous, so no verdict is claimed. "We could not detect an
+edge" and "there is no edge" are different statements.
+
+**Conviction lost its expectancy term.** Now `|z| magnitude x cost gate`, and nothing else:
+
+```
+Conviction = clip(0.30 + 0.70·clip(|z|/3, 0, 1)) x cost_factor
+```
+
+The measurement is **reported, never applied** — a universe that measures `NO EDGE` still fires
+every signal at full conviction and says so on screen. `engine.compute_ranking` no longer takes
+an `iclass` parameter at all. The cost gate reads the study's measured net when one exists and
+falls back to the source study's pooled ~7bp breakeven otherwise, reporting which basis it used
+(`engine.cost_basis` → `measured` / `pooled prior (~7bp)`).
+
+**Built for a 1 GB shared container.** The study needs ~15 years of history — the power
+arithmetic is unforgiving: resolving an effect of `e` needs `n_eff ~ (1.96/e)^2`, so the
+screener's own 900-day window resolves only ~0.10, i.e. nothing but the single largest effect
+the source study ever found. Fetching 15y naively for a large universe OOMs. Three choices avoid
+it, and the numbers are measured, not asserted:
+
+| Approach | Peak memory, 80 syms x 15y | Projected, NIFTY 500 |
+|:---|:---|:---|
+| **Streaming + lean (shipped)** | **31 MB** | **~31 MB — flat in universe size** |
+| Raw OHLCV frames held for the universe | 14 MB | ~90 MB |
+| Full analysed panel (the naive version) | 556 MB (6.8 MB/symbol) | **~3,400 MB — hard OOM** |
+
+The middle row is why "just hold the raw data" is not the answer either: it is affordable at 80
+symbols but the *analysed* panel is what a naive implementation actually builds, and that scales
+at 6.8 MB per symbol. Streaming is flat in universe size, which is the property that matters.
+
+  * **Lean** — close-location z and forward returns only. No volume profile (a Python double
+    loop, the app's slowest path), no regime engine, no order flow.
+  * **Streaming** — chunks of 20 symbols fetched, reduced to event tuples, then released. What
+    accumulates is ~44k event rows, not a panel.
+  * **Sampled** — universes above 80 symbols are sampled with a seed derived from the symbol set
+    (reproducible, and not biased toward one alphabetical/sector slice). Nearly free
+    statistically because the participation ratio saturates well below 80. Reported, not hidden.
+
+**Opt-in, then cached.** A checkbox in sidebar ▸ Edge Study runs the measurement as part of the
+next RUN; the result caches to session state and, best-effort, to disk (`.sanket_cache/`, which
+is ephemeral on Streamlit Cloud — a miss there is normal, never an error). Deliberately not
+automatic: it is a deep fetch, and an unprompted one from a shared cloud IP is a good way to get
+rate-limited mid-screen. A failed study is never fatal — the screen runs and the UI reads "not
+measured".
+
+**Changing a parameter invalidates the study.** The cache key includes `(z_look, thr, horizon)`,
+so a study measured at 1.5σ is never served for a 2.5σ screen.
+
+**UI: verdicts replace assertions.**
+- Sidebar Engine Status shows the **measured** buy/sell edge with intervals, the power (`n_eff`
+  and MDE), coverage, the participation ratio and the fire rate — or an honest "not measured
+  yet" with the control to fix it.
+- The Action Dashboard banner states the measured verdict for both sides, and when the verdict
+  is not `CONFIRMED` it adds, in as many words, that signals still fire because this is a
+  measurement and not a filter.
+- New **Edge Study** panel in System Data: every side x era row with edge, CI, net, hit rate,
+  events, dates, `n_eff` and MDE, plus the method and the labelled reference prior.
+- The old `Class Edge` metric cards and the hardcoded scope warning are gone.
+
+**Statistical validation** (`scratchpad/stats_test.py`, six properties):
+- **Null calibration** — 12/12 trials cover zero on pure noise; zero false "edge" verdicts.
+- **Signal recovery** — planted edges of 0.05 / 0.10 / 0.20 recovered as 0.058 / 0.105 / 0.197,
+  each inside its CI.
+- **Drift immunity** — with +16%/yr drift and zero planted signal the measurement reads +0.005
+  (`NO EDGE`), while the *same events* without drift removal read **+0.178, 33x larger**. Step 2
+  is load-bearing.
+- **Participation ratio** — 39.1/40 for independent names, collapsing to 1.5/40 at beta 0.9.
+- **Overlap honesty** — the block-bootstrap interval is **2.3x wider** than a naive iid
+  resample, i.e. the dependence correction genuinely binds.
+- **Underpower honesty** — a thin sample returns `UNDERPOWERED` with the MDE explanation rather
+  than guessing.
+
+**Also:** the universe→symbols dispatch, previously duplicated across the screener, the range
+harvest and correlation, is now one `resolve_universe` function — the study must screen exactly
+the symbols the screen shows, or the measurement would describe a different set.
+
+---
+
 ## [v6.0.0] · 2026-08-10
 ### One Screening Condition — SB v8 Close-Location Reversal
 

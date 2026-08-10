@@ -30,13 +30,17 @@ turnover ~35x, which is what makes it tradeable at all: discovery NET +0.124 / h
 +0.132 pooled at 3bp, and holdout NET +0.430 on US equity indices and sectors. Turnover,
 not signal strength, was the binding constraint.
 
-Scope is not universal
-----------------------
-Drift-free and holdout-confirmed **only** on US equity indices and US sectors. India
-indices are positive but the CI includes zero (n=239). Commodities, FX, rates, credit and
-international equity did not survive. ``instrument_class`` wires the system's universe
-selector to that measured expectancy so the UI can state which case the user is in —
-honesty wiring, not a tunable parameter.
+Scope is not universal — and it is MEASURED, not asserted
+---------------------------------------------------------
+In the source study the edge was drift-free and holdout-confirmed only on US equity indices
+and US sectors; India indices were positive with a CI including zero; commodities, FX, rates,
+credit and international equity did not survive.
+
+Those are *that study's* 39 instruments. This module does not apply them. Expectancy for the
+universe on screen is measured by ``edge.py`` — event study, drift removed within era,
+vol-normalised, block-bootstrapped over dates, with the effective sample size and minimum
+detectable effect stated. The per-class numbers below survive only as a reference row to
+compare a measurement against. Nothing here reads them to compute a signal or a conviction.
 
 The edge is small and decaying
 ------------------------------
@@ -94,9 +98,21 @@ HOLD_HORIZONS = [1, 5, 10, 21]
 # ════════════════════════════════════════════════════════════════════════════════════════
 # INSTRUMENT CLASS  (the Pine's "Instrument class" input, wired to Sanket's universe)
 # ════════════════════════════════════════════════════════════════════════════════════════
-# Holdout 2014-2026, 10-day horizon, entry next open, each instrument's own mean forward
-# return removed within era (so "equities went up" cannot contribute). `established` = the
-# block-bootstrap CI excluded zero. These numbers are measured; none is asserted.
+# ⚠ REFERENCE PRIOR ONLY — NOT USED TO COMPUTE ANYTHING.
+#
+# These are the source study's published per-class results (holdout 2014-2026, 10-day
+# horizon, entry next open, each instrument's own mean forward return removed within era;
+# `established` = the block-bootstrap CI excluded zero). They were once wired into
+# conviction as a hardcoded lookup. That was indefensible: eight frozen constants from
+# someone else's 39 instruments cannot cover a universe the study never touched, cannot
+# apply an asset-class claim to instrument-level decisions, and cannot report that the edge
+# has decayed — while the study's own headline is that it fell 4x since the 1990s.
+#
+# Expectancy is now MEASURED per universe by `edge.py`, from the user's own symbols, at
+# these same pre-declared parameters. What remains here is a labelled comparison line: "the
+# source study measured this class at +0.121; here is what we measure on your universe."
+# `compute_ranking` does not read it, and `instrument_class` exists only to pick which
+# reference row to display.
 INSTRUMENT_CLASSES = [
     "US index / ETF", "US sector ETF", "India index", "International equity",
     "Commodity", "FX", "Rates / Credit", "Other / unknown",
@@ -127,13 +143,16 @@ CLASS_HIT = {
 # Only these two had a bootstrap CI excluding zero after drift removal.
 ESTABLISHED_CLASSES = ("US index / ETF", "US sector ETF")
 
-# Sanket universe → the Pine's instrument class. This is what "wire the indicator's asset
-# class to the system's asset selection" means: the user picks a universe, the measured
-# out-of-sample expectancy for that asset class follows automatically.
-#
-# Caveat carried into the UI: the study measured index- and ETF-level instruments. On a
-# constituent universe (individual stocks inside an index) the class expectancy is
-# indicative of the asset class, not a measurement on those single names.
+# Pooled cost breakeven across all 39 instruments in the source study. This is the ONE
+# number still used operationally, and only as a fallback: until `edge.py` has measured the
+# actual net edge on the user's universe, there is nothing to compare a cost against, so the
+# cost gate falls back to this pooled prior and labels itself as doing so. Once a study
+# exists, the gate uses that study's measured net instead (see `cost_ok`).
+POOLED_BREAKEVEN_BPS = 7.0
+
+# Sanket universe → the Pine's instrument class. Used ONLY to select which reference row to
+# display beside the measured result, so the reader can compare their universe against the
+# source study's published number for the nearest asset class.
 UNIVERSE_CLASS_MAP = {
     "US Indexes":     "US index / ETF",
     "India Indexes":  "India index",
@@ -147,40 +166,75 @@ UNIVERSE_CLASS_MAP = {
 
 
 def instrument_class(universe: str, selected_index: str | None = None) -> str:
-    """Resolve Sanket's universe selection to the Pine's instrument class.
+    """Which reference row to show beside the measured result. Display only.
 
-    ``selected_index`` is accepted so a future sub-universe split (e.g. India sectoral vs
-    benchmark) can refine the answer without changing call sites.
+    ``selected_index`` is accepted so a future sub-universe split can refine the label
+    without changing call sites.
     """
     return UNIVERSE_CLASS_MAP.get(universe, "Other / unknown")
 
 
 def class_edge(iclass: str) -> float:
-    """Measured drift-free holdout expectancy (in vol units) for an instrument class."""
+    """The SOURCE STUDY's published expectancy for a class — a reference prior, not ours."""
     return CLASS_EDGE.get(iclass, 0.0)
 
 
 def class_hit(iclass: str) -> float:
-    """Measured holdout hit rate (%) for an instrument class."""
+    """The SOURCE STUDY's published hit rate for a class — a reference prior, not ours."""
     return CLASS_HIT.get(iclass, 50.0)
 
 
 def is_established(iclass: str) -> bool:
-    """True only where the bootstrap CI excluded zero after drift removal."""
+    """Whether the SOURCE STUDY established this class. Reference prior, not our verdict."""
     return iclass in ESTABLISHED_CLASSES
 
 
-def cost_ok(cost_bps: float, iclass: str) -> bool:
-    """Is the event form still net-positive at this round-trip cost?
+def cost_ok(cost_bps: float, study=None) -> bool:
+    """Does the event form survive this round-trip cost?
 
-    Measured breakeven is ~7bp pooled across all 39 instruments; on the two established
-    classes it stays positive past 10bp.
+    With a measured :class:`edge.EdgeStudy` for the active universe, this is answered from
+    that measurement: the buy side's net edge (gross minus the cost charge in the same vol
+    units) must be positive. The buy side is the reference because it is the one the source
+    study confirmed out of sample, and because a cost that kills the confirmed side kills
+    the strategy regardless of what the other side does.
+
+    Without a study there is nothing to compare a cost against, so it falls back to the
+    source study's pooled breakeven. Callers should surface which basis was used —
+    :func:`cost_basis` returns it.
     """
     try:
         c = float(cost_bps)
     except (TypeError, ValueError):
         return False
-    return c <= (10.0 if is_established(iclass) else 7.0)
+    if study is not None:
+        r = study.get("buy", "holdout") or study.get("buy", "full")
+        if r is not None and np.isfinite(r.net):
+            return bool(r.net > 0)
+    return c <= POOLED_BREAKEVEN_BPS
+
+
+def cost_basis(study=None) -> str:
+    """'measured' when a study backs the cost gate, else 'pooled prior (~7bp)'."""
+    if study is not None:
+        r = study.get("buy", "holdout") or study.get("buy", "full")
+        if r is not None and np.isfinite(r.net):
+            return "measured"
+    return f"pooled prior (~{POOLED_BREAKEVEN_BPS:.0f}bp)"
+
+
+def cost_in_vol_units(cost_bps: float, sigma_h: float) -> float:
+    """Convert a round-trip cost in bps to the vol units the edge is reported in.
+
+    ``sigma_h`` is the h-bar forward-return sigma of the instrument (or the universe
+    median). This conversion is why the edge dies on low-volatility instruments: 3bp against
+    a 4% 10-day sigma costs 0.008 vol units, but against a 1% sigma it costs 0.030 — a real
+    drag on an edge of ~0.05. A per-class cost table cannot express that; this can.
+    """
+    try:
+        s = float(sigma_h)
+        return float((float(cost_bps) / 1e4) / s) if s > 0 else float("nan")
+    except (TypeError, ValueError, ZeroDivisionError):
+        return float("nan")
 
 
 def z_look_for(timeframe: str) -> int:
@@ -268,13 +322,21 @@ def add_sb_features(df: pd.DataFrame,
 # CROSS-SECTIONAL RANKING  (one date's universe, ordered by the fade score)
 # ════════════════════════════════════════════════════════════════════════════════════════
 def compute_ranking(df: pd.DataFrame,
-                    iclass: str = "Other / unknown",
                     cost_bps: float = SB_COST_BPS,
-                    thr: float = SB_THRESHOLD) -> pd.DataFrame:
+                    thr: float = SB_THRESHOLD,
+                    study=None) -> pd.DataFrame:
     """Rank one date's cross-section by the SB v8 fade score.
 
     df: one row per symbol carrying ``SB_Z`` (and optionally ``Fade_Score``).
-    iclass / cost_bps: the measured-expectancy and cost gates that scale conviction.
+    cost_bps / study: the cost gate (see :func:`cost_ok`). ``study`` is an optional
+    :class:`edge.EdgeStudy` measured on this universe; when present the gate is answered
+    from its measured net edge rather than the pooled prior.
+
+    Conviction is |z| magnitude x the cost gate, and nothing else. Note what is
+    deliberately absent: no per-class expectancy lookup (that was a hardcoded table and is
+    now measured separately by ``edge.py``, for reporting), no per-name vol factor, no
+    regime factor, no live-IC scaling. The measured expectancy is REPORTED, never applied —
+    a universe that measures no edge still fires at full conviction, and says so.
 
     Adds the output contract and returns the frame sorted by ``Priority_Long`` desc
     (warming-up rows, whose score is NaN, sort last). Pure & deterministic.
@@ -305,24 +367,16 @@ def compute_ranking(df: pd.DataFrame,
     #    measured edge is in the EVENT, not in the continuous score.
     df['Side'] = np.where(z < -thr, 'Buy', np.where(z > thr, 'Sell', '—'))
 
-    # ── 4. Conviction [0,1] = |z| magnitude × class expectancy × cost gate ──
-    # Magnitude: |z|/3 — the threshold (1.5σ) lands at 0.50 and a 3σ close-location
-    # extreme at 1.00. Class factor grades how well the asset class held up out of
-    # sample; the cost gate halves conviction once the assumed round-trip cost passes
-    # the measured breakeven, because past it the event form is net negative.
+    # ── 4. Conviction [0,1] = |z| magnitude × cost gate ──
+    # Magnitude: |z|/3 — the threshold (1.5σ) lands at 0.50 and a 3σ close-location extreme
+    # at 1.00. The cost gate halves conviction when the assumed round-trip cost sinks the
+    # event form, because past that point the strategy is net negative no matter how
+    # extreme the close was. There is no expectancy term: that is measured per universe by
+    # `edge.py` and reported, not folded silently into a number the reader cannot audit.
     mag = (z.abs() / 3.0).clip(0.0, 1.0)
     base = 0.30 + 0.70 * mag
-    edge = class_edge(iclass)
-    if is_established(iclass):
-        class_f = 1.00          # CI excluded zero after drift removal
-    elif edge >= 0.05:
-        class_f = 0.75          # positive but the CI includes zero (India index)
-    elif edge > 0.0:
-        class_f = 0.55          # nominally positive, did not survive
-    else:
-        class_f = 0.40          # zero or negative expectancy for this class
-    cost_f = 1.0 if cost_ok(cost_bps, iclass) else 0.5
-    df['Conviction'] = (base * class_f * cost_f).clip(0.0, 1.0).fillna(0.0)
+    cost_f = 1.0 if cost_ok(cost_bps, study) else 0.5
+    df['Conviction'] = (base * cost_f).clip(0.0, 1.0).fillna(0.0)
 
     # ── 5. UI contract mapping ──
     scale = 100.0
@@ -331,12 +385,20 @@ def compute_ranking(df: pd.DataFrame,
     df['Priority_Long_pct']  = rank_pct * 100
     df['Priority_Short_pct'] = (1 - rank_pct) * 100
 
-    est_note = "" if is_established(iclass) else f" · {iclass} not established OOS"
+    # A per-row note on the measured state of THIS universe, when a study exists. Never a
+    # class label — that would be the hardcoded claim this design removed.
+    def _verdict_note(side_key: str) -> str:
+        if study is None:
+            return " · expectancy not yet measured on this universe"
+        lbl, _kind, _detail = study.verdict(side_key)
+        return f" · measured on this universe: {lbl}"
+
+    _buy_note, _sell_note = _verdict_note('buy'), _verdict_note('sell')
     df['Signal_Reason'] = [
         ("warming up — needs a full z-score lookback" if not np.isfinite(zz) else
-         f"BUY · weak close z {zz:+.2f} · fade up, hold 5-10d, enter next open{est_note}"
+         f"BUY · weak close z {zz:+.2f} · fade up, hold 5-10d, enter next open{_buy_note}"
          if sd == 'Buy' else
-         f"SELL · strong close z {zz:+.2f} · short side failed holdout confirmation{est_note}"
+         f"SELL · strong close z {zz:+.2f}{_sell_note}"
          if sd == 'Sell' else
          f"context only · z {zz:+.2f} inside ±{thr:.1f}σ")
         for zz, sd in zip(z, df['Side'])

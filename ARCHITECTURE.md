@@ -1,9 +1,13 @@
 # Sanket — Engine Architecture & Research Basis
 
 > This document records *why* the engine is built the way it is. Sanket runs **one screening
-> condition**: SB v8 close-location reversal, ported from [`sb_v8.pine`](sb_v8.pine). Every
-> number quoted below comes from that study; the Pine header is the primary source and this
-> document is a summary of it. If the two disagree, the Pine is right.
+> condition**: SB v8 close-location reversal, ported from [`sb_v8.pine`](sb_v8.pine).
+>
+> Two kinds of number appear below, and the distinction matters. Numbers about **the source
+> study** (39 instruments, 1993–2026) come from the Pine header — it is the primary source and
+> this document summarises it; if they disagree, the Pine is right. Numbers about **your
+> universe** are measured live by [`edge.py`](edge.py) and appear only in the app, never here —
+> nothing about your symbols is hardcoded anywhere in this system.
 
 ## The signal
 
@@ -77,32 +81,118 @@ thing that fixes it. This is why the threshold and the hold horizon are not deco
 `thr = 1.0` the signal fires 44% of days and loses to costs; at `2.0` it fires 0.1% and failed
 holdout; `1.5` fires 9.3% and is net-positive in both eras.
 
-## Scope — the instrument class is wired to your universe selection
+## Scope — MEASURED on your universe, not inherited from a table
 
-The edge is drift-free and holdout-confirmed **only** on US equity indices and US sectors.
-`engine.instrument_class` maps Sanket's universe selector to the Pine's instrument-class input,
-so the expectancy the UI reports always matches the asset class on screen. This is honesty
-wiring, not a tunable parameter.
+The source study's edge was drift-free and holdout-confirmed only on US equity indices and
+US sectors. Those are *its* 39 instruments. Earlier versions of this app hardcoded its
+eight per-class results and applied them as a conviction multiplier. That was indefensible:
 
-| Sanket universe | Instrument class | OOS edge (vol) | Hit | Established? |
+- it could not cover a universe the study never touched (NSE F&O single names, NSE thematic
+  ETFs, crypto);
+- it made an **asset-class** claim and applied it to **instrument-level** decisions;
+- it could not report that the edge had stopped working — while the study's own headline is
+  that the edge decayed 4× since the 1990s;
+- and it was unfalsifiable in-product: you could not check it against your own data.
+
+So the app measures it. [`edge.py`](edge.py) runs an event study on **your symbols**, at the
+**pre-declared** parameters, using the methodology that makes the source numbers credible in
+the first place. Seven steps, each of which kills one specific way of fooling yourself:
+
+| # | Step | The failure it prevents |
+|:--|:---|:---|
+| 1 | **Event study at the declared horizon** — enter the bar after the signal closes, hold `horizon` (the study's EXEC-B) | Measuring the continuous form, which turns over daily and nets −0.48 Sharpe — a question nobody trades |
+| 2 | **Drift removal, within era** — subtract each symbol's own mean forward return | Every long signal on an equity universe in a bull market prints a profit; you'd have measured beta |
+| 3 | **Vol normalisation** — divide by the symbol's own forward σ | FX, bond ETFs and small-caps landing on incomparable scales |
+| 4 | **Sign folding** — a buy scores + when it beat drift, a sell scores + when it fell short | Reporting the two sides on opposite conventions |
+| 5 | **Block bootstrap over DATES** | h-bar returns overlap *and* one date's cross-section shares the market factor — both inflate significance. Blocks fix the first, whole dates the second |
+| 6 | **Cost charged in the same units** — `cost_bps/1e4 ÷ σ_h` | Ignoring that 3bp against a 4% 10-day σ costs 0.008 vol units but against a 1% σ costs 0.030 |
+| 7 | **Power stated** — `n_eff = (dates/horizon) × participation_ratio`, and an MDE from it | Reporting "no edge" from a test that could never have detected one |
+
+The **confidence interval decides** — not a p-value hurdle. `CONFIRMED` means the holdout CI
+excluded zero *and* the net survived costs.
+
+### Two things the study deliberately refuses to do
+
+- **It does not tune the signal.** Threshold and horizon stay pre-declared. Searching for the
+  best threshold per universe, on a few hundred independent blocks, would fit noise and
+  destroy the credibility the study exists to establish. It measures a fixed rule.
+- **It does not gate the signal.** The measurement is *reported*, never applied. Conviction is
+  `|z| × cost gate` and contains no expectancy term. A universe that measures no edge still
+  fires at full conviction and says so — because the alternative is a hidden multiplier the
+  reader cannot audit.
+
+### Power is the binding constraint, and it is arithmetic
+
+Vol-normalised scores have σ ≈ 1, so the CI half-width is ≈ `1.96/√n_eff`:
+
+| Effect to resolve | `n_eff` needed |
+|:---|:---|
+| 0.12 (the largest the source study found) | ~270 |
+| 0.07 | ~780 |
+| 0.05 | ~1,540 |
+
+And `n_eff = (n_dates / horizon) × participation_ratio`, where the participation ratio is the
+eigenvalue-based effective number of independent names — `(Σλ)²/Σλ²` of the correlation
+matrix, **measured, not assumed**. This is why a 500-name NSE universe does not carry 500
+observations per date; the source study makes the same point (26 symbols → 7.2 independent).
+
+| History | Usable dates | Blocks (h=10) | `n_eff` at PR≈10 | Resolves |
 |:---|:---|:---|:---|:---|
-| US Indexes | US index / ETF | **+0.121** | 57.5% | **yes** — CI excluded zero |
-| — | US sector ETF | **+0.068** | 54.9% | **yes** — CI excluded zero |
-| India Indexes · ETF Index | India index | +0.089 | 51.9% | no — n=239, CI includes zero |
-| Global Indexes | International equity | +0.003 | 53.2% | no |
-| Commodities | Commodity | +0.028 | 51.0% | no |
-| Currency | FX | +0.035 | 51.9% | no |
-| Global Macro | Rates / Credit | −0.003 | 51.1% | no |
-| Crypto | Other / unknown | 0.000 | 50.0% | no — the study covered no digital assets |
+| The screener's own 900-day pool | ~370 | 37 | ~370 | 0.10 — nothing but the largest effect |
+| **~15 years (what the study fetches)** | ~3,530 | 353 | ~3,530 | **~0.033** |
 
-Holdout 2014–2026, 10-day horizon, entry next open, each instrument's own mean forward return
-removed within era (so "equities went up" cannot contribute). The sidebar Engine Status card
-states which case you are in, and the Action Dashboard shows a scope warning banner whenever the
-active class is not established. **Believe them.**
+Hence a **separate, deeper fetch** for the study, distinct from the screening fetch.
 
-One caveat the mapping cannot resolve on its own: the study measured *index- and ETF-level*
-instruments. On a constituent universe (individual stocks inside an index) the class edge is
-indicative of the asset class, not a measurement on those names. The Signal Reference card says so.
+### Why it fits on Streamlit Community Cloud (~1 GB, shared vCPU)
+
+The naive implementation — fetch 15 years for the whole universe, run the analysis pipeline,
+hold the panel — is several hundred MB and OOMs. Three choices avoid it:
+
+1. **Lean.** The study computes the close-location z and forward returns *only*. No volume
+   profile (a Python double loop, the app's slowest path), no regime engine, no order flow.
+2. **Streaming.** Symbols are fetched and reduced in chunks of 20; each chunk's frames are
+   released before the next is fetched. What accumulates is event tuples at a ~9% fire rate.
+3. **Sampled.** Universes above 80 symbols are sampled with a fixed seed (so the answer is
+   reproducible, and not biased toward one alphabetical/sector slice). This costs almost
+   nothing statistically, because the participation ratio saturates far below 80.
+
+Measured, not asserted — `tracemalloc` peak on 80 symbols × 15 years:
+
+| Approach | Peak | Projected for NIFTY 500 |
+|:---|:---|:---|
+| **Streaming + lean (shipped)** | **31 MB** | **~31 MB — flat in universe size** |
+| Raw OHLCV frames held for the universe | 14 MB | ~90 MB |
+| Full analysed panel (naive) | 556 MB (6.8 MB/symbol) | **~3,400 MB — hard OOM** |
+
+Streaming being *flat in universe size* is the property that matters; the naive panel scales at
+6.8 MB per symbol and cannot reach the universes this app supports.
+
+### The reference prior
+
+The source study's per-class numbers survive in `engine.CLASS_EDGE` / `CLASS_HIT` purely as a
+**labelled comparison row**: "the source study measured *US index / ETF* at +0.121; here is
+what we measure on your universe." `compute_ranking` does not read them, and
+`instrument_class` exists only to choose which row to display.
+
+One operative constant remains: `POOLED_BREAKEVEN_BPS = 7.0`. Until a study exists there is
+nothing to compare a cost against, so the cost gate falls back to the study's pooled
+breakeven and **labels itself as doing so** (`engine.cost_basis` returns `measured` or
+`pooled prior (~7bp)`). Once a study exists, the gate uses its measured net.
+
+### Verdict ladder
+
+| Verdict | Meaning |
+|:---|:---|
+| `CONFIRMED` | holdout CI excludes zero **and** survives costs |
+| `GROSS ONLY` | holdout edge is real but costs consume it |
+| `DISCOVERY ONLY` | discovery CI excludes zero, holdout does not |
+| `NO EDGE` | CI straddles zero at adequate power |
+| `ANTI-PREDICTS` | CI excludes zero on the wrong side |
+| `UNDERPOWERED` | MDE exceeds the largest effect ever measured for this signal — the test is vacuous, so no verdict is claimed |
+
+`UNDERPOWERED` being distinct from `NO EDGE` is the point. "We could not detect an edge" and
+"there is no edge" are different statements, and conflating them is how underpowered studies
+get quoted as evidence of absence.
 
 ## How to trade it — measured, not asserted
 
@@ -135,20 +225,21 @@ histories are excluded from the screen with a "warming up" count surfaced in the
 **Weekly is an extrapolation.** The study was daily. `z_look` becomes 52 on the Weekly timeframe
 (one year, the closest structural analogue) and the Engine Status card labels it as extrapolated.
 
-### 2. Cross-sectional ranking · `compute_ranking(df, iclass, cost_bps, thr)`
+### 2. Cross-sectional ranking · `compute_ranking(df, cost_bps, thr, study)`
 Ranks the universe by `Fade_Score` (weakest closes first). `Side` is `Buy` / `Sell` / `—`, gated
 on ±`thr`: **only a fired event is actionable.** Sub-threshold rows still appear in the ranking
 tables — the score is continuous — but their Side reads `—`, because the measured edge is in the
 event, not in the continuous score.
 
 ```
-Conviction = clip(0.30 + 0.70·clip(|z|/3, 0, 1)) × class_factor × cost_factor
-class_factor:  1.00 established · 0.75 positive-but-CI-includes-zero · 0.55 nominally positive · 0.40 zero/negative
-cost_factor:   1.00 if within the measured breakeven for the class, else 0.50
+Conviction = clip(0.30 + 0.70·clip(|z|/3, 0, 1)) × cost_factor
+cost_factor: 1.00 if the cost gate passes, else 0.50
+             — measured from `study` when one exists, else the pooled ~7bp prior
 ```
 Conviction is a *relative weighting*, not a probability, and it is labelled that way in every
-tooltip. Note what is deliberately **absent**: no per-name volatility factor, no regime factor,
-no live-IC scaling. The Pine has no such terms and neither does this.
+tooltip. Note what is deliberately **absent**: no expectancy term (that is measured by
+`edge.py` and *reported*, never folded into a number the reader cannot audit), no per-name
+volatility factor, no regime factor, no live-IC scaling.
 
 ### 3. Bar convention — one deliberate difference from the Pine
 The Pine reads `z[1]` inside `request.security(..., "D", ...)` so an *intraday* chart cannot
@@ -185,18 +276,24 @@ location, `SB_Z` the raw close location. Only the latter is the signal.
 | `buy_cond` / `BUY_Today…BUY_5d` | green-triangle event and its age |
 | `sell_cond` / `SELL_Today…SELL_5d` | yellow-diamond event and its age |
 | `Side` | `Buy` / `Sell` / `—` (context only) |
-| `Conviction` | `[0,1]` = \|z\| × class expectancy × cost gate |
+| `Conviction` | `[0,1]` = \|z\| × cost gate. No expectancy term — see below |
 | `SB_State` | WARMING UP / BUY / SELL / NEUTRAL |
 | `SB_Hold_Dir` / `SB_Hold_Age` | hold-window direction and bars elapsed |
 | `SB_Rank_Pct`, `Priority_Long/Short(_pct)` | cross-sectional ordering keys |
-| `Signal_Reason` | plain-language read of the row, caveat included |
+| `Signal_Reason` | plain-language read of the row, including the measured verdict for this universe |
 
 ## Known limitations (disclosed, not hidden)
 
-- **The sell side is not confirmed out of sample.** It ships as a sell signal by configuration;
-  the statistics say caution. This is the single most important caveat in the system.
-- **Scope is narrow.** Two of eight asset classes are established. On the other six, signals still
-  fire — the measured expectancy behind them does not.
+- **The sell side was not confirmed out of sample** in the source study. It ships as a sell
+  signal by configuration; the statistics say caution. The Edge Study measures both sides
+  separately on your universe, so you can check whether that asymmetry reproduces on your data.
+- **Scope must be earned per universe.** Nothing is inherited: until you run the Edge Study the
+  app reports "not measured", and after you run it the verdict is whatever your symbols support.
+  A `NO EDGE` verdict does not suppress signals — it is a measurement, not a filter.
+- **One split, not a walk-forward.** The discovery/holdout split is by date, opened once. It is
+  reported as one split and does not pretend to be more.
+- **The study samples large universes** (80-symbol cap, fixed seed). Defensible because the
+  participation ratio saturates, but it is a sample, and the app says so.
 - **The edge decays.** A quarter of its 1990s strength. Stable there for two holdout eras, but
   nothing guarantees the next one.
 - **A 0.13–0.43 net Sharpe is an overlay, not a system.** Position sizing, risk limits and
@@ -206,6 +303,7 @@ location, `SB_Z` the raw close location. Only the latter is the signal.
   cost gate halves conviction to say so — but it cannot make the trade profitable.
 - **A live session is provisional.** Today's row can change until the close.
 - **[`research.py`](research.py) is a legacy harness.** It documents the cross-sectional momentum
-  study that the *previous* engine was built on; it does not validate SB v8. The SB v8 evidence
-  lives in the [`sb_v8.pine`](sb_v8.pine) header. Trust the Pine over this document, and this
-  document over `research.py`.
+  study that the *previous* engine was built on; it does not validate SB v8. For the source
+  study's evidence read the [`sb_v8.pine`](sb_v8.pine) header; for evidence about *your*
+  universe, run the Edge Study. Trust the app's measurement over this document, this document
+  over the Pine header for how the app behaves, and neither over `research.py`.
