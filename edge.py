@@ -1,5 +1,5 @@
 """
-edge.py — measured out-of-sample expectancy for the SB v8 signal, per universe.
+edge.py — measured out-of-sample expectancy for the CLR signal, per universe.
 
 Why this module exists
 ----------------------
@@ -74,15 +74,17 @@ from dataclasses import dataclass, asdict, field
 import numpy as np
 import pandas as pd
 
+import engine as eng
+
 # ── Bootstrap / power configuration ──────────────────────────────────────────────────────
 N_BOOTSTRAP = 2000     # percentile CI resamples. Vectorised, so this is milliseconds.
 CI_LEVEL = 0.95
 
-# The largest drift-free effect the source study found on any asset class (+0.121, US
-# equity indices). If our minimum detectable effect exceeds it, the test cannot resolve
-# even the best case that has ever been observed for this signal — so it is vacuous, and
-# reporting "no edge" would be an unsupported claim rather than a finding.
-LARGEST_KNOWN_EFFECT = 0.121
+# The largest drift-free effect the source study found on any asset class. Defined in
+# engine.py (it is a claim about the signal) and aliased here: if our minimum detectable effect
+# exceeds it, the test cannot resolve even the best case ever observed for this signal — so it
+# is vacuous, and reporting "no edge" would be an unsupported claim rather than a finding.
+LARGEST_KNOWN_EFFECT = eng.LARGEST_KNOWN_EFFECT
 
 # Minimum events per side before a point estimate is worth printing at all.
 MIN_EVENTS = 30
@@ -93,7 +95,7 @@ MIN_EVENTS = 30
 # ════════════════════════════════════════════════════════════════════════════════════════
 def symbol_events(close: pd.Series, high: pd.Series, low: pd.Series,
                   z_look: int, thr: float, horizon: int) -> pd.DataFrame:
-    """Extract SB v8 events for one symbol as a compact (date, side, fwd) table.
+    """Extract CLR events for one symbol as a compact (date, side, fwd) table.
 
     Returns a frame with columns ``date``, ``side`` (+1 buy / -1 sell) and ``fwd`` (the
     raw h-bar forward return from the next bar's open-proxy). Drift removal and vol
@@ -334,13 +336,19 @@ class EdgeStudy:
         hold = self.get(side, "holdout")
         disc = self.get(side, "discovery")
         full = self.get(side, "full")
-        if full is None:
+
+        present = [r for r in (hold, disc, full) if r is not None]
+        if not present:
             return ("UNDERPOWERED", "neutral", "no events measured for this side")
-        if full.underpowered and (hold is None or hold.underpowered):
+        # Underpowered only if EVERY era we managed to measure is underpowered. Keying this
+        # off `full` alone would report a confirmed holdout as UNDERPOWERED whenever the
+        # full-era slice happened to drop out (e.g. too few in-era baseline bars).
+        if all(r.underpowered for r in present):
+            ref = max(present, key=lambda r: r.n_eff)
             return ("UNDERPOWERED", "neutral",
-                    f"MDE {full.mde:.3f} vs the largest effect ever measured for this "
-                    f"signal ({LARGEST_KNOWN_EFFECT:.3f}) · {full.n_events} events, "
-                    f"n_eff {full.n_eff:.0f}")
+                    f"MDE {ref.mde:.3f} vs the largest effect ever measured for this "
+                    f"signal ({LARGEST_KNOWN_EFFECT:.3f}) · {ref.n_events} events, "
+                    f"n_eff {ref.n_eff:.0f}")
         if hold is not None and hold.significant:
             if hold.net > 0:
                 return ("CONFIRMED", "success",
@@ -354,7 +362,10 @@ class EdgeStudy:
                     f"discovery {disc.edge:+.3f} [{disc.ci_lo:+.3f},{disc.ci_hi:+.3f}] "
                     f"· holdout " + (f"{hold.edge:+.3f} [{hold.ci_lo:+.3f},{hold.ci_hi:+.3f}]"
                                      if hold is not None else "n/a") + " did not confirm")
-        ref = full if hold is None else hold
+        # Report against the holdout when we have one — it is the era that counts — else
+        # whichever era we did manage to measure. `present` is non-empty by the guard above,
+        # so this cannot be None.
+        ref = hold or full or present[0]
         if ref.anti:
             return ("ANTI-PREDICTS", "danger",
                     f"{ref.era} {ref.edge:+.3f} [{ref.ci_lo:+.3f},{ref.ci_hi:+.3f}] — "

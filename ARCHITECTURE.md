@@ -1,7 +1,9 @@
 # Sanket — Engine Architecture & Research Basis
 
 > This document records *why* the engine is built the way it is. Sanket runs **one screening
-> condition**: SB v8 close-location reversal, ported from [`sb_v8.pine`](sb_v8.pine).
+> condition**: **Close-Location Reversal (CLR)**, ported from [`sb_v8.pine`](sb_v8.pine) —
+> whose title's "CLR" half was a family tag for session-breadth indicators whose premise this
+> engine refutes, so only the descriptive half carries over.
 >
 > Two kinds of number appear below, and the distinction matters. Numbers about **the source
 > study** (39 instruments, 1993–2026) come from the Pine header — it is the primary source and
@@ -121,6 +123,12 @@ excluded zero *and* the net survived costs.
   fires at full conviction and says so — because the alternative is a hidden multiplier the
   reader cannot audit.
 
+  The cost gate has to be careful about the same thing. It asks whether this universe's measured
+  trading *cost charge* (`cost_bps/1e4 ÷ σ_h`) exceeds `LARGEST_KNOWN_EFFECT` — the most this
+  signal has ever been worth on any asset class — and never compares the cost against the
+  *measured* edge. Comparing against the measured edge would fail the gate on every no-edge
+  universe, halving its conviction, and smuggle the expectancy back into the signal.
+
 ### Power is the binding constraint, and it is arithmetic
 
 Vol-normalised scores have σ ≈ 1, so the CI half-width is ≈ `1.96/√n_eff`:
@@ -179,6 +187,15 @@ nothing to compare a cost against, so the cost gate falls back to the study's po
 breakeven and **labels itself as doing so** (`engine.cost_basis` returns `measured` or
 `pooled prior (~7bp)`). Once a study exists, the gate uses its measured net.
 
+### Cadence
+
+The study runs on **every run**, not on request. It reuses a same-day measurement: within one
+calendar day it reads the same completed bars (it needs forward returns, so it excludes the
+forming bar) and must return a bit-identical answer, making a re-measurement a 15-year fetch for a
+result already held. It re-measures automatically once the date rolls — exactly when new bars can
+change the answer. A failure is recorded for the day rather than retried on every click, and the
+run proceeds on the last measurement or on "not measured".
+
 ### Verdict ladder
 
 | Verdict | Meaning |
@@ -206,15 +223,15 @@ get quoted as evidence of absence.
 
 ## The engine — [`engine.py`](engine.py)
 
-### 1. Per-symbol signal · `add_sb_features(df, z_look, thr, horizon)`
+### 1. Per-symbol signal · `add_clr_features(df, z_look, thr, horizon)`
 ```
-SB_CLV       = ((C−L) − (H−C)) / (H−L)          in [−1, +1]
-SB_Z         = (SB_CLV − SMA(SB_CLV, z_look)) / STDEV(SB_CLV, z_look)
-Fade_Score   = −SB_Z                             positive = bullish
-buy_cond     = SB_Z < −thr                       green triangle
-sell_cond    = SB_Z > +thr                       yellow diamond
-SB_Hold_Dir  / SB_Hold_Age                       the hold window, Pine's sinceSig/sigDir
-SB_State     = WARMING UP / BUY / SELL / NEUTRAL
+CLR_CLV       = ((C−L) − (H−C)) / (H−L)          in [−1, +1]
+CLR_Z         = (CLR_CLV − SMA(CLR_CLV, z_look)) / STDEV(CLR_CLV, z_look)
+Fade_Score   = −CLR_Z                             positive = bullish
+buy_cond     = CLR_Z < −thr                       green triangle
+sell_cond    = CLR_Z > +thr                       yellow diamond
+CLR_Hold_Dir  / CLR_Hold_Age                       the hold window, Pine's sinceSig/sigDir
+CLR_State     = WARMING UP / BUY / SELL / NEUTRAL
 ```
 `STDEV` uses `ddof=0` — Pine's `ta.stdev` is the *population* standard deviation. Using the
 sample stdev would shift every z and drift the fire rate off the measured 9.3%.
@@ -251,7 +268,7 @@ not closed yet is provisional until it does.**
 ## What is context, and never a signal input
 
 Everything else the app computes is descriptive. It is displayed beside the signal, aggregated in
-the range-mode charts, and exported — but it does not enter `SB_Z`, `Side`, or `Conviction`:
+the range-mode charts, and exported — but it does not enter `CLR_Z`, `Side`, or `Conviction`:
 
 - **Order flow** — inferred bar delta, CVD and its slope, `Delta_Z`, absorption, rolling buy
   share, volume profile (POC/VAH/VAL, `VA_Pos`), RVOL. OHLC proxies, validated three times to add
@@ -263,23 +280,23 @@ the range-mode charts, and exported — but it does not enter `SB_Z`, `Side`, or
   It informs the Regime / Vol columns and the range-mode Regime tab.
 - **Forward returns** (`Ret_1b/5b/10b/21b`, Historical Range only) — evaluation **labels**.
 
-`Delta_Z` and `SB_Z` are cousins, not duplicates: `Delta_Z` z-scores the *volume-weighted* close
-location, `SB_Z` the raw close location. Only the latter is the signal.
+`Delta_Z` and `CLR_Z` are cousins, not duplicates: `Delta_Z` z-scores the *volume-weighted* close
+location, `CLR_Z` the raw close location. Only the latter is the signal.
 
 ## Outputs (per symbol)
 
 | Column | Meaning |
 |:---|:---|
-| `SB_CLV` | close location in [−1, +1] |
-| `SB_Z` | **the signal** — z-score of the close location |
-| `Signal` / `Fade_Score` / `SB_Score` | `−SB_Z`; positive = bullish. What every table ranks on |
+| `CLR_CLV` | close location in [−1, +1] |
+| `CLR_Z` | **the signal** — z-score of the close location |
+| `Signal` / `Fade_Score` / `CLR_Score` | `−CLR_Z`; positive = bullish. What every table ranks on |
 | `buy_cond` / `BUY_Today…BUY_5d` | green-triangle event and its age |
 | `sell_cond` / `SELL_Today…SELL_5d` | yellow-diamond event and its age |
 | `Side` | `Buy` / `Sell` / `—` (context only) |
 | `Conviction` | `[0,1]` = \|z\| × cost gate. No expectancy term — see below |
-| `SB_State` | WARMING UP / BUY / SELL / NEUTRAL |
-| `SB_Hold_Dir` / `SB_Hold_Age` | hold-window direction and bars elapsed |
-| `SB_Rank_Pct`, `Priority_Long/Short(_pct)` | cross-sectional ordering keys |
+| `CLR_State` | WARMING UP / BUY / SELL / NEUTRAL |
+| `CLR_Hold_Dir` / `CLR_Hold_Age` | hold-window direction and bars elapsed |
+| `CLR_Rank_Pct`, `Priority_Long/Short(_pct)` | cross-sectional ordering keys |
 | `Signal_Reason` | plain-language read of the row, including the measured verdict for this universe |
 
 ## Known limitations (disclosed, not hidden)
@@ -303,7 +320,7 @@ location, `SB_Z` the raw close location. Only the latter is the signal.
   cost gate halves conviction to say so — but it cannot make the trade profitable.
 - **A live session is provisional.** Today's row can change until the close.
 - **[`research.py`](research.py) is a legacy harness.** It documents the cross-sectional momentum
-  study that the *previous* engine was built on; it does not validate SB v8. For the source
+  study that the *previous* engine was built on; it does not validate CLR. For the source
   study's evidence read the [`sb_v8.pine`](sb_v8.pine) header; for evidence about *your*
   universe, run the Edge Study. Trust the app's measurement over this document, this document
   over the Pine header for how the app behaves, and neither over `research.py`.

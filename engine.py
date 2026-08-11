@@ -1,5 +1,11 @@
 """
-Sanket Signal Engine — SB v8 Close-Location Reversal (port of ``sb_v8.pine``).
+Sanket Signal Engine — CLOSE-LOCATION REVERSAL (CLR).
+
+Ported from ``sb_v8.pine``. That file's title carries two halves — a legacy family tag and a
+descriptive name — and only the descriptive half means anything: the tag belonged to a lineage
+of session-breadth indicators whose premise this engine actually refutes (their core measure
+tested flat, and the surviving variable has the opposite sign). So the engine is named for what
+it measures, and the legacy tag is retained nowhere but the source filename.
 
 What this is
 ------------
@@ -63,7 +69,7 @@ carry-over: a signal on a session that has not closed yet is provisional until i
 
 Output column contract (``compute_ranking``)
 --------------------------------------------
-  SB_Score, SB_Rank_Pct, Fade_Score, Conviction, Side,
+  CLR_Score, CLR_Rank_Pct, Fade_Score, Conviction, Side,
   Priority_Long, Priority_Short, Priority_Long_pct, Priority_Short_pct,
   Signal_Reason
 """
@@ -76,19 +82,19 @@ import pandas as pd
 # Z-score lookback: net Sharpe stays positive in BOTH eras across 63-504 daily bars; 252 is
 # mid-plateau. Weekly has no measured plateau (the study was daily) — 52 bars is one year,
 # the closest structural analogue, and is flagged as an extrapolation in the UI.
-SB_Z_LOOK_DAILY  = 252
-SB_Z_LOOK_WEEKLY = 52
+CLR_Z_LOOK_DAILY  = 252
+CLR_Z_LOOK_WEEKLY = 52
 
 # Threshold: 1.0 fires 44% of days and loses to costs; 2.0 fires 0.1% and failed holdout;
 # 1.5 fires 9.3% and is net-positive in both eras.
-SB_THRESHOLD = 1.5
+CLR_THRESHOLD = 1.5
 
 # Hold horizon: the edge lives at 5-10 days. Below 5, turnover cost exceeds the gross edge.
-SB_HORIZON = 10
+CLR_HORIZON = 10
 
 # Round-trip cost assumption for the cost gate. Measured breakeven ~7bp pooled; on the two
 # established classes the event form stays net-positive past 10bp.
-SB_COST_BPS = 3.0
+CLR_COST_BPS = 3.0
 
 # Forward horizons the Historical Range harvest attaches as Ret_*b labels. Centred on the
 # 5-10 day window where this edge actually lives, with 1d and 21d as decay bookends.
@@ -143,12 +149,16 @@ CLASS_HIT = {
 # Only these two had a bootstrap CI excluding zero after drift removal.
 ESTABLISHED_CLASSES = ("US index / ETF", "US sector ETF")
 
-# Pooled cost breakeven across all 39 instruments in the source study. This is the ONE
-# number still used operationally, and only as a fallback: until `edge.py` has measured the
-# actual net edge on the user's universe, there is nothing to compare a cost against, so the
-# cost gate falls back to this pooled prior and labels itself as doing so. Once a study
-# exists, the gate uses that study's measured net instead (see `cost_ok`).
+# Pooled cost breakeven across all 39 instruments in the source study — the fallback the cost
+# gate uses before a study has measured this universe's actual trading cost. See `cost_ok`.
 POOLED_BREAKEVEN_BPS = 7.0
+
+# The largest drift-free effect the source study found on any asset class (+0.121, US equity
+# indices). Used as a CEILING, not a forecast: it is the most this signal has ever been worth
+# anywhere, so a trading cost exceeding it cannot be survived by any plausible version of the
+# edge. That makes it the right yardstick for a cost gate — and, in `edge.py`, for deciding
+# when a test is too underpowered to say anything.
+LARGEST_KNOWN_EFFECT = 0.121
 
 # Sanket universe → the Pine's instrument class. Used ONLY to select which reference row to
 # display beside the measured result, so the reader can compare their universe against the
@@ -190,35 +200,47 @@ def is_established(iclass: str) -> bool:
 
 
 def cost_ok(cost_bps: float, study=None) -> bool:
-    """Does the event form survive this round-trip cost?
+    """Is this round-trip cost survivable on this universe? A question about COST, not edge.
 
-    With a measured :class:`edge.EdgeStudy` for the active universe, this is answered from
-    that measurement: the buy side's net edge (gross minus the cost charge in the same vol
-    units) must be positive. The buy side is the reference because it is the one the source
-    study confirmed out of sample, and because a cost that kills the confirmed side kills
-    the strategy regardless of what the other side does.
+    With a measured :class:`edge.EdgeStudy`, the study knows what trading this universe
+    actually costs in the units the edge is measured in: ``cost_bps/1e4 / sigma_h``, averaged
+    over the instruments that fired. The gate asks whether that charge is smaller than
+    :data:`LARGEST_KNOWN_EFFECT` — the most this signal has ever been worth on any asset
+    class. If the cost exceeds that ceiling, no plausible version of the edge survives it.
 
-    Without a study there is nothing to compare a cost against, so it falls back to the
-    source study's pooled breakeven. Callers should surface which basis was used —
-    :func:`cost_basis` returns it.
+    It deliberately does NOT compare the cost against the *measured* edge. Doing so would fail
+    the gate on any universe that measures no edge, halving its conviction — which would make
+    the measurement a hidden multiplier on the signal, the exact thing this design refuses to
+    do. Expectancy is reported; only cost gates conviction.
+
+    Without a study there is no per-universe cost charge, so it falls back to the source
+    study's pooled breakeven in bps. :func:`cost_basis` reports which basis was used.
     """
     try:
         c = float(cost_bps)
     except (TypeError, ValueError):
         return False
-    if study is not None:
-        r = study.get("buy", "holdout") or study.get("buy", "full")
-        if r is not None and np.isfinite(r.net):
-            return bool(r.net > 0)
+    charge = _measured_cost_charge(study)
+    if charge is not None:
+        return bool(charge < LARGEST_KNOWN_EFFECT)
     return c <= POOLED_BREAKEVEN_BPS
 
 
+def _measured_cost_charge(study) -> float | None:
+    """This universe's measured trading cost in vol units, or None if not measured."""
+    if study is None:
+        return None
+    r = study.get("buy", "holdout") or study.get("buy", "full")
+    if r is None:
+        return None
+    ch = getattr(r, "cost_charge", float("nan"))
+    return float(ch) if np.isfinite(ch) else None
+
+
 def cost_basis(study=None) -> str:
-    """'measured' when a study backs the cost gate, else 'pooled prior (~7bp)'."""
-    if study is not None:
-        r = study.get("buy", "holdout") or study.get("buy", "full")
-        if r is not None and np.isfinite(r.net):
-            return "measured"
+    """'measured' when this universe's own cost charge backs the gate, else the pooled prior."""
+    if _measured_cost_charge(study) is not None:
+        return "measured"
     return f"pooled prior (~{POOLED_BREAKEVEN_BPS:.0f}bp)"
 
 
@@ -239,7 +261,7 @@ def cost_in_vol_units(cost_bps: float, sigma_h: float) -> float:
 
 def z_look_for(timeframe: str) -> int:
     """Z-score lookback for a Sanket timeframe (Daily 252 bars / Weekly 52 bars)."""
-    return SB_Z_LOOK_WEEKLY if str(timeframe) == "Weekly" else SB_Z_LOOK_DAILY
+    return CLR_Z_LOOK_WEEKLY if str(timeframe) == "Weekly" else CLR_Z_LOOK_DAILY
 
 
 def min_bars_for(z_look: int) -> int:
@@ -250,25 +272,25 @@ def min_bars_for(z_look: int) -> int:
 # ════════════════════════════════════════════════════════════════════════════════════════
 # PER-SYMBOL FEATURES  (time-series; run once per name before cross-sectional ranking)
 # ════════════════════════════════════════════════════════════════════════════════════════
-def add_sb_features(df: pd.DataFrame,
-                    z_look: int = SB_Z_LOOK_DAILY,
-                    thr: float = SB_THRESHOLD,
-                    horizon: int = SB_HORIZON) -> pd.DataFrame:
-    """Attach the SB v8 close-location signal to one symbol's OHLC frame.
+def add_clr_features(df: pd.DataFrame,
+                    z_look: int = CLR_Z_LOOK_DAILY,
+                    thr: float = CLR_THRESHOLD,
+                    horizon: int = CLR_HORIZON) -> pd.DataFrame:
+    """Attach the CLR close-location signal to one symbol's OHLC frame.
 
     Columns written:
-      ``SB_CLV``       close location in [-1, +1] (Pine ``f_clv``)
-      ``SB_Z``         z-score of SB_CLV over ``z_look`` bars; NaN until warm
-      ``Fade_Score``   ``-SB_Z`` — positive = bullish. The sign flip IS the finding.
-      ``buy_cond``     green triangle: ``SB_Z < -thr`` (weak close → fade long)
-      ``sell_cond``    yellow diamond: ``SB_Z > +thr`` (strong close → sell)
-      ``SB_Hold_Dir``  +1 inside a buy window, -1 inside a sell window, 0 outside
-      ``SB_Hold_Age``  bars since that window opened (0 = fired on this bar)
-      ``SB_State``     WARMING UP / BUY / SELL / NEUTRAL for the bar
+      ``CLR_CLV``       close location in [-1, +1] (Pine ``f_clv``)
+      ``CLR_Z``         z-score of CLR_CLV over ``z_look`` bars; NaN until warm
+      ``Fade_Score``   ``-CLR_Z`` — positive = bullish. The sign flip IS the finding.
+      ``buy_cond``     green triangle: ``CLR_Z < -thr`` (weak close → fade long)
+      ``sell_cond``    yellow diamond: ``CLR_Z > +thr`` (strong close → sell)
+      ``CLR_Hold_Dir``  +1 inside a buy window, -1 inside a sell window, 0 outside
+      ``CLR_Hold_Age``  bars since that window opened (0 = fired on this bar)
+      ``CLR_State``     WARMING UP / BUY / SELL / NEUTRAL for the bar
 
     ``ta.stdev`` in Pine is the population standard deviation, so ``ddof=0`` here — using
     the sample stdev would shift every z by ~0.2% and drift the fire rate off the measured
-    9.3%. Safe on short frames: SB_Z is NaN until ``z_look`` bars exist and nothing fires.
+    9.3%. Safe on short frames: CLR_Z is NaN until ``z_look`` bars exist and nothing fires.
     """
     df = df.copy()
     high, low, close = df['High'], df['Low'], df['Close']
@@ -283,8 +305,8 @@ def add_sb_features(df: pd.DataFrame,
     s = clv.rolling(z_look).std(ddof=0)
     z = (clv - m) / s.where(s > 0)
 
-    df['SB_CLV']     = clv
-    df['SB_Z']       = z
+    df['CLR_CLV']     = clv
+    df['CLR_Z']       = z
     df['Fade_Score'] = -z
 
     # ── The two plotted events ──
@@ -307,10 +329,10 @@ def add_sb_features(df: pd.DataFrame,
     age       = pos - last_fire.to_numpy(dtype=float)
     in_window = np.isfinite(age) & (age <= int(horizon))
 
-    df['SB_Hold_Dir'] = np.where(in_window, held_dir.fillna(0.0).to_numpy(dtype=float), 0.0).astype(int)
-    df['SB_Hold_Age'] = np.where(in_window, age, np.nan)
+    df['CLR_Hold_Dir'] = np.where(in_window, held_dir.fillna(0.0).to_numpy(dtype=float), 0.0).astype(int)
+    df['CLR_Hold_Age'] = np.where(in_window, age, np.nan)
 
-    df['SB_State'] = np.select(
+    df['CLR_State'] = np.select(
         [~np.isfinite(z.to_numpy(dtype=float)), buy_cond, sell_cond],
         ['WARMING UP', 'BUY', 'SELL'],
         default='NEUTRAL',
@@ -322,12 +344,12 @@ def add_sb_features(df: pd.DataFrame,
 # CROSS-SECTIONAL RANKING  (one date's universe, ordered by the fade score)
 # ════════════════════════════════════════════════════════════════════════════════════════
 def compute_ranking(df: pd.DataFrame,
-                    cost_bps: float = SB_COST_BPS,
-                    thr: float = SB_THRESHOLD,
+                    cost_bps: float = CLR_COST_BPS,
+                    thr: float = CLR_THRESHOLD,
                     study=None) -> pd.DataFrame:
-    """Rank one date's cross-section by the SB v8 fade score.
+    """Rank one date's cross-section by the CLR fade score.
 
-    df: one row per symbol carrying ``SB_Z`` (and optionally ``Fade_Score``).
+    df: one row per symbol carrying ``CLR_Z`` (and optionally ``Fade_Score``).
     cost_bps / study: the cost gate (see :func:`cost_ok`). ``study`` is an optional
     :class:`edge.EdgeStudy` measured on this universe; when present the gate is answered
     from its measured net edge rather than the pooled prior.
@@ -342,7 +364,7 @@ def compute_ranking(df: pd.DataFrame,
     (warming-up rows, whose score is NaN, sort last). Pure & deterministic.
     """
     df = df.copy()
-    contract = ('SB_Score', 'SB_Rank_Pct', 'Fade_Score', 'Conviction', 'Side',
+    contract = ('CLR_Score', 'CLR_Rank_Pct', 'Fade_Score', 'Conviction', 'Side',
                 'Priority_Long', 'Priority_Short', 'Priority_Long_pct', 'Priority_Short_pct',
                 'Signal_Reason')
     if len(df) == 0:
@@ -351,16 +373,16 @@ def compute_ranking(df: pd.DataFrame,
         return df
 
     thr = float(thr)
-    z = df['SB_Z'].astype(float) if 'SB_Z' in df.columns else pd.Series(np.nan, index=df.index)
+    z = df['CLR_Z'].astype(float) if 'CLR_Z' in df.columns else pd.Series(np.nan, index=df.index)
 
     # ── 1. Score = fade score = -z. Positive = bullish (a weak close is the buy) ──
     fade = -z
-    df['SB_Score']   = fade
+    df['CLR_Score']   = fade
     df['Fade_Score'] = fade
 
     # ── 2. Cross-sectional rank percentile [0,100] (NaN where still warming up) ──
     rank_pct = fade.rank(pct=True) if len(df) >= 2 else pd.Series(0.5, index=df.index)
-    df['SB_Rank_Pct'] = (rank_pct * 100).round(2)
+    df['CLR_Rank_Pct'] = (rank_pct * 100).round(2)
 
     # ── 3. Side: only a fired event is actionable; everything else is context ──
     #    Green triangle → Buy, yellow diamond → Sell. Sub-threshold rows are '—': the

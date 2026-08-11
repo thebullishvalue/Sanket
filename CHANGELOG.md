@@ -1,9 +1,97 @@
 # CHANGELOG
-### Sanket — SB v8 Close-Location Reversal
+### Sanket — Close-Location Reversal (CLR)
 
 All notable changes to the **Sanket** platform are documented here. Sanket is part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/thebullishvalue).
 
 Format: `[version] · date — release title`
+
+---
+
+## [v6.3.0] · 2026-08-11
+### The Study Runs On Every Run · Nothing Left To Configure
+
+**The Edge Study is no longer opt-in.** Whether the rule carries an edge on the universe in front
+of you is not an optional extra — it is the thing that tells you whether to believe the signals —
+so it is measured as part of every run rather than hidden behind a checkbox. The
+"🔬 Edge Study" expander and its "Measure edge on the next run" control are gone; the sidebar now
+has **no controls at all**.
+
+**Cadence: measured on every run, computed once a day.** `ensure_edge_study` reuses a same-day
+measurement and re-measures once the date rolls. This is not a compromise on "every run" — the
+study reads completed bars and needs forward returns, so it excludes the forming bar. Two runs on
+the same calendar day therefore read identical data and must produce a bit-identical answer;
+re-measuring inside a day is a 15-year fetch for a result already held, and on a shared cloud IP a
+good way to earn a yfinance rate-limit mid-screen. The date rolling is exactly when new bars can
+change the answer, and that is when it re-measures.
+
+A failure is recorded for the day rather than retried on every click, and the run proceeds on the
+last measurement if there is one, or "not measured" if there is not.
+
+**One progress bar per click.** When the study actually measures it takes the head of the bar
+(0→35%) and the analysis renders into the tail of the *same* bar; when the measurement is reused
+the analysis owns all of it. Correlation keeps its own multi-phase bar rather than nesting two
+offset schemes.
+
+**Fixed: the measured edge was leaking into conviction through the cost gate.** `cost_ok` had
+begun answering from the study's measured *net* (gross minus cost), which fails on any universe
+that measures no edge — so a `NO EDGE` verdict silently halved conviction. That is precisely the
+hidden multiplier this design exists to refuse. The gate now asks a question about **cost only**:
+is this universe's measured cost *charge* (`cost_bps/1e4 ÷ σ_h`) smaller than
+`LARGEST_KNOWN_EFFECT`, the most this signal has ever been worth on any asset class? If the cost
+exceeds that ceiling no plausible version of the edge survives it; if it does not, the verdict is
+irrelevant to conviction. Regression-tested: a measured `NO EDGE` study now leaves conviction
+**bit-identical** to the unmeasured case, while a prohibitive cost charge still gates.
+`LARGEST_KNOWN_EFFECT` moved to `engine.py` as the single source of truth (`edge.py` aliases it).
+
+---
+
+## [v6.2.0] · 2026-08-11
+### Named For What It Measures · Quieter Surface
+
+**The engine has a real name.** It is **Close-Location Reversal (CLR)** — in the code, the
+column names and the UI. The source indicator titles itself "SB v8 — CLOSE-LOCATION REVERSAL";
+only the descriptive half was ever meaningful. "SB v8" was a family tag for a lineage of
+session-breadth indicators whose core measure tested flat at p_bonf = 1.00 and whose surviving
+variable turned out to have the opposite sign — a label naming a premise this engine refutes.
+It is retained nowhere but the source filename.
+
+Renamed throughout: `CLR_Z`, `CLR_CLV`, `CLR_State`, `CLR_Hold_Dir/Age`, `CLR_Score`,
+`CLR_Rank_Pct`, `CLR_THRESHOLD/HORIZON/COST_BPS/Z_LOOK_*`, `add_clr_features`, `CLRSettings`.
+The engine name lives in one place (`ENGINE_NAME` / `ENGINE_CODE`) so it cannot drift between
+screens. The analysed-frame cache tag moved `sbv8` → `clr1`, since the column schema changed.
+
+**Parameter sliders removed.** The threshold, hold horizon and round-trip cost are no longer
+exposed. Every one is a measured plateau from the source study, so a slider only invited fitting
+them to whatever universe was on screen — precisely what would destroy the credibility of the
+measurement beneath it. The values still appear, as one read-only `Setup` row, because a reader
+needs to know what fired. Defaults are unchanged.
+
+**Two message boxes removed.** The sidebar's "Measured on your data: …" panel and the Action
+Dashboard's measured-expectancy banner are gone. The verdict lives in the Engine Status card and,
+in full, in **System Data ▸ Edge Study** — one place for the status line, one for the report.
+
+**Engine Status card consolidated: eleven rows → six.** Buy interval, sell interval, power
+(`n_eff` + minimum detectable effect), sample (symbols · years · independent names), setup, cost
+gate. Dropped: the redundant sell-verdict row, the separate trigger and z-lookback rows (merged),
+the fire rate and the static "entry: next session open" (both belong in the report, not the
+status line).
+
+**Fixed: the card lagged a measurement by one interaction.** The sidebar renders before the
+analysis executes (single-pass render), so a study measured on a click did not appear until the
+next one. The card is now painted into a placeholder and repainted when the study completes —
+the same pattern the retired alpha-health passport used, reinstated for the right reason.
+
+**Fixed (edge.py): `verdict()` could report a confirmed holdout as UNDERPOWERED.** It keyed the
+underpower check off the full-era result alone, so if that slice dropped out — every symbol
+failing the in-era baseline minimum, say — a holdout whose CI excluded zero was still reported as
+underpowered. It now requires *every* measured era to be underpowered, and picks its reference
+from whichever era exists rather than dereferencing a possibly-absent one.
+
+**Tests.** The two AppTest suites now use separate disk-cache directories: the study cache is
+shared across processes by design, so suites running concurrently were seeing each other's
+studies. Assertions that targeted whole-page text now target the specific card, and the
+threshold-invalidation test moved from driving a (now absent) slider to asserting the cache-key
+contract directly.
 
 ---
 
