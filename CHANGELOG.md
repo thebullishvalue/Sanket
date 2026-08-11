@@ -7,6 +7,35 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v6.3.1] · 2026-08-11
+### Engine Status Card · 2x4 Grid
+
+The card's content is now a **2-column x 4-row grid** — eight cells, one fact each, replacing the
+stacked label/value rows:
+
+```
+▲ BUY    +0.052        ◆ SELL    +0.009
+HIT      57.5%         RESOLVES  ≥0.039
+SAMPLE   80 syms       INDEP     11.6
+TRIGGER  ±1.5σ · 10b   COST      3bp net +
+```
+
+The eight answer, in order: is there an edge on each side, how often was the signal right and
+could this test even have detected an edge that small, on how broad a sample, and at what settings
+and cost. Everything verbose moved into per-cell tooltips — the confidence intervals, `n_eff`, the
+event and date counts, the studied date range and holdout split, the z-lookback, and the cost
+basis. The sidebar gives each column ~145px, so values are held to ~12 characters; asserted in the
+tests along with the 8-cell shape, so neither can drift.
+
+Dropped from the card (all still in **System Data ▸ Edge Study**): the fire rate, the measurement
+timestamp, the sell-side verdict label (the sell interval says it), and the reference prior.
+
+**The Weekly caveat stays visible.** Compacting nearly buried it: the "extrapolated" flag had
+become tooltip-only, which would have quietly promoted a structural analogue to a measured
+setting. On Weekly the trigger cell is now labelled `TRIGGER ⚠ EXTRAP` and rendered amber.
+
+---
+
 ## [v6.3.0] · 2026-08-11
 ### The Study Runs On Every Run · Nothing Left To Configure
 

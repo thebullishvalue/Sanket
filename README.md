@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Close-Location Reversal (CLR) · Obsidian Quant · Pragyam Family · `v6.3.0`
+### Close-Location Reversal (CLR) · Obsidian Quant · Pragyam Family · `v6.3.1`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 

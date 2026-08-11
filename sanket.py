@@ -81,7 +81,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v6.3.0"
+VERSION = "v6.3.1"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures. The source indicator (sb_v8.pine) titled itself
@@ -5970,10 +5970,14 @@ def main():
 def _engine_card_html(clr, study) -> str:
     """The Engine Status card as HTML. Pure, so it can be repainted after a study runs.
 
-    Six rows, down from eleven. Each answers a question a reader actually has: is there an
-    edge on each side, could this test have found one, on what sample, at what settings, and
-    does the cost gate pass. The full per-era breakdown lives in System Data ▸ Edge Study —
-    this card is a status line, not a report.
+    Content is a 2x4 grid — eight cells, one fact each. The sidebar gives each column roughly
+    145px, so values are kept to ~12 characters and everything verbose (confidence intervals,
+    n_eff, the studied date range, the cost basis) lives in the cell's tooltip. The full
+    per-era breakdown is in System Data ▸ Edge Study; this card is a status line, not a report.
+
+    The eight were chosen to answer, in order: is there an edge on each side, how often was the
+    signal right and could this test even have found an edge that small, on how broad a sample,
+    and at what settings and cost.
     """
     buy_label = _study_state(study, "buy")[0]
     cost_gate_ok = clr.cost_ok(study)
@@ -5981,52 +5985,97 @@ def _engine_card_html(clr, study) -> str:
     if not cost_gate_ok:
         card_class = "danger"
 
-    def _row(label, value, color="var(--ink-secondary)", size="0.62rem"):
+    DIM = "var(--ink-tertiary)"
+
+    def _cell(label, value, color="var(--ink-secondary)", title=""):
+        t = f' title="{html.escape(title)}"' if title else ""
         return (
-            f'<div style="display:flex; justify-content:space-between; align-items:baseline; '
-            f'font-family:var(--data); font-size:{size};">'
-            f'<span style="color:var(--ink-tertiary); text-transform:uppercase; '
-            f'letter-spacing:0.1em; font-size:0.58rem;">{label}</span>'
-            f'<span style="color:{color}; font-weight:600; max-width:64%; text-align:right; '
-            f'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{value}</span></div>'
+            f'<div{t} style="min-width:0;">'
+            f'<div style="font-family:var(--data); font-size:0.52rem; color:var(--ink-tertiary); '
+            f'text-transform:uppercase; letter-spacing:0.09em; line-height:1.2; '
+            f'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{label}</div>'
+            f'<div style="font-family:var(--data); font-size:0.72rem; font-weight:600; '
+            f'color:{color}; line-height:1.35; white-space:nowrap; overflow:hidden; '
+            f'text-overflow:ellipsis;">{value}</div></div>'
         )
 
-    def _side_row(side, mark):
+    def _side_cells(side, mark):
         r = (study.get(side, "holdout") or study.get(side, "full")) if study else None
         if r is None:
-            return _row(f"{mark} {side.title()}", "—", "var(--ink-tertiary)")
+            return _cell(f"{mark} {side}", "—", DIM,
+                         "not measured on this universe yet")
         col = ("var(--emerald)" if r.significant
                else "var(--rose)" if r.anti else "var(--ink-secondary)")
-        return _row(f"{mark} {side.title()}",
-                    f"{r.edge:+.3f} [{r.ci_lo:+.2f},{r.ci_hi:+.2f}]", col, "0.65rem")
+        tip = (f"{side} side, {r.era}: drift-free edge {r.edge:+.4f} vol units, "
+               f"95% CI [{r.ci_lo:+.4f}, {r.ci_hi:+.4f}] from a block bootstrap over dates. "
+               f"{r.n_events} events on {r.n_dates} dates. "
+               f"An edge is claimed only when the interval excludes zero.")
+        return _cell(f"{mark} {side}", f"{r.edge:+.3f}", col, tip)
+
+    _rb = (study.get("buy", "holdout") or study.get("buy", "full")) if study else None
+
+    if _rb is not None:
+        hit_cell = _cell("HIT", f"{_rb.hit:.1f}%", "var(--ink-secondary)",
+                         f"Share of buy events where the signal beat that symbol's OWN mean "
+                         f"forward return — not a raw win rate. 50% is the no-edge line.")
+        mde_cell = _cell("RESOLVES", f"≥{_rb.mde:.3f}", "var(--ink-secondary)",
+                         f"Minimum detectable effect at this power: n_eff {_rb.n_eff:.0f} "
+                         f"independent observations, so the interval could only separate "
+                         f"effects of {_rb.mde:.3f} vol units or larger from zero. A 'no edge' "
+                         f"verdict means nothing unless this is smaller than the effect you "
+                         f"would care about.")
+    else:
+        hit_cell = _cell("HIT", "—", DIM, "not measured on this universe yet")
+        mde_cell = _cell("RESOLVES", "—", DIM, "not measured on this universe yet")
 
     if study is not None:
-        _rb = study.get("buy", "holdout") or study.get("buy", "full")
-        rows = (
-            _side_row("buy", "▲")
-            + _side_row("sell", "◆")
-            + _row("Power", (f"n_eff {_rb.n_eff:.0f} · resolves ≥{_rb.mde:.3f}"
-                             if _rb is not None else "—"))
-            + _row("Sample", f"{study.n_symbols_studied} syms · {study.start[:4]}–{study.end[:4]}"
-                             f" · {study.part_ratio:.0f} indep")
-        )
+        sample_cell = _cell("SAMPLE", f"{study.n_symbols_studied} syms", "var(--ink-secondary)",
+                            f"{study.n_symbols_studied} of {study.n_symbols_universe} symbols, "
+                            f"{study.start} to {study.end}, holdout from {study.split_date}."
+                            + (f" {study.note}." if study.note else ""))
+        indep_cell = _cell("INDEP", f"{study.part_ratio:.1f}", "var(--ink-secondary)",
+                           f"Effective independent names in the cross-section "
+                           f"({study.part_ratio:.1f} of {study.n_symbols_studied} studied), from "
+                           f"the eigenvalues of their correlation matrix. Correlated symbols do "
+                           f"not each contribute a fresh observation, which is why power is "
+                           f"computed from this and not the symbol count.")
     else:
-        rows = _row("Measured edge", "not measured yet", "var(--ink-tertiary)")
+        sample_cell = _cell("SAMPLE", "—", DIM, "not measured on this universe yet")
+        indep_cell = _cell("INDEP", "—", DIM, "not measured on this universe yet")
 
-    tf_note = " · extrapolated" if clr.z_look == eng.CLR_Z_LOOK_WEEKLY else ""
-    rows += _row("Setup", f"±{clr.thr:.1f}σ · hold {clr.horizon} · {clr.z_look}b{tf_note}")
-    rows += _row("Cost gate",
-                 f"{clr.cost_bps:.1f} bp · " + ("net +" if cost_gate_ok else "NET NEG"),
-                 "var(--emerald)" if cost_gate_ok else "var(--rose)", "0.65rem")
+    # Weekly is an unvalidated extrapolation of a daily study. That caveat must stay VISIBLE —
+    # burying it in a tooltip would quietly upgrade an extrapolation to a measured setting.
+    _extrap = clr.z_look == eng.CLR_Z_LOOK_WEEKLY
+    trigger_cell = _cell("TRIGGER ⚠ EXTRAP" if _extrap else "TRIGGER",
+                         f"±{clr.thr:.1f}σ · {clr.horizon}b",
+                         "var(--amber)" if _extrap else "var(--ink-secondary)",
+                         f"Fires past ±{clr.thr:.1f}σ, holds {clr.horizon} bars, entry the next "
+                         f"session's open. Z-score over a {clr.z_look}-bar lookback. Every value "
+                         f"is a measured plateau, which is why none is adjustable."
+                         + (" EXTRAPOLATED: the source study was daily, so the 52-bar weekly "
+                            "lookback is a structural analogue, not a measured plateau."
+                            if _extrap else ""))
+    cost_cell = _cell("COST", f"{clr.cost_bps:.0f}bp " + ("net +" if cost_gate_ok else "NET NEG"),
+                      "var(--emerald)" if cost_gate_ok else "var(--rose)",
+                      f"{clr.cost_bps:.1f} bp round-trip. The gate asks whether that cost, in the "
+                      f"vol units the edge is measured in, stays under the largest effect this "
+                      f"signal has ever shown ({eng.LARGEST_KNOWN_EFFECT:.3f}). It never compares "
+                      f"cost against the MEASURED edge — that would let a no-edge verdict halve "
+                      f"conviction. Basis: {clr.cost_basis(study)}.")
+
+    cells = (_side_cells("buy", "▲") + _side_cells("sell", "◆")
+             + hit_cell + mde_cell
+             + sample_cell + indep_cell
+             + trigger_cell + cost_cell)
 
     return f"""
         <div class="metric-card {card_class}" style="
-                min-height:auto; padding:0.85rem 0.95rem; margin-bottom:0.7rem; animation:none;">
-            <h4 style="margin:0 0 0.3rem 0;">{ENGINE_NAME}</h4>
-            <h2 style="font-size:1.05rem; margin:0 0 0.7rem 0; letter-spacing:-0.01em;">{buy_label}</h2>
-            <div style="display:flex; flex-direction:column; gap:0.32rem; padding-top:0.55rem;
-                        border-top:1px solid rgba(255,255,255,0.06);">
-                {rows}
+                min-height:auto; padding:0.8rem 0.9rem; margin-bottom:0.7rem; animation:none;">
+            <h4 style="margin:0 0 0.2rem 0;">{ENGINE_NAME}</h4>
+            <h2 style="font-size:1rem; margin:0 0 0.6rem 0; letter-spacing:-0.01em;">{buy_label}</h2>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem 0.7rem;
+                        padding-top:0.55rem; border-top:1px solid rgba(255,255,255,0.06);">
+                {cells}
             </div>
         </div>
         """
