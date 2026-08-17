@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Close-Location Reversal (CLR) · Obsidian Quant · Pragyam Family · `v6.3.1`
+### Close-Location Reversal (CLR) · Obsidian Quant · Pragyam Family · `v6.4.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -223,7 +223,8 @@ Ranks by `Fade_Score` (weakest closes first). `Side` is `Buy` / `Sell` / `—`, 
 score is continuous — but read `—`, because the measured edge is in the *event*.
 
 ```
-Conviction = clip(0.30 + 0.70·clip(|z|/3, 0, 1)) × cost_factor
+Conviction = clip(0.30 + 0.70·clip((|z| − thr) / (CLR_Z_Cap − thr), 0, 1)) × cost_factor
+CLR_Z_Cap  = (1 ∓ mean)/sigma — the largest |z| this bar's own window could produce
 cost_factor: 1.00 if the cost gate passes, else 0.50
              — measured from the Edge Study when one exists, else the pooled ~7bp prior
 ```
@@ -231,6 +232,21 @@ Conviction is a **relative weighting, not a probability**, and is labelled that 
 tooltip. Note what is deliberately absent: no expectancy term (measured and *reported* by the
 Edge Study, never folded into an unauditable number), no per-name volatility factor, no regime
 factor, no live-IC scaling.
+
+The magnitude term used to be `|z|/3`. That assumed the z-score reaches 3, and it cannot: `clv`
+is bounded in `[-1, +1]`, so with a trailing sigma near 0.5 the ceiling is about **1.9**. The old
+scale pinned 80% of all fires below 0.70 — presenting a 0.65–0.75 band as if it were 0–1 — while
+being a *pure* function of |z| (Spearman rho against |z| was exactly 1.000000), so it duplicated
+the Close-Loc z column rather than adding to it. Scaling against each bar's own arithmetic
+ceiling fixes both: the value spans 0.30–1.00, and two bars at an identical |z| of 1.70 can read
+0.42 and 1.00 depending on how much room their windows had (rho falls to 0.93).
+
+**It is a better description, not a validated forecast.** Run through the same Nifty 50 study
+that motivated the change, cap-relative conviction showed no out-of-sample discrimination either
+(0 of 8 slope tests). Nothing gates or ranks on it. And because conviction is derived from |z|,
+it must never be multiplied into a score that already carries a |z| term — the Confluence score
+used to do exactly that, and no longer does.
+
 
 ### 3. Bar convention — one deliberate difference from the Pine
 The Pine reads `z[1]` so an *intraday* chart cannot repaint a daily signal. Sanket evaluates
@@ -261,7 +277,7 @@ Per symbol, on each run:
 | `BUY_Today…BUY_5d` | ▲ green-triangle event, by age |
 | `SELL_Today…SELL_5d` | ◆ yellow-diamond event, by age |
 | `Side` | `Buy` / `Sell` / `—` (context only) |
-| `Conviction` | `[0,1]` = \|z\| × class expectancy × cost gate |
+| `Conviction` | `[0,1]` = \|z\| within its attainable range (vs `CLR_Z_Cap`) × cost gate |
 | `CLR_State` | WARMING UP / BUY / SELL / NEUTRAL |
 | `CLR_Hold_Dir` / `CLR_Hold_Age` | hold-window direction and bars elapsed ("day 3/10") |
 | `Signal_Reason` | plain-language read of the row, caveat included |

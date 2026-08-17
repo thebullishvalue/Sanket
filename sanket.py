@@ -81,7 +81,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v6.3.1"
+VERSION = "v6.4.0"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures. The source indicator (sb_v8.pine) titled itself
@@ -1720,6 +1720,7 @@ def to_excel(df):
                 "— THE SIGNAL (CLR) —",
                 "CLR_CLV",
                 "CLR_Z",
+                "CLR_Z_Cap",
                 "Signal / Fade_Score / CLR_Score",
                 "buy_cond / BUY_*",
                 "sell_cond / SELL_*",
@@ -1730,7 +1731,7 @@ def to_excel(df):
                 "CLR_Rank_Pct",
                 "Priority_Long / Priority_Short",
                 "Signal_Reason",
-                "— CONTEXT ONLY (never a signal input) —",
+                "— CONTEXT ONLY (never a signal input; none predicts outcome out of sample) —",
                 "Zone / Condition",
                 "Bar_Delta",
                 "CVD",
@@ -1747,26 +1748,27 @@ def to_excel(df):
             "Metric Description": [
                 "",
                 "Close location in [-1, +1]: ((C-L) - (H-C)) / (H-L). -1 = closed on the low, +1 = on the high.",
-                "THE MEASURE. Z-score of CLR_CLV over the trailing lookback (252 daily / 52 weekly bars). Population stdev, matching Pine ta.stdev.",
+                "THE MEASURE. Z-score of CLR_CLV over the trailing lookback (252 daily / 52 weekly bars). Population stdev, matching Pine ta.stdev. Suppressed when the window's CLV sigma collapses below 0.30 — those bars produce meaningless 15-sigma readings, not extreme closes.",
+                "Largest |z| this bar's window could arithmetically produce, (1 -/+ mean)/sigma. Because CLR_CLV is bounded in [-1,+1] the ceiling is ~1.9, so |z| never approaches 3. Conviction is scaled against this.",
                 "Fade score = -CLR_Z. Positive = bullish. The sign flip IS the finding: a strong close predicts weakness.",
                 "BUY event (green triangle): CLR_Z below -threshold, a weak close to fade up. BUY_Today/_1d/_2d/_3d/_5d mark the signal's age.",
                 "SELL event (yellow diamond): CLR_Z above +threshold. NOTE: this side did NOT confirm out of sample (holdout +0.0094, CI [-0.030, +0.052]).",
                 "Buy / Sell / '-' — only a fired event is actionable; sub-threshold rows are context.",
-                "|z| magnitude x the instrument class's measured out-of-sample expectancy x the cost gate, in [0,1]. Not a probability.",
-                "WARMING UP (no full lookback yet) / BUY / SELL / NEUTRAL for this bar.",
-                "Hold window: direction (+1 buy, -1 sell, 0 none) and bars elapsed since it opened. Edge lives at 5-10 bars.",
+                "How far |z| sits between the firing threshold and CLR_Z_Cap, x the cost gate, in [0,1]. Cap-relative, so two bars at the same |z| can differ (Spearman vs |z| = 0.93; under the old |z|/3 scale it was exactly 1.00, i.e. pure duplication). A DESCRIPTION of the close, not a validated forecast. Not a probability.",
+                "WARMING UP (no full lookback yet) / DEGENERATE (CLV sigma collapsed, z suppressed) / BUY / SELL / NEUTRAL for this bar.",
+                "Hold window: direction (+1 buy, -1 sell, 0 none) and bars elapsed since it opened. Edge lives at 5-10 bars. Measured on Nifty 50: a day-0 signal did NOT outperform a day-3 one out of sample — age is not a quality grade.",
                 "Cross-sectional fade-score percentile within the universe on this date.",
                 "Fade score x 100 and its negation — the ranking keys the UI tables sort on.",
                 "Plain-language read of the row: which event (if any), the z that produced it, and any scope caveat.",
                 "",
-                "Where cumulative delta sits vs its 20-bar mean: Accumulation(+) / Distribution(+) / Neutral.",
+                "Where cumulative delta sits vs its 20-bar mean: Accumulation(+) / Distribution(+) / Neutral. Measured: no out-of-sample expectancy — its one holdout-significant result reversed the sign it had in discovery.",
                 "Inferred per-bar buy-sell volume delta (OHLC close-location proxy).",
                 "Cumulative volume delta (running sum of Bar_Delta).",
-                "3-bar change in CVD — flow building (+) or draining (-).",
+                "3-bar change in CVD — flow building (+) or draining (-). Scales with the symbol's absolute volume, so it is NOT comparable across names; z-score it within symbol first. Measured: no out-of-sample expectancy.",
                 "Signed z-score of Bar_Delta vs its 20-bar distribution. Volume-weighted, so distinct from CLR_Z.",
                 "Absorption strength: |Bar_Delta| / its 20-bar average.",
                 "Rolling 20-bar inferred buy share in [0,1] (0.5 = balanced) — volume-normalized, cross-sectionally comparable.",
-                "Absorption context in [0,1]: high delta soaked by a small range; >0.25 approximates inferred_delta.pine rawAbsorb.",
+                "Absorption context in [0,1]: high delta soaked by a small range; >0.25 approximates inferred_delta.pine rawAbsorb. Only 1.6% of fires reach 0.25 (median 0.003), so it reads ~0 for almost every signal. Measured: no out-of-sample expectancy.",
                 "HMM regime label and the probability of the detected state. Per-name RISK CONTEXT.",
                 "Volatility regime (LOW/NORMAL/HIGH/EXTREME) via GARCH. Risk context.",
                 "Structural change point (CUSUM) identifying regime shifts. Risk context.",
@@ -2374,7 +2376,7 @@ def render_landing_page():
                 <span>Horizon:</span> 5–10 trading days · no intraday edge<br>
                 <span>Entry:</span> next session's open after the signal bar<br>
                 <span>Why events:</span> a continuous position costs 12%/yr and nets −0.48 Sharpe<br>
-                <span>Conviction:</span> |z| × class expectancy × cost gate
+                <span>Conviction:</span> |z| within its attainable range × cost gate
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -2846,6 +2848,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 # Signal == the CLR fade score (-z). Positive = bullish (weak close).
                 "Signal": round(float(last_row['Fade_Score']), 3) if pd.notna(last_row['Fade_Score']) else np.nan,
                 "CLR_Z": float(last_row['CLR_Z']) if pd.notna(last_row['CLR_Z']) else np.nan,
+                # Arithmetic ceiling for this bar's window — conviction is scaled against it
+                # because a z-score of a [-1,+1] bounded variable cannot reach 3. See engine.py.
+                "CLR_Z_Cap": (float(last_row['CLR_Z_Cap'])
+                              if pd.notna(last_row.get('CLR_Z_Cap')) else np.nan),
                 "CLR_CLV": float(last_row['CLR_CLV']) if pd.notna(last_row['CLR_CLV']) else np.nan,
                 "CLR_State": str(last_row.get('CLR_State', 'NEUTRAL')),
                 "CLR_Hold_Dir": int(last_row.get('CLR_Hold_Dir', 0) or 0),
@@ -2968,8 +2974,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             )
         # Return empty DataFrame with expected columns to prevent downstream KeyErrors
         expected_cols = [
-            "Symbol", "DisplayName", "SimpleName", "Signal", "CLR_Z", "CLR_CLV", "CLR_State",
-            "CLR_Hold_Dir", "CLR_Hold_Age", "CLR_Horizon",
+            "Symbol", "DisplayName", "SimpleName", "Signal", "CLR_Z", "CLR_Z_Cap", "CLR_CLV",
+            "CLR_State", "CLR_Hold_Dir", "CLR_Hold_Age", "CLR_Horizon",
             "Bar_Delta", "CVD", "CVD_Slope", "Delta_Z", "Buy_Share", "Absorption_Score",
             "Zone", "SignalType", "Price", "PctChange",
             "BUY_Today", "BUY_1d", "BUY_2d", "BUY_3d", "BUY_5d",
@@ -2981,9 +2987,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     results_df = pd.DataFrame(results)
 
     # Cross-sectional ranking (engine.py): order by the fade score (-z), assign Side from
-    # which side of ±thr the close location landed, and set conviction from |z| × the cost
-    # gate. The measured expectancy (`study`) informs the cost gate and the per-row read; it
-    # never scales or filters a signal. One call emits the whole UI contract.
+    # which side of ±thr the close location landed, and set conviction from |z|'s position
+    # inside its attainable range × the cost gate. The measured expectancy (`study`) informs
+    # the cost gate and the per-row read; it never scales or filters a signal. One call emits
+    # the whole UI contract.
     if not results_df.empty:
         results_df = eng.compute_ranking(results_df, cost_bps=clr.cost_bps,
                                          thr=clr.thr, study=study)
@@ -3859,28 +3866,24 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         # |Corr| × normalised |fade score|, i.e. how strong this symbol's own CLR
         # close-location reading is relative to the rest of the universe. Normalising by
         # the observed max keeps the score in [0,1] across universes whose |z| spreads
-        # differ. Fired signals then get a conviction weight applied on top.
+        # differ.
+        #
+        # A conviction weight (0.5 + 0.5·Conviction) used to be applied on top. It has been
+        # removed: conviction is a monotone function of |z| times a universe-level constant,
+        # and `pri_norm` is already the normalised |fade score| — i.e. |z|. Multiplying the
+        # two counted the same variable twice, compressing the ranking toward whatever the
+        # |z| term already said while presenting itself as a second, independent check. The
+        # Nifty 50 study confirmed the redundancy directly: standardised, conviction and
+        # |z| produce identical regression slopes to four decimals. Conviction remains in
+        # the table as a description of the close; it no longer scales the ranking.
         if 'Priority_Long' in corr_df.columns and corr_df['Priority_Long'].notna().any():
             abs_pri = corr_df['Priority_Long'].abs().fillna(0)
             pri_norm = abs_pri / max(abs_pri.max(), 1e-6)        # [0, 1]
             corr_df['Priority_Strength'] = pri_norm
             corr_df['Confluence_Score'] = (corr_df['Corr_Current'].abs() * pri_norm).clip(0.0, 1.0)
+            _n_fired = int((corr_df['Side'].isin(['Buy', 'Sell'])).sum()) if 'Side' in corr_df.columns else 0
             console.item("Confluence formula", "|Corr| × normalised |fade score|")
-
-            # ── Conviction weight ────────────────────────────────────────────
-            # A high-correlation, high-|z| name still deserves less weight when the
-            # engine's conviction is low — a sub-threshold reading, or an instrument
-            # class whose expectancy did not survive holdout. factor = 0.5 + 0.5·Conviction,
-            # so full conviction is unchanged and near-zero conviction is halved (not
-            # zeroed — the correlation read still carries information).
-            if 'Conviction' in corr_df.columns and corr_df['Conviction'].notna().any():
-                _conv = corr_df['Conviction']
-                _factor = np.where(_conv.notna(), 0.5 + 0.5 * _conv.fillna(0.0), 1.0)
-                corr_df['Confluence_Raw'] = corr_df['Confluence_Score']
-                corr_df['Confluence_Score'] = (corr_df['Confluence_Score'] * _factor).clip(0.0, 1.0)
-                _n_fired = int((corr_df['Side'].isin(['Buy', 'Sell'])).sum()) if 'Side' in corr_df.columns else 0
-                console.item("Confluence formula", "|Corr| × normalised |fade score| × (0.5 + 0.5·Conviction)")
-                console.item("Fired signals in universe", f"{_n_fired} symbol(s) past ±{clr.thr:.1f}σ")
+            console.item("Fired signals in universe", f"{_n_fired} symbol(s) past ±{clr.thr:.1f}σ")
         else:
             # Defensive fallback — no screener output to join against, so rank on the
             # correlation alone rather than inventing a signal strength.
@@ -4126,8 +4129,8 @@ def _build_confluence_table_html(df: pd.DataFrame, thr: float = None) -> str:
                 <th class="numeric" title="Symbol's price change on the analysis date">Actual %</th>
                 <th class="numeric" title="Expected move = target return × beta (rolling correlation × vol ratio over the lookback)">Expected %</th>
                 <th class="numeric" title="Divergence = Actual − Expected (positive = outperforming expectation)">Div %</th>
-                <th class="numeric" title="|z| magnitude × instrument-class OOS expectancy × cost gate">Conv</th>
-                <th class="numeric" title="Confluence = |Correlation| × normalised |fade score| × (0.5 + 0.5·Conviction)">Confluence</th>
+                <th class="numeric" title="How far |z| sits between the firing threshold and the largest reading this bar's own window could produce, × the cost gate. Cap-relative, so two bars at the same z can differ. A description, not a validated forecast. Not a probability.">Conv</th>
+                <th class="numeric" title="Confluence = |Correlation| × normalised |fade score|">Confluence</th>
             </tr>
         </thead>
         <tbody>
@@ -4266,7 +4269,7 @@ def render_correlation_results(corr_data: dict) -> None:
             </div>
             <div style="color:#F1F5F9; line-height:1.6;">
                 Each setup type is ranked by <span style="color:#38BDF8; font-weight:600;">Confluence Score</span> (0-1)
-                = |Correlation| × normalised |fade score| × conviction. Highest rank = strongest
+                = |Correlation| × normalised |fade score|. Highest rank = strongest
                 overlap between the correlation relationship and a live CLR reading. Look for:
                 <span style="font-weight:600;">(1) Score &gt;0.7</span>,
                 <span style="font-weight:600;">(2) |Div %| &gt;3%</span>,
@@ -4542,7 +4545,7 @@ def _z_cell(z, thr: float = None) -> str:
 
 
 def _conv_cell(conv) -> str:
-    """Render the conviction cell — |z| magnitude × class expectancy × cost gate."""
+    """Render the conviction cell — |z|'s position in its attainable range × the cost gate."""
     try:
         c = float(conv)
     except (TypeError, ValueError):
@@ -4553,8 +4556,10 @@ def _conv_cell(conv) -> str:
     elif c >= 0.55: col = '#A3E635'
     elif c >= 0.40: col = '#D4A853'
     else:           col = '#FB923C'
-    title = (f'Conviction {c*100:.0f}% — |z| magnitude x the instrument class\'s measured '
-             f'out-of-sample expectancy x the cost gate. Not a probability.')
+    title = (f'Conviction {c*100:.0f}% — how far |z| sits between the firing threshold and the '
+             f'largest reading this bar\'s own window could produce, x the cost gate. '
+             f'Cap-relative position, so two bars at the same z can differ. A description of the close, '
+             f'not a validated forecast, and not a probability.')
     return (f'<td class="numeric" style="color:{col}; font-weight:700;" '
             f'title="{html.escape(title)}">{c*100:.0f}%</td>')
 
@@ -4901,7 +4906,7 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
                     <th class="numeric">% Change</th>
                     <th class="numeric" title="Fade score = −z at the bar that fired. Positive = bullish.">Fade</th>
                     <th class="numeric" title="Close-location z at the bar that fired (CLR core measure)">Close-Loc z</th>
-                    <th class="numeric" title="|z| magnitude × instrument-class OOS expectancy × cost gate. Not a probability.">Conv</th>
+                    <th class="numeric" title="How far |z| sits between the firing threshold and the largest reading this bar's own window could produce, × the cost gate. Cap-relative, so two bars at the same z can differ. A description, not a validated forecast. Not a probability.">Conv</th>
                     <th class="numeric" title="Bars into the measured hold window (entry was the open after the signal bar)">Hold</th>
                     <th class="numeric" title="Has price already run in the signal's direction since it fired (σ units)?">Entry</th>
                     <th class="numeric" title="Cumulative-delta flow zone — context only, not a signal input">Zone</th>
@@ -5040,7 +5045,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy', thr: float 
                     <th class="numeric" title="Fade score = −z. Positive = bullish (a weak close).">Fade</th>
                     <th class="numeric" title="Close-location z — the CLR core measure">Close-Loc z</th>
                     <th class="numeric" title="▲ BUY past −thr · ◆ SELL past +thr · — inside the band (context only)">Side</th>
-                    <th class="numeric" title="|z| magnitude × instrument-class OOS expectancy × cost gate. Not a probability.">Conv</th>
+                    <th class="numeric" title="How far |z| sits between the firing threshold and the largest reading this bar's own window could produce, × the cost gate. Cap-relative, so two bars at the same z can differ. A description, not a validated forecast. Not a probability.">Conv</th>
                     <th class="numeric" title="Bars into the measured hold window">Hold</th>
                     <th class="numeric">Bar Δ</th>
                     <th class="numeric">CVD Slope</th>
@@ -5220,7 +5225,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', thr: 
                     <th class="numeric" title="Fade score = −z. Positive = bullish (a weak close).">Fade</th>
                     <th class="numeric" title="Close-location z — the CLR core measure">Close-Loc z</th>
                     <th class="numeric" title="▲ BUY past −thr · ◆ SELL past +thr · — inside the band (context only)">Side</th>
-                    <th class="numeric" title="|z| magnitude × instrument-class OOS expectancy × cost gate. Not a probability.">Conv</th>
+                    <th class="numeric" title="How far |z| sits between the firing threshold and the largest reading this bar's own window could produce, × the cost gate. Cap-relative, so two bars at the same z can differ. A description, not a validated forecast. Not a probability.">Conv</th>
                     <th class="numeric">Bar Δ</th>
                     <th class="numeric">CVD Slope</th>
                     <th class="numeric" title="HMM regime — risk context, not a signal input">Regime</th>

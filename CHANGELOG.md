@@ -7,6 +7,69 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v6.4.0] · 2026-08-17
+### The Screen Measured Against Itself · Nifty 50, 23 Years, 23,055 Events
+
+A full-history study (`backtest/`) put every fired signal on the current Nifty 50 — 49 names,
+263,963 bars, 2003-2026 — against what happened next at 1, 2, 5 and 10 days, and asked which of
+the screen's eight parameters marks the fires worth acting on. The answer was **none of them**,
+and four defects surfaced on the way. Both are now reflected in the code.
+
+**The measurement.** Winners were picked on the first 60% of history and tested unchanged on a
+sealed 40% holdout. Of 56 pre-registered best-vs-worst bucket contrasts, **0 replicated**; the
+mean holdout difference was −0.006 against +0.058 in discovery. A monotone slope test over every
+event put 3 of 56 inside a 95% interval — exactly the chance rate — and all three reversed sign
+between eras. A positive control (prior 5-day return, not a screen column) run through the same
+machinery *was* detected, so the null describes the parameters, not the test.
+
+Nothing was gating on those columns, and nothing does now. What changed is that the app no longer
+presents them as if they were evidence: `ZONE`, `CVD_Slope` and `Absorption_Score` carry the
+measured null in their legend text, and `CLR_Hold_Age` records that a day-0 signal did not beat a
+day-3 one out of sample.
+
+**Degenerate windows no longer fire** (`CLR_MIN_CLV_SIGMA`). `clv` is bounded in `[-1, +1]`, so a
+healthy trailing window has a sigma near 0.5. When an instrument's close location stops varying,
+that sigma collapses and the z-score explodes — the study's largest reading was **15.8σ**, from a
+window with sigma 0.02. Those bars were not extreme closes but a divide-by-a-small-number, and
+they scored worst of any bucket measured. Windows below sigma 0.30 are now suppressed and report
+`CLR_State = DEGENERATE`. Effect: max \|z\| falls from 15.84 to 2.96, 106 of 23,161 fires (0.46%)
+disappear, and the fire rate moves 8.78% → 8.74%. `edge.py` applies the identical guard, since it
+re-derives the z-score rather than calling the engine — without it the Edge Study would have
+measured a rule the screener will not trade.
+
+**Conviction is scaled against what the z-score can actually reach** (`CLR_Z_Cap`). The magnitude
+term was `|z|/3`, which assumes the z-score reaches 3. Bounded `clv` puts the ceiling near **1.9**,
+so the old scale pinned **80% of all fires below 0.70** and presented a 0.65–0.75 band as if it
+were 0–1. Worse, it was a *pure* function of \|z\| — Spearman rho against \|z\| of exactly
+**1.000000** — so the CONV column duplicated Close-Loc z instead of adding to it. Magnitude is now
+\|z\|'s position between the firing threshold and `CLR_Z_Cap = (1 ∓ mean)/sigma`, each bar's own
+arithmetic ceiling: exact, per-row, no fitted constants. Conviction spans 0.30–1.00 (interquartile
+width 0.032 → 0.193, a 6x gain in resolution), and two bars at an identical \|z\| of 1.70 can now
+read 0.42 and 1.00 depending on how much room their windows had (rho falls to 0.93). Frames
+without `CLR_Z_Cap` fall back to the measured ~1.9 ceiling, so older cached frames still rank.
+
+It is a **better description, not a validated forecast** — run back through the same study,
+cap-relative conviction showed no out-of-sample discrimination either (0 of 8 slope tests). It is
+displayed, and it ranks nothing.
+
+**Confluence no longer counts one variable twice.** The score was
+`|Corr| × normalised |fade score| × (0.5 + 0.5·Conviction)`. The middle term is \|z\|, and
+conviction *was* \|z\| — so the weight compressed the ranking toward what the fade term already
+said while presenting itself as an independent check. The conviction factor is removed; the score
+is `|Corr| × normalised |fade score|`.
+
+**Fixed: `edge.block_bootstrap_ci` crashed on thin slices.** Its `n_blocks < 2` guard sat *after*
+the reshape that needed it, and `max(n_dates // block, 1)` turned "no whole blocks" into a claim
+of one. Any slice spanning fewer dates than the horizon — a thin side, a short era — raised
+`ValueError: cannot reshape array of size 5 into shape (1,10)` and took the whole Edge Study down.
+The guard now runs first and returns `(nan, nan)`.
+
+**Also corrected:** five tooltips and both docs still described conviction as
+`|z| × class expectancy × cost gate`. The class-expectancy term was removed back in v6.1.0 — the
+labels had been describing a formula the engine no longer ran.
+
+---
+
 ## [v6.3.1] · 2026-08-11
 ### Engine Status Card · 2x4 Grid
 

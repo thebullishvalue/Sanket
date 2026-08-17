@@ -121,7 +121,11 @@ def symbol_events(close: pd.Series, high: pd.Series, low: pd.Series,
 
     m = clv.rolling(int(z_look)).mean()
     s = clv.rolling(int(z_look)).std(ddof=0)
-    z = (clv - m) / s.where(s > 0)
+    # Same degenerate-window guard as `engine.add_clr_features`. It must be applied here
+    # too: this function re-derives the z-score rather than calling the engine, so without
+    # it the study would measure events the screener no longer fires, and the measured
+    # expectancy would describe a rule the user cannot trade.
+    z = (clv - m) / s.where(s >= eng.CLR_MIN_CLV_SIGMA)
 
     # EXEC-B: the signal bar closes, we enter on the NEXT bar and hold `horizon` bars.
     # Using next-bar close as the open proxy (the app's frames are OHLC; the source study
@@ -232,15 +236,21 @@ def block_bootstrap_ci(scores: np.ndarray, date_codes: np.ndarray, n_dates: int,
     per_date_sum = np.bincount(date_codes, weights=scores, minlength=n_dates)
     per_date_cnt = np.bincount(date_codes, minlength=n_dates).astype(float)
 
-    n_blocks = max(n_dates // block, 1)
+    # Fewer than two whole blocks means there is nothing to resample — bail BEFORE the
+    # reshape below, which would otherwise raise. `n_dates // block` is 0 whenever the
+    # slice spans fewer dates than the horizon (a thin side, a short era, a sparse
+    # bucket); the old `max(..., 1)` turned that into a claim of one block and then tried
+    # to reshape n_dates values into a (1, block) frame. Reaching this with n_dates=5 and
+    # block=10 raised ValueError and took the whole Edge Study down with it.
+    n_blocks = n_dates // block
+    if n_blocks < 2:
+        return (float("nan"), float("nan"))
     trim = n_blocks * block
     bs = per_date_sum[:trim].reshape(n_blocks, block).sum(axis=1)
     bc = per_date_cnt[:trim].reshape(n_blocks, block).sum(axis=1)
     # Any dates past the last whole block are dropped from the resample rather than
     # forming a short block with different variance.
     if bc.sum() <= 0:
-        return (float("nan"), float("nan"))
-    if n_blocks < 2:
         return (float("nan"), float("nan"))
 
     rng = np.random.default_rng(seed)

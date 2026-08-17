@@ -59,6 +59,40 @@ Horizon
 5-10 trading days. There is **no intraday edge** here; none was found and none is claimed.
 Entry is the next session's open after the signal bar closes.
 
+Measured properties of the z-score (NSE Nifty 50, 49 names, 2003-2026, 23,161 events)
+-------------------------------------------------------------------------------------
+Three facts about this variable that follow from ``clv`` being **bounded in [-1, +1]**, and
+that the parameters below are now written to respect. See ``backtest/`` for the study.
+
+1. **|z| is arithmetically capped near 1.9.** For a window with mean ``m`` and sigma ``s``,
+   the largest attainable z is ``(1 - m)/s`` on a strong close and ``(1 + m)/s`` on a weak
+   one. Measured ``s`` sits at 0.46-0.57, so the ceiling lands around 1.9 and 94% of all
+   fires fall between 1.50σ and 1.85σ. The threshold is already close to the roof.
+
+2. **Readings past ~2.5σ are artifacts, not strong signals.** Every |z| above 3 in the study
+   came from a window whose CLV sigma had collapsed below 0.28 — an instrument whose close
+   location stopped varying, not one closing unusually. Those bars scored worst of any
+   bucket. :data:`CLR_MIN_CLV_SIGMA` now suppresses them.
+
+3. **Conviction used to be a restatement of |z|.** The old ``|z|/3`` magnitude made it a
+   monotone function of |z| times a universe-level constant, so it could carry nothing |z|
+   did not — Spearman rho against |z| was exactly 1.000000, and standardised the two
+   produced identical regression slopes to four decimals. Multiplying it into any
+   |z|-derived score therefore counted one variable twice, which is what the Confluence
+   score was doing. It is now scaled against ``CLR_Z_Cap``, each bar's own arithmetic
+   ceiling, so it measures *position within attainable range* rather than raw magnitude:
+   rho against |z| falls to 0.93, and two bars at an identical |z| of 1.70 can now read
+   0.42 and 1.00 depending on how much room their windows had. That makes it a genuinely
+   different description — but it is still only a **description**. Nothing has established
+   that cap-relative position predicts outcomes, and it does not gate or scale any ranking.
+
+The same study tested all eight screen parameters for out-of-sample expectancy and found
+none: 0 of 56 pre-registered contrasts replicated on a sealed holdout, and 3 of 56 monotone
+slope tests cleared a 95% interval — exactly the chance rate — with all three reversing sign
+between eras. A positive control run through the identical machinery *was* detected, so the
+null is a property of the parameters, not of the test. Nothing below gates on them, and the
+UI labels them as description rather than evidence.
+
 Bar convention (one deliberate difference from the Pine)
 -------------------------------------------------------
 The Pine reads ``z[1]`` inside ``request.security(..., "D", ...)`` so that an *intraday*
@@ -91,6 +125,18 @@ CLR_THRESHOLD = 1.5
 
 # Hold horizon: the edge lives at 5-10 days. Below 5, turnover cost exceeds the gross edge.
 CLR_HORIZON = 10
+
+# Degenerate-window guard. `clv` lives in [-1, +1], so a healthy trailing window has a sigma
+# near 0.5 (measured: 0.46-0.57 across the 5th-95th percentile on Nifty 50). When an
+# instrument's close location stops varying — an illiquid or range-collapsed stretch — that
+# sigma falls toward zero and the z-score explodes: the study's largest reading was 15.8σ,
+# from a window with sigma 0.02. Those bars are not extreme closes, they are a divide-by-a-
+# small-number, and they scored worst of any bucket measured.
+#
+# 0.30 is roughly the 1st percentile of the healthy distribution (0.27). Below it the z-score
+# is suppressed rather than fired on: 0.11% of bars, and it caps the attainable |z| at 2.96,
+# which is the arithmetic ceiling for a genuinely varying window.
+CLR_MIN_CLV_SIGMA = 0.30
 
 # Round-trip cost assumption for the cost gate. Measured breakeven ~7bp pooled; on the two
 # established classes the event form stays net-positive past 10bp.
@@ -280,17 +326,24 @@ def add_clr_features(df: pd.DataFrame,
 
     Columns written:
       ``CLR_CLV``       close location in [-1, +1] (Pine ``f_clv``)
-      ``CLR_Z``         z-score of CLR_CLV over ``z_look`` bars; NaN until warm
+      ``CLR_Z``         z-score of CLR_CLV over ``z_look`` bars; NaN until warm or degenerate
+      ``CLR_Z_Cap``     largest |z| this bar's window could arithmetically produce
       ``Fade_Score``   ``-CLR_Z`` — positive = bullish. The sign flip IS the finding.
       ``buy_cond``     green triangle: ``CLR_Z < -thr`` (weak close → fade long)
       ``sell_cond``    yellow diamond: ``CLR_Z > +thr`` (strong close → sell)
       ``CLR_Hold_Dir``  +1 inside a buy window, -1 inside a sell window, 0 outside
       ``CLR_Hold_Age``  bars since that window opened (0 = fired on this bar)
-      ``CLR_State``     WARMING UP / BUY / SELL / NEUTRAL for the bar
+      ``CLR_State``     WARMING UP / DEGENERATE / BUY / SELL / NEUTRAL for the bar
 
     ``ta.stdev`` in Pine is the population standard deviation, so ``ddof=0`` here — using
     the sample stdev would shift every z by ~0.2% and drift the fire rate off the measured
     9.3%. Safe on short frames: CLR_Z is NaN until ``z_look`` bars exist and nothing fires.
+
+    Two additions the Pine does not have, both consequences of ``clv`` being bounded:
+    windows whose sigma has collapsed below :data:`CLR_MIN_CLV_SIGMA` are suppressed rather
+    than allowed to fire a meaningless 15σ reading, and ``CLR_Z_Cap`` records the arithmetic
+    ceiling ``(1 ∓ m)/s`` so downstream code can express |z| against what was *attainable*
+    rather than against a 3σ scale this variable cannot reach.
     """
     df = df.copy()
     high, low, close = df['High'], df['Low'], df['Close']
@@ -303,10 +356,23 @@ def add_clr_features(df: pd.DataFrame,
 
     m = clv.rolling(z_look).mean()
     s = clv.rolling(z_look).std(ddof=0)
-    z = (clv - m) / s.where(s > 0)
+
+    # Degenerate-window guard: a collapsed sigma turns the z-score into a divide-by-a-small-
+    # number rather than a measure of close location. Suppress those bars entirely — they
+    # must not fire, and they must not rank.
+    healthy = s >= CLR_MIN_CLV_SIGMA
+    degenerate = s.notna() & ~healthy
+    z = (clv - m) / s.where(healthy)
+
+    # Arithmetic ceiling for this window, in the direction the bar actually closed: clv is
+    # bounded by +1, so a strong close can reach at most (1 - m)/s; bounded by -1, a weak
+    # close can reach at most (1 + m)/s. `m` lives in [-1, 1], so both are non-negative.
+    s_ok = s.where(healthy)
+    cap = pd.Series(np.where(z >= 0, (1.0 - m) / s_ok, (1.0 + m) / s_ok), index=df.index)
 
     df['CLR_CLV']     = clv
     df['CLR_Z']       = z
+    df['CLR_Z_Cap']   = cap
     df['Fade_Score'] = -z
 
     # ── The two plotted events ──
@@ -333,8 +399,10 @@ def add_clr_features(df: pd.DataFrame,
     df['CLR_Hold_Age'] = np.where(in_window, age, np.nan)
 
     df['CLR_State'] = np.select(
-        [~np.isfinite(z.to_numpy(dtype=float)), buy_cond, sell_cond],
-        ['WARMING UP', 'BUY', 'SELL'],
+        [degenerate.to_numpy(dtype=bool),
+         ~np.isfinite(z.to_numpy(dtype=float)),
+         buy_cond, sell_cond],
+        ['DEGENERATE', 'WARMING UP', 'BUY', 'SELL'],
         default='NEUTRAL',
     )
     return df
@@ -354,11 +422,15 @@ def compute_ranking(df: pd.DataFrame,
     :class:`edge.EdgeStudy` measured on this universe; when present the gate is answered
     from its measured net edge rather than the pooled prior.
 
-    Conviction is |z| magnitude x the cost gate, and nothing else. Note what is
-    deliberately absent: no per-class expectancy lookup (that was a hardcoded table and is
-    now measured separately by ``edge.py``, for reporting), no per-name vol factor, no
-    regime factor, no live-IC scaling. The measured expectancy is REPORTED, never applied —
-    a universe that measures no edge still fires at full conviction, and says so.
+    Conviction is |z|'s position inside its attainable range x the cost gate, and nothing
+    else. Note what is deliberately absent: no per-class expectancy lookup (that was a
+    hardcoded table and is now measured separately by ``edge.py``, for reporting), no
+    per-name vol factor, no regime factor, no live-IC scaling. The measured expectancy is
+    REPORTED, never applied — a universe that measures no edge still fires at full
+    conviction, and says so.
+
+    Conviction is a **restatement of |z|**, not a second opinion about it. Any score that
+    already contains a |z|-derived term must not multiply conviction in as well.
 
     Adds the output contract and returns the frame sorted by ``Priority_Long`` desc
     (warming-up rows, whose score is NaN, sort last). Pure & deterministic.
@@ -389,13 +461,29 @@ def compute_ranking(df: pd.DataFrame,
     #    measured edge is in the EVENT, not in the continuous score.
     df['Side'] = np.where(z < -thr, 'Buy', np.where(z > thr, 'Sell', '—'))
 
-    # ── 4. Conviction [0,1] = |z| magnitude × cost gate ──
-    # Magnitude: |z|/3 — the threshold (1.5σ) lands at 0.50 and a 3σ close-location extreme
-    # at 1.00. The cost gate halves conviction when the assumed round-trip cost sinks the
-    # event form, because past that point the strategy is net negative no matter how
-    # extreme the close was. There is no expectancy term: that is measured per universe by
-    # `edge.py` and reported, not folded silently into a number the reader cannot audit.
-    mag = (z.abs() / 3.0).clip(0.0, 1.0)
+    # ── 4. Conviction [0,1] = |z| position within its ATTAINABLE range × cost gate ──
+    # This is a DESCRIPTION of how extreme the close was, not evidence about the trade.
+    # Conviction is a monotone function of |z| times a universe-level constant, so it can
+    # carry no information |z| does not — measured on Nifty 50, the two produce identical
+    # regression slopes to four decimals. It is displayed because "how extreme" is worth
+    # seeing; it must not be multiplied against another |z|-derived term, and no measured
+    # expectancy enters it (that is `edge.py`'s job, reported rather than applied).
+    #
+    # The magnitude term was |z|/3, which assumed the z-score reaches 3. Because `clv` is
+    # bounded in [-1, +1] it cannot: the ceiling is ~1.9, so the old scale pinned 80% of all
+    # fires below 0.70 and presented a 0.65-0.75 band as if it were 0-1. Magnitude is now
+    # |z|'s position between the firing threshold and `CLR_Z_Cap`, the arithmetic maximum
+    # that bar's own window could produce — exact, per-row, and free of fitted constants.
+    # A bar at the threshold reads 0; one that closed at the very edge of its range reads 1.
+    if 'CLR_Z_Cap' in df.columns:
+        cap = df['CLR_Z_Cap'].astype(float)
+    else:
+        cap = pd.Series(np.nan, index=df.index)
+    span = (cap - thr)
+    mag = ((z.abs() - thr) / span.where(span > 0)).clip(0.0, 1.0)
+    # Frames that predate CLR_Z_Cap (or a degenerate window) fall back to the raw |z|
+    # position against the measured ~1.9 ceiling rather than dropping conviction entirely.
+    mag = mag.fillna(((z.abs() - thr) / max(1.9 - thr, 1e-9)).clip(0.0, 1.0))
     base = 0.30 + 0.70 * mag
     cost_f = 1.0 if cost_ok(cost_bps, study) else 0.5
     df['Conviction'] = (base * cost_f).clip(0.0, 1.0).fillna(0.0)
