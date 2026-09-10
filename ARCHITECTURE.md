@@ -1,99 +1,153 @@
 # Sanket — Engine Architecture & Research Basis
 
 > This document records *why* the engine is built the way it is. Sanket runs **one screening
-> condition**: **Close-Location Reversal (CLR)**, ported from [`sb_v8.pine`](sb_v8.pine) —
-> whose title's "CLR" half was a family tag for session-breadth indicators whose premise this
-> engine refutes, so only the descriptive half carries over.
+> condition**: the **Siddhi Conviction Oscillator**, ported from [`siddhi.pine`](siddhi.pine).
 >
 > Two kinds of number appear below, and the distinction matters. Numbers about **the source
-> study** (39 instruments, 1993–2026) come from the Pine header — it is the primary source and
-> this document summarises it; if they disagree, the Pine is right. Numbers about **your
-> universe** are measured live by [`edge.py`](edge.py) and appear only in the app, never here —
-> nothing about your symbols is hardcoded anywhere in this system.
+> indicator** (eleven instruments across four timeframes) come from the Pine header — it is the
+> primary source and this document summarises it; if they disagree, the Pine is right. Numbers
+> about **your universe** are measured live by [`edge.py`](edge.py) and appear only in the app,
+> never here — nothing about your symbols is hardcoded anywhere in this system.
 
 ## The signal
 
-One measurement, on one variable:
+Two quantities per bar, multiplied, then summed over a window.
+
+**Conviction** — how much of the bar's travel became net displacement:
 
 ```
-sb_clv = ((close - low) - (high - close)) / (high - low)
+c = (close - close[1]) / TrueRange              bounded -1 … +1
 ```
 
-**Where price closes inside its own daily range.** −1 = closed on the low, +1 = on the high.
-Its z-score over a trailing window (252 daily bars) is the entire engine.
+True range, so gaps are included and a gap-and-go scores as the strong bar it is. A bar that
+opens at its low and closes at its high scores +1. A wide, violent bar that closes where it
+started scores **0** — which is correct, because nothing was accomplished.
 
-The sign is the finding: **a strong close predicts WEAKNESS.** IC −0.0634, z −7.96,
-p_bonf 1.2e-13 — the strongest result in the study by four orders of magnitude, and negative.
-So the fade of a *weak* close is the buy.
+**Participation** — how much of the market showed up, relative to its own recent average:
+
+```
+w = min(volume / EMA(volume, 20), 3.0)
+```
+
+Capped, because expiry days, index rebalances and block prints produce volume spikes that would
+otherwise dominate the window for its whole length. On symbols with no volume the identical
+construction runs on **relative true range** instead, automatically, so index spot works without
+configuration.
+
+**The oscillator** is the participation-weighted share of effort that went somewhere:
+
+```
+raw  = 100 · SMA(c·w, 20) / SMA(|c|·w, 20)
+osc  = EMA(100 · tanh(raw / 3σ(raw, 200)), 3)      adaptive self-normalisation, bounded ±100
+sig  = EMA(osc, 9)
+hist = osc - sig                                    THE SCREENING VARIABLE
+```
+
+### Why the rescaling exists
+
+The raw share **cannot reach its own bounds**. ±100 would require nearly every bar in the window
+to close at its extreme in the same direction; in practice the series lives inside roughly ±15.
+Fixed thresholds against a range the series never visits are thresholds that never fire, and the
+oscillator stays tangled with its own signal line near zero. Mapping through `100·tanh(raw / 3σ)`
+is bounded, smooth, monotone and free of a clipping artifact, and it is calibrated so the ±30 zone
+is occupied about a third of the time and the ±60 zone about 4%. Measured on real data the outer
+zone runs 3.2–4.3%, so that calibration holds.
+
+### Why divergence between effort and result means something here
+
+Divergence on a momentum oscillator is frequently an artifact: RSI is a function of recent price
+change, so when price decelerates the oscillator falls whether or not anything changed underneath.
+The divergence is *arithmetic*.
+
+Here the numerator and denominator move apart for a reason that is not. A rally into a higher high
+on heavy volume and wide ranges that closes badly adds a **lot** to `Σ|c|·w` and very little to
+`Σ c·w`. The oscillator flattens or falls while price rises. That is effort without result —
+distribution in the Wyckoff sense — and it is a statement about how the advance is being *paid
+for* rather than about how fast price moved.
 
 ### The two events (the only two signals in the system)
 
 | Event | Condition | Status |
 |:---|:---|:---|
-| **▲ BUY** (green triangle) | `z < −1.5σ` — a weak close | **Holdout-confirmed in both eras.** Drift-free discovery +0.0546 [+0.031,+0.078], holdout +0.0534 [+0.028,+0.078] |
-| **◆ SELL** (yellow diamond) | `z > +1.5σ` — a strong close | **Did NOT confirm out of sample.** Drift-free holdout +0.0094, CI [−0.030,+0.052] |
+| **▲ BUY** (green triangle) | `hist` crosses **above** zero | The oscillator has pulled above its own signal line: conviction is turning up |
+| **◆ SELL** (yellow diamond) | `hist` crosses **below** zero | The oscillator has dropped under its signal line: conviction is turning down |
 
-The source indicator labels the sell side **CAUTION** rather than a short entry, for exactly
-that reason. Sanket surfaces it as a sell signal (a configured product decision), and carries
-the caveat with it everywhere it appears: the Action Dashboard tab description, the Signal
-Reference cards, and the Excel legend.
+A **state change, not a level.** Nothing fires while the histogram merely sits on one side of
+zero, and the two sides are symmetric — unlike the close-location engine this replaces, where the
+sides meant different things and only one survived its own holdout.
 
-## How it was validated
+`SID_K` scales an optional magnitude gate — the histogram must cross `± k·σ(hist)` rather than
+`± 0`. **It defaults to 0.0, which is exactly the zero-crossing above.** The knob exists so the
+parameter can be *measured* by `edge.py` rather than argued about; nothing in the shipped default
+path uses a non-zero value.
 
-The search moved to daily data because intraday has no statistical power. Its predecessors
-(v3/v4/v5, session breadth) were measured over 370,686 intraday bars on 82 datasets — but that
-is only ~601 *independent* observations, where the smallest provable effect is 0.114 ATR, bigger
-than most intraday edges ever get. None had forward directional edge.
+## What the source actually measured
 
-So: **39 instruments, 251,200 daily bars, 1993–2026**, spanning dot-com, GFC, ZIRP, COVID and
-the inflation cycle. 22 pre-declared features × 3 horizons = 66 tests, Bonferroni corrected,
-block-bootstrapped by date. Discovery 1993–2013; holdout 2014–2026 sealed and opened once.
+Quoted at face value, including the parts that do not flatter the shipped configuration.
 
-**What died:** `sb_effort` (the literal SB core) at p_bonf = 1.00 every horizon, with its own 21d
-and 63d versions disagreeing on sign. `sb_breadth` likewise. All five momentum variants, both
-MA-trend variants, overnight/intraday decomposition, volatility change, efficiency ratio.
+| Check | Result |
+|:---|:---|
+| Bare zero-crossing (`k = 0`, what ships here) | +0.0205R on the primary futures (t = 1.7) · **+0.0015R, t = 0.2** on eight held-out instruments |
+| Fire rate at `k = 0` | ~113 per 1000 bars — roughly one every nine bars |
+| Participation weighting | Earns its place: switching it **Off** is the worst available setting in all three signal architectures tested |
+| Adaptive scaling calibration | Holds — 3.2–4.3% occupancy beyond the outer zone against the 4% claimed |
+| Regular divergence | The most consistent component; the only element positive on both the primary futures and the held-out instruments in nearly every configuration |
+| Continuation trigger | +0.036R on gold/silver/crude, **−0.016R** on eight others — it changes sign off the primaries |
+| Ungated reversal trigger | +0.0003R, **t = 0.01** — the loudest marker on the pane and empty |
+| Hidden divergence | No edge on any universe |
+| Any of it, corrected for overlapping forward windows | **Nothing reaches significance.** Best case across 48 horizon/bracket cells: t = 1.9 |
 
-**What lived:** `sb_clv` alone. Holdout: h=1 IC −0.0251 (p 3.5e-03), h=5 IC −0.0254 (p 4.6e-04).
+Method, for what those numbers mean: entry at the next bar's open, bracketed at two ATR of target
+against one ATR of stop, twenty bars maximum, stop assumed to fill first when a bar spans both;
+quoted as edge in R over a baseline applying the identical bracket to every bar in both directions,
+so drift and bracket geometry are controlled for. Fitted on the first 60% of each series, tested on
+the last 40%, re-tested on eight instruments never used in fitting. 26 years of daily data on GC,
+SI, CL, HG, NG, ES, SPY, QQQ, TLT, 6E and BTC.
 
-## The edge is small and decaying — do not let the significance mislead you
+**Read every number above as a ranking, not a promise** — which is what its author says.
 
-| Era | IC | | Era | IC |
-|:---|:---|---|:---|:---|
-| 1993–1999 | −0.113 | | 2014–2019 | −0.025 ← holdout |
-| 2000–2006 | −0.065 | | 2020–2026 | −0.026 ← holdout |
-| 2007–2013 | −0.056 | | | |
+## Do not tune this to a backtest
 
-Four times weaker than the 1990s, now stable at roughly a quarter of it. This is an overlay,
-not a system.
+900 randomised parameter sets were scored. The correlation between a configuration's fitted edge
+and its edge on unseen instruments is **approximately zero** (−0.07 to +0.11 depending on
+architecture). The optimiser's best-fitted settings lost **81%** of their edge in the same assets'
+later period and went **negative** on new ones.
+
+The two preferences that held across every architecture tested were a lookback at or above 20 and
+an inner zone at or below 40 — both respected by the shipped defaults. Every other value Sanket
+uses is the source indicator's own default, and none is adjustable in the UI for exactly this
+reason.
 
 ## Why the EVENT form — the single most important design decision
 
-Holding a **continuous** position on this signal turns over daily, costs 12%/yr at 3bp, and is
-fatal: net Sharpe **−0.48**. Firing only on `|z| > 1.5` (9.3% of days) and holding ~10 days cuts
-turnover **~35×**. Measured on the shipped logic:
+Two lines that both hug zero **cross constantly**. A continuous position on that separation turns
+over every time they touch, and the turnover — not the signal — decides whether anything is
+tradeable at all. Firing on the crossing and holding a declared horizon is what makes the rule
+costable.
 
-| Scope | Cost | Discovery | Holdout |
-|:---|:---|:---|:---|
-| All 39 instruments | 3bp | NET +0.124 | NET +0.132 |
-| US equity idx + sectors | 3bp | — | NET +0.430 |
+Cost is charged in the units the edge is measured in: `cost_bps / 1e4 / σ_h`. That is why the edge
+dies on low-volatility instruments — 3bp against a 4% 10-day sigma costs 0.008 vol units, but
+against a 1% sigma it costs 0.030, a real drag on an edge of ~0.03. A per-class cost table cannot
+express that; this can.
 
-Cost breakeven is ~7bp pooled; on US equity indices and sectors it stays positive past 10bp.
-**Turnover, not signal strength, was the binding constraint** — and the event design is the one
-thing that fixes it. This is why the threshold and the hold horizon are not decoration: at
-`thr = 1.0` the signal fires 44% of days and loses to costs; at `2.0` it fires 0.1% and failed
-holdout; `1.5` fires 9.3% and is net-positive in both eras.
+The source makes the same point in its own units: **a round trip costs about 0.02R on daily bars,
+0.045R on hourly, 0.05R on 15m and 0.09R on 5m — against a best-case measured edge near 0.05R.**
+On 5-minute bars the cost is roughly *double* anything this construction has been shown to produce.
+Daily is the only timeframe with real headroom; crude at 1h and anything at 5m is cost-negative
+before it is anything else.
 
 ## Scope — MEASURED on your universe, not inherited from a table
 
-The source study's edge was drift-free and holdout-confirmed only on US equity indices and
-US sectors. Those are *its* 39 instruments. Earlier versions of this app hardcoded its
-eight per-class results and applied them as a conviction multiplier. That was indefensible:
+The source indicator's results change sign between the instruments it was calibrated on
+(gold, silver, crude) and the eight it held out. Those are *its* eleven instruments. Earlier
+versions of this app hardcoded a per-class expectancy table and applied it as a conviction
+multiplier. That was indefensible:
 
-- it could not cover a universe the study never touched (NSE F&O single names, NSE thematic
-  ETFs, crypto);
+- it could not cover a universe the source never touched (NSE F&O single names, NSE thematic
+  ETFs, most of what this app screens);
 - it made an **asset-class** claim and applied it to **instrument-level** decisions;
-- it could not report that the edge had stopped working — while the study's own headline is
-  that the edge decayed 4× since the 1990s;
+- it could not report that a component had stopped working — while the source's own headline is
+  that *nothing it measured reaches significance*;
 - and it was unfalsifiable in-product: you could not check it against your own data.
 
 So the app measures it. [`edge.py`](edge.py) runs an event study on **your symbols**, at the
@@ -102,7 +156,7 @@ the first place. Seven steps, each of which kills one specific way of fooling yo
 
 | # | Step | The failure it prevents |
 |:--|:---|:---|
-| 1 | **Event study at the declared horizon** — enter the bar after the signal closes, hold `horizon` (the study's EXEC-B) | Measuring the continuous form, which turns over daily and nets −0.48 Sharpe — a question nobody trades |
+| 1 | **Event study at the declared horizon** — enter the bar after the signal closes, hold `horizon` (EXEC-B) | Measuring the continuous form, whose turnover is set by how often two lines near zero touch — a question nobody trades |
 | 2 | **Drift removal, within era** — subtract each symbol's own mean forward return | Every long signal on an equity universe in a bull market prints a profit; you'd have measured beta |
 | 3 | **Vol normalisation** — divide by the symbol's own forward σ | FX, bond ETFs and small-caps landing on incomparable scales |
 | 4 | **Sign folding** — a buy scores + when it beat drift, a sell scores + when it fell short | Reporting the two sides on opposite conventions |
@@ -156,10 +210,14 @@ Hence a **separate, deeper fetch** for the study, distinct from the screening fe
 The naive implementation — fetch 15 years for the whole universe, run the analysis pipeline,
 hold the panel — is several hundred MB and OOMs. Three choices avoid it:
 
-1. **Lean.** The study computes the close-location z and forward returns *only*. No volume
-   profile (a Python double loop, the app's slowest path), no regime engine, no order flow.
+1. **Lean.** The study computes the conviction oscillator and forward returns *only*. No volume
+   profile (a Python double loop, the app's slowest path), no regime engine, no order flow. It
+   calls `engine.siddhi_oscillator` **directly** rather than re-deriving the rule inline, so
+   every guard in the engine applies to the study by construction — the previous version
+   re-derived it, which meant a guard added in one place had to be mirrored in the other or the
+   study would silently measure a rule the screener does not fire.
 2. **Streaming.** Symbols are fetched and reduced in chunks of 20; each chunk's frames are
-   released before the next is fetched. What accumulates is event tuples at a ~9% fire rate.
+   released before the next is fetched. What accumulates is event tuples at a ~11% fire rate.
 3. **Sampled.** Universes above 80 symbols are sampled with a fixed seed (so the answer is
    reproducible, and not biased toward one alphabetical/sector slice). This costs almost
    nothing statistically, because the participation ratio saturates far below 80.
@@ -177,10 +235,12 @@ Streaming being *flat in universe size* is the property that matters; the naive 
 
 ### The reference prior
 
-The source study's per-class numbers survive in `engine.CLASS_EDGE` / `CLASS_HIT` purely as a
-**labelled comparison row**: "the source study measured *US index / ETF* at +0.121; here is
-what we measure on your universe." `compute_ranking` does not read them, and
-`instrument_class` exists only to choose which row to display.
+The source indicator's per-group numbers survive in `engine.CLASS_EDGE` / `CLASS_HIT` purely as
+a **labelled comparison row**: "the source measured *Commodity* at +0.036 on gold, silver and
+crude, and −0.016 on eight held-out instruments; here is what we measure on your universe."
+`compute_ranking` does not read them, `instrument_class` exists only to choose which row to
+display, and `ESTABLISHED_CLASSES` is deliberately **empty** — the source establishes none, and
+the app says so rather than staying silent about it.
 
 One operative constant remains: `POOLED_BREAKEVEN_BPS = 7.0`. Until a study exists there is
 nothing to compare a cost against, so the cost gate falls back to the study's pooled
@@ -213,66 +273,94 @@ get quoted as evidence of absence.
 
 ## How to trade it — measured, not asserted
 
-- **Horizon** 5–10 trading days. There is **NO intraday edge** here. None was found, none is claimed.
-- **Entry** the next session's open after the signal bar closes. Backtested exactly this way
-  (EXEC-B), because entering at the signal close is not available to most traders and tests
-  barely different anyway.
-- **BUY** weak close (z < −1.5) → expect mean reversion up. The tradeable side.
-- **SELL** strong close (z > +1.5) → the side that failed holdout confirmation. Stronger evidence
-  for trimming longs than for initiating shorts.
+- **Horizon** 10 bars — the lookback *is* the horizon, so a 20-bar window is a swing instrument
+  on daily bars and a scalping one on 5-minute bars. There is **no intraday claim** here, and the
+  cost arithmetic above says why there could not be.
+- **Entry** the next session's open after the signal bar closes (EXEC-B), because entering at the
+  signal close is not available to most traders and tests barely different anyway.
+- **BUY** the histogram crossed above zero → conviction turned up.
+- **SELL** the histogram crossed below zero → conviction turned down.
+- **Read the level as context, never as the signal.** Above zero says participation-weighted
+  effort is net upward; a zone reading says how one-sided the window is. Both are the *setting*
+  for a signal, not a signal. Only the crossing is the event.
 
 ## The engine — [`engine.py`](engine.py)
 
-### 1. Per-symbol signal · `add_clr_features(df, z_look, thr, horizon)`
+### 1. Per-symbol signal · `add_siddhi_features(df, **settings)`
 ```
-CLR_CLV       = ((C−L) − (H−C)) / (H−L)          in [−1, +1]
-CLR_Z         = (CLR_CLV − SMA(CLR_CLV, z_look)) / STDEV(CLR_CLV, z_look)
-Fade_Score   = −CLR_Z                             positive = bullish
-buy_cond     = CLR_Z < −thr                       green triangle
-sell_cond    = CLR_Z > +thr                       yellow diamond
-CLR_Hold_Dir  / CLR_Hold_Age                       the hold window, Pine's sinceSig/sigDir
-CLR_State     = WARMING UP / BUY / SELL / NEUTRAL
+c            = (C − C[1]) / TrueRange              conviction, bounded [−1, +1]
+w            = clip(V / EMA(V, 20), 0, 3.0)        participation; true-range fallback, automatic
+SID_Raw      = 100 · SMA(c·w, 20) / SMA(|c|·w, 20)
+SID_Osc      = EMA(100 · tanh(SID_Raw / 3σ), 3)    bounded ±100 under adaptive scaling
+SID_Sig      = EMA(SID_Osc, 9)
+SID_Hist     = SID_Osc − SID_Sig                   THE SCREENING VARIABLE
+SID_Hist_Z   = SID_Hist / σ(SID_Hist, 200)         in its own σ — comparable ACROSS symbols
+SID_Impulse  = Δ SID_Hist / σ(SID_Hist, 200)       crossing force
+buy_cond     = SID_Hist crosses ABOVE 0            green triangle
+sell_cond    = SID_Hist crosses BELOW 0            yellow diamond
+SID_Hold_Dir / SID_Hold_Age                        the hold window
+SID_Zone     = Extreme Bull / Bull / Neutral / Bear / Extreme Bear   (context, never a gate)
+SID_State    = WARMING UP / DEGENERATE / BUY / SELL / NEUTRAL
 ```
-`STDEV` uses `ddof=0` — Pine's `ta.stdev` is the *population* standard deviation. Using the
-sample stdev would shift every z and drift the fire rate off the measured 9.3%.
 
-A symbol needs `z_look + 2` bars before it can signal (the Pine's own warmup refusal); shorter
-histories are excluded from the screen with a "warming up" count surfaced in the run stats.
+**Numerical fidelity to the Pine is deliberate.** `ta.ema` seeds on its first value with
+`alpha = 2/(n+1)`, which is `ewm(span=n, adjust=False)`. `ta.stdev` is the **population** standard
+deviation, so `ddof=0` throughout. `ta.tr(true)` includes the gap and falls back to `high−low` on
+the first bar. And the hollow-bar volume carry is reproduced: a holiday, half session or thin
+overnight print would otherwise feed NaN into the participation EMA and kill it for a whole
+averaging window, silently dropping the series back to range weighting — measured in the source,
+volume weighting was live on only 73% of bars before that fix, and as low as 31% on 1h futures.
 
-**Weekly is an extrapolation.** The study was daily. `z_look` becomes 52 on the Weekly timeframe
-(one year, the closest structural analogue) and the Engine Status card labels it as extrapolated.
+**Warmup is additive, not a maximum**: `norm + length + vol_n + smooth + 2`, about **245 daily
+bars** at the defaults. Taking a maximum would let the first adaptive σ be computed across
+zero-filled bars — `raw` is pinned to NaN for its first `length` bars while its SMA warms — biasing
+that σ low and so *inflating* the scaling exactly where the plot begins. Shorter histories are
+excluded from the screen with a "warming up" count surfaced in the run stats.
 
-### 2. Cross-sectional ranking · `compute_ranking(df, cost_bps, thr, study)`
-Ranks the universe by `Fade_Score` (weakest closes first). `Side` is `Buy` / `Sell` / `—`, gated
-on ±`thr`: **only a fired event is actionable.** Sub-threshold rows still appear in the ranking
-tables — the score is continuous — but their Side reads `—`, because the measured edge is in the
-event, not in the continuous score.
+`SID_Hist_Z` exists because the raw histogram is **not comparable across symbols** — dividing by
+its own σ over the normalization window is what makes one instrument's reading rankable against
+another's.
+
+### 2. Cross-sectional ranking · `compute_ranking(df, cost_bps, k, horizon, study)`
+
+Scores on `SID_Hist_Z`; `Side` comes from whether the histogram **actually crossed on this bar**.
+Ranking on the *level* while firing on the *crossing* is deliberate: the level says who is
+currently in control, the crossing says when that changed, and the claim is only about the
+crossing. Rows that did not cross still appear in the tables — the score is continuous — but their
+Side reads `—`, however extreme their level.
+
+**Priority is banded, and it has to be:**
 
 ```
-Conviction = clip(0.30 + 0.70·clip((|z| − thr) / (CLR_Z_Cap − thr), 0, 1)) × cost_factor
-CLR_Z_Cap  = (1 ∓ mean)/sigma — the largest |z| this bar's own window could produce
+FIRED TODAY      2 + conviction          a crossing on this bar, strongest first
+IN HOLD WINDOW   1 + remaining fraction  a crossing still inside its horizon
+CONTEXT          tanh(SID_Hist_Z)        no crossing; just who is in control
+```
+
+The previous engine could sort the universe on its raw score because there the extreme readings
+*were* the fired signals — a buy was the most negative z on the board. A zero-crossing is the
+opposite: at the instant it fires the histogram is, by construction, ~0, so sorting on the level
+would bury every fresh signal in the middle of the list. The bands cannot overlap, so an
+actionable row always outranks a merely bullish one — which is the same statement `Side` and
+`Signal_Reason` already make.
+
+```
+Conviction = clip(0.30 + 0.70·tanh(|SID_Impulse|)) × cost_factor
 cost_factor: 1.00 if the cost gate passes, else 0.50
              — measured from `study` when one exists, else the pooled ~7bp prior
 ```
-Conviction is a *relative weighting*, not a probability, and it is labelled that way in every
-tooltip. Note what is deliberately **absent**: no expectancy term (that is measured by
-`edge.py` and *reported*, never folded into a number the reader cannot audit), no per-name
-volatility factor, no regime factor, no live-IC scaling.
 
-The magnitude term used to be `|z|/3`. That assumed the z-score reaches 3, and it cannot: `clv`
-is bounded in `[-1, +1]`, so with a trailing sigma near 0.5 the ceiling is about **1.9**. The old
-scale pinned 80% of all fires below 0.70 — presenting a 0.65–0.75 band as if it were 0–1 — while
-being a *pure* function of |z| (Spearman rho against |z| was exactly 1.000000), so it duplicated
-the Close-Loc z column rather than adding to it. Scaling against each bar's own arithmetic
-ceiling fixes both: the value spans 0.30–1.00, and two bars at an identical |z| of 1.70 can read
-0.42 and 1.00 depending on how much room their windows had (rho falls to 0.93).
+**Conviction is built from the crossing force, not the level**, for the same reason. Scaling it
+off `|hist|` would score every fresh signal at ~0 and every stale one high, which is backwards.
+What distinguishes crossings is how forcefully the gap opened, and the one-bar change in the
+histogram — in σ of its own distribution, so one sigma is the natural unit and the transform needs
+no fitted constant — is the only quantity available at fire time that separates them.
 
-**It is a better description, not a validated forecast.** Run through the same Nifty 50 study
-that motivated the change, cap-relative conviction showed no out-of-sample discrimination either
-(0 of 8 slope tests). Nothing gates or ranks on it. And because conviction is derived from |z|,
-it must never be multiplied into a score that already carries a |z| term — the Confluence score
-used to do exactly that, and no longer does.
-
+It is a *relative weighting*, not a probability, and it is labelled that way in every tooltip.
+Note what is deliberately **absent**: no expectancy term (that is measured by `edge.py` and
+*reported*, never folded into a number the reader cannot audit), no per-name volatility factor, no
+regime factor, no live-IC scaling. Nothing has established that a larger crossing step predicts a
+better outcome; it does not gate or scale any ranking beyond its own band.
 
 ### 3. Bar convention — one deliberate difference from the Pine
 The Pine reads `z[1]` inside `request.security(..., "D", ...)` so an *intraday* chart cannot
@@ -284,7 +372,8 @@ not closed yet is provisional until it does.**
 ## What is context, and never a signal input
 
 Everything else the app computes is descriptive. It is displayed beside the signal, aggregated in
-the range-mode charts, and exported — but it does not enter `CLR_Z`, `Side`, or `Conviction`:
+the range-mode charts, and exported — but it does not enter `SID_Hist`, `Side`, or
+`Conviction`:
 
 - **Order flow** — inferred bar delta, CVD and its slope, `Delta_Z`, absorption, rolling buy
   share, volume profile (POC/VAH/VAL, `VA_Pos`), RVOL. OHLC proxies, validated three times to add
@@ -296,23 +385,27 @@ the range-mode charts, and exported — but it does not enter `CLR_Z`, `Side`, o
   It informs the Regime / Vol columns and the range-mode Regime tab.
 - **Forward returns** (`Ret_1b/5b/10b/21b`, Historical Range only) — evaluation **labels**.
 
-`Delta_Z` and `CLR_Z` are cousins, not duplicates: `Delta_Z` z-scores the *volume-weighted* close
-location, `CLR_Z` the raw close location. Only the latter is the signal.
+`Delta_Z` is a *close-location* proxy and is unrelated to the oscillator: it z-scores the
+volume-weighted position of the close inside its bar, where Siddhi measures signed displacement
+against true range. Only the latter is the signal.
 
 ## Outputs (per symbol)
 
 | Column | Meaning |
 |:---|:---|
-| `CLR_CLV` | close location in [−1, +1] |
-| `CLR_Z` | **the signal** — z-score of the close location |
-| `Signal` / `Fade_Score` / `CLR_Score` | `−CLR_Z`; positive = bullish. What every table ranks on |
+| `SID_Raw` | raw participation-weighted share of effort that became displacement |
+| `SID_Osc` / `SID_Sig` | the oscillator (bounded ±100) and its signal line |
+| `SID_Hist` | **the screening variable** — `SID_Osc − SID_Sig`; its crossing of zero is the signal |
+| `Signal` / `SID_Hist_Z` / `SID_Score` | the histogram in its own σ. What the universe is ranked on |
+| `SID_Impulse` | crossing force — Δhistogram in σ. What separates one crossing from another |
+| `SID_Zone` | oscillator position vs the ±30 / ±60 zones. Context, never a gate |
 | `buy_cond` / `BUY_Today…BUY_5d` | green-triangle event and its age |
 | `sell_cond` / `SELL_Today…SELL_5d` | yellow-diamond event and its age |
 | `Side` | `Buy` / `Sell` / `—` (context only) |
-| `Conviction` | `[0,1]` = \|z\| within its attainable range (vs `CLR_Z_Cap`) × cost gate. No expectancy term |
-| `CLR_State` | WARMING UP / BUY / SELL / NEUTRAL |
-| `CLR_Hold_Dir` / `CLR_Hold_Age` | hold-window direction and bars elapsed |
-| `CLR_Rank_Pct`, `Priority_Long/Short(_pct)` | cross-sectional ordering keys |
+| `Conviction` | `[0,1]` = `tanh(\|SID_Impulse\|)` × cost gate. No expectancy term |
+| `SID_State` | WARMING UP / DEGENERATE / BUY / SELL / NEUTRAL |
+| `SID_Hold_Dir` / `SID_Hold_Age` | hold-window direction and bars elapsed |
+| `SID_Rank_Pct`, `Priority_Long/Short(_pct)` | cross-sectional ordering keys (priority is banded) |
 | `Signal_Reason` | plain-language read of the row, including the measured verdict for this universe |
 
 ## Known limitations (disclosed, not hidden)
@@ -327,16 +420,23 @@ location, `CLR_Z` the raw close location. Only the latter is the signal.
   reported as one split and does not pretend to be more.
 - **The study samples large universes** (80-symbol cap, fixed seed). Defensible because the
   participation ratio saturates, but it is a sample, and the app says so.
-- **The edge decays.** A quarter of its 1990s strength. Stable there for two holdout eras, but
-  nothing guarantees the next one.
-- **A 0.13–0.43 net Sharpe is an overlay, not a system.** Position sizing, risk limits and
-  portfolio construction are all outside this tool.
-- **Weekly is unvalidated.** The study was daily; the weekly variant is a structural analogue.
+- **Nothing the source measured is significant.** Best case t = 1.9 across 48 horizon/bracket
+  cells, and the bare zero-crossing that ships here is its *weakest* tested configuration
+  (+0.0015R, t = 0.2, on held-out instruments). The app marks the trigger `⚠ BARE` rather than
+  burying that.
+- **The parameters are not transferable evidence.** Fitted and out-of-sample edge are
+  approximately uncorrelated across 900 configurations, which is why nothing here is tunable.
+- **This is an overlay, not a system.** Position sizing, risk limits and portfolio construction
+  are all outside this tool.
+- **Adaptive scaling is relative, not absolute.** A reading of +60 means conviction is extreme
+  *for this instrument on this timeframe over the normalization window*. In a dead range the
+  scaling will amplify small absolute imbalances into large readings — which is why `SID_Raw` is
+  carried alongside, and worth a glance when the pane looks dramatic and the chart does not.
 - **Costs decide everything.** Past the class breakeven the event form is net negative, and the
   cost gate halves conviction to say so — but it cannot make the trade profitable.
 - **A live session is provisional.** Today's row can change until the close.
 - **[`research.py`](research.py) is a legacy harness.** It documents the cross-sectional momentum
-  study that the *previous* engine was built on; it does not validate CLR. For the source
-  study's evidence read the [`sb_v8.pine`](sb_v8.pine) header; for evidence about *your*
+  study an older engine was built on; it does not validate Siddhi. For the source's own
+  measurements read the [`siddhi.pine`](siddhi.pine) header; for evidence about *your*
   universe, run the Edge Study. Trust the app's measurement over this document, this document
   over the Pine header for how the app behaves, and neither over `research.py`.

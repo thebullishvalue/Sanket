@@ -354,11 +354,6 @@ def warmup_bars(length: int = SID_LENGTH, norm: int = SID_NORM,
     return int(norm) + int(length) + int(vol_n) + int(smooth) + 2
 
 
-def min_bars_for(length: int = SID_LENGTH, **kw) -> int:
-    """Alias for :func:`warmup_bars`, kept for call sites that read as "minimum bars"."""
-    return warmup_bars(length, **kw)
-
-
 # ════════════════════════════════════════════════════════════════════════════════════════
 # THE OSCILLATOR  (pure numeric core — no DataFrame, so it is trivially testable)
 # ════════════════════════════════════════════════════════════════════════════════════════
@@ -580,11 +575,6 @@ def add_siddhi_features(df: pd.DataFrame,
         default='NEUTRAL',
     )
     return df
-
-
-# Backwards-compatible alias. The previous engine's entry point was `add_clr_features`;
-# anything still calling it gets the Siddhi features, because there is only one engine.
-add_clr_features = add_siddhi_features
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════

@@ -83,7 +83,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v6.4.0"
+VERSION = "v7.0.0"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures. The source indicator (siddhi.pine) titles itself
@@ -601,7 +601,7 @@ def _render_edge_study_panel(sid: SiddhiSettings, study) -> None:
     with m3: ui.render_metric_card("Independence", f"{study.part_ratio:.1f}",
                                    f"of {study.n_symbols_studied} names studied", "info")
     with m4: ui.render_metric_card("Fire Rate", f"{study.fire_rate*100:.2f}%",
-                                   "of bars · source study ~9.3%", "info")
+                                   "of bars · source measured ~11%", "info")
 
     st.dataframe(
         pd.DataFrame(rows), width='stretch', hide_index=True,
@@ -646,11 +646,12 @@ def _render_edge_study_panel(sid: SiddhiSettings, study) -> None:
         f'{study.horizon}-bar forward returns, whole dates absorb the cross-sectional '
         f'correlation. Parameters are never tuned here: this measures a fixed rule, it does not '
         f'search for a better one.<br><br>'
-        f'<b style="color:var(--ink-secondary);">Reference prior.</b> The source study measured '
-        f'<b>{html.escape(study.iclass)}</b> — the nearest asset class it covered — at '
+        f'<b style="color:var(--ink-secondary);">Reference prior.</b> The source indicator measured '
+        f'<b>{html.escape(study.iclass)}</b> — the nearest instrument group it covered — at '
         f'<b>{_pe:+.3f}</b> vol, {_ph:.1f}% hit'
-        f'{" (established)" if _pest else " (not established)"}, on its own 39 instruments over '
-        f'1993–2026. Shown only so the two can be compared. Nothing in this app computes from it.'
+        f'{" (established)" if _pest else " (NOT established — the source establishes none)"}, on '
+        f'its own eleven instruments across four timeframes. Shown only so the two can be '
+        f'compared. Nothing in this app computes from it.'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -754,7 +755,7 @@ def _fetch_study_chunk(symbols: list, start, end):
 
 def run_edge_study(universe, selected_index, timeframe, sid: SiddhiSettings,
                    progress_slot=None, progress_offset=0, progress_scale=100):
-    """Measure CLR's out-of-sample expectancy on this universe. Returns an EdgeStudy.
+    """Measure Siddhi's out-of-sample expectancy on this universe. Returns an EdgeStudy.
 
     Streams chunk-by-chunk so peak memory stays a few MB regardless of universe size (see
     the section header). Partial coverage is reported rather than fatal: if a chunk fails to
@@ -858,7 +859,7 @@ def run_edge_study(universe, selected_index, timeframe, sid: SiddhiSettings,
     console.item("Coverage", f"{study.n_symbols_studied} symbols · {study.start} to "
                              f"{study.end} · participation ratio {study.part_ratio:.1f}")
     console.item("Fire rate", f"{study.fire_rate*100:.2f}% of bars "
-                              f"(source study measured ~9.3%)")
+                              f"(source measured ~113 per 1000 bars at k=0)")
     console.end_phase("EDGE STUDY")
     _p(100, "Edge Measured", f"{study.n_symbols_studied} symbols")
     return study
@@ -2283,8 +2284,8 @@ def run_regime_analysis(df):
 
     Pure per-name RISK CONTEXT. Its Regime / Vol_Regime / Change_Point outputs are
     displayed alongside the signal and aggregated in the range-mode Regime tab; they do
-    NOT enter the CLR signal or its conviction, which is a function of the
-    conviction oscillator, the instrument class's measured expectancy, and the cost gate.
+    NOT enter the Siddhi signal or its conviction, which is a function of the conviction
+    oscillator and the cost gate, and nothing else.
     """
     hmm    = AdaptiveHMM()
     garch  = GARCHDetector()
@@ -2368,7 +2369,7 @@ def run_regime_analysis(df):
 
 
 def _classify_signal_type(row) -> str:
-    """Return the CLR signal type for a single bar row (pandas Series).
+    """Return the Siddhi signal type for a single bar row (pandas Series).
 
     A fired event wins; otherwise the row falls back to its flow zone (context only).
     Matches the vectorised np.select in the harvest path.
@@ -2639,7 +2640,7 @@ def render_sidebar() -> SidebarState:
             disabled=not date_range_valid,
         )
 
-        # Engine Status panel — rendered in every mode. Surfaces the CLR engine, the
+        # Engine Status panel — rendered in every mode. Surfaces the Siddhi engine, the
         # instrument class derived from the universe above, that class's measured
         # out-of-sample expectancy, and the four Pine parameters. Returns the resolved
         # SiddhiSettings for this run.
@@ -3078,7 +3079,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe, wt2_len=20, wt2_type="ALMA",
                             external_progress_slot=None, progress_offset=0, progress_scale=100,
                             sid=None, study=None):
-    """Compute the per-(date, symbol) CLR frame for a date range.
+    """Compute the per-(date, symbol) Siddhi frame for a date range.
 
     Pure compute path: fetches history, runs the full / regime analyses on every symbol,
     builds the per-(date, symbol) row set with forward-return labels, and stores
@@ -3646,7 +3647,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
     """Execute correlation analysis between universe constituents and a target asset.
 
     Returns a dict with correlation data, rolling correlations, prices, and returns,
-    plus a confluence score (|correlation| × normalised CLR fade-score strength).
+    plus a confluence score (|correlation| × normalised Siddhi signal strength).
     """
     if analysis_date is None:
         analysis_date = _today_ist()
@@ -3878,7 +3879,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 target_price = _pair[target_ticker].iloc[-1] if len(_pair) else np.nan
                 target_change = np.nan
 
-            # Pull this symbol's CLR read from the screener output already computed
+            # Pull this symbol's Siddhi read from the screener output already computed
             # above, so the confluence ranking carries the live signal state.
             sid_signal = np.nan            # conviction histogram, in σ
             sid_zone = "—"
@@ -3928,10 +3929,10 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 'Target_Pct': target_change,
                 'Expected_Change': expected_change,
                 'Divergence': divergence,
-                'CLR_Signal': sid_signal,          # conviction histogram, in σ
+                'Signal_Score': sid_signal,        # conviction histogram, in σ
                 'SID_Hist_Z': sid_z,
                 'Regime_Zone': sid_zone,
-                'CLR_Signal_Type': sid_signal_type,
+                'SignalType': sid_signal_type,
                 'Side': sid_side,
                 'Conviction': sid_conv,
                 'Priority_Long':  priority_long,
@@ -4030,7 +4031,7 @@ _GREEN  = "#34D399"
 _RED    = "#FB7185"
 
 # The indicator's own marker colours, so the app and the TradingView chart read the
-# same: green triangle = BUY, yellow/amber diamond = SELL. (sb_v8.pine colorBull /
+# same: green triangle = BUY, yellow/amber diamond = SELL. (siddhi.pine C_BULL /
 # colorWarn / colorNeut.)
 _SID_BUY  = "#00E676"
 _SID_SELL = "#FFA726"
@@ -4362,7 +4363,7 @@ def render_correlation_results(corr_data: dict) -> None:
             <div style="color:#F1F5F9; line-height:1.6;">
                 Each setup type is ranked by <span style="color:#38BDF8; font-weight:600;">Confluence Score</span> (0-1)
                 = |Correlation| × normalised signal strength. Highest rank = strongest
-                overlap between the correlation relationship and a live CLR reading. Look for:
+                overlap between the correlation relationship and a live Siddhi reading. Look for:
                 <span style="font-weight:600;">(1) Score &gt;0.7</span>,
                 <span style="font-weight:600;">(2) |Div %| &gt;3%</span>,
                 <span style="font-weight:600;">(3) a fired Side (▲ / ◆), not a blank one</span>
@@ -5619,7 +5620,7 @@ def main():
     if is_first_render:
         console.header("SANKET TERMINAL — Session Start", VERSION)
         console.item("Started", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        console.item("Signal engine", "CLR — Close-Location Reversal (sb_v8.pine)")
+        console.item("Signal engine", f"{ENGINE_CODE} — {ENGINE_NAME} (siddhi.pine)")
 
     # Render sidebar and get parameters + run button state
     sbs = render_sidebar()
@@ -5684,7 +5685,7 @@ def main():
         _an_scale = (100 - _STUDY_PROGRESS_SHARE) if _measured_now else 100
 
         if mode in ("Single Date", "Pulse Narrative"):
-            header_text = "CLR Signal Screener" if mode == "Single Date" else "Pulse Narrative Analysis"
+            header_text = "Siddhi Signal Screener" if mode == "Single Date" else "Pulse Narrative Analysis"
             console.header(f"SANKET TERMINAL — {header_text}", VERSION)
             console.main_header("ANALYSIS RUN START", {
                 "Universe": universe, "Index": selected_index, "Timeframe": timeframe,
@@ -5791,28 +5792,28 @@ def main():
                     ui.render_section_header(
                         f"Pulse Narrative — {timeframe} Universe State",
                         f"{_pn_n} / {_pn_total} symbols · {_pn_date} · {sid.iclass} · "
-                        f"full universe ranked by close-location fade score",
+                        f"full universe ranked by the conviction histogram",
                         icon="zap", accent="amber"
                     )
                     _n = max(len(results_df), 1)
-                    avg_fade  = results_df['Signal'].mean()
+                    avg_hist  = results_df['Signal'].mean()
                     n_buy     = int((results_df['Side'] == 'Buy').sum())  if 'Side' in results_df.columns else 0
                     n_sell    = int((results_df['Side'] == 'Sell').sum()) if 'Side' in results_df.columns else 0
-                    weak_bias = (results_df['Signal'] > 0).sum() / _n * 100
+                    bull_bias = (results_df['Signal'] > 0).sum() / _n * 100
                     m1, m2, m3, m4 = st.columns(4)
-                    with m1: ui.render_metric_card("Universe Fade", _fmt_num(avg_fade, "{:+.3f}"),
-                                                   "Mean −z · >0 = closing weak", "neutral")
+                    with m1: ui.render_metric_card("Universe Conviction", _fmt_num(avg_hist, "{:+.3f}"),
+                                                   "mean histogram σ · >0 = leading the signal line", "neutral")
                     with m2: ui.render_metric_card("▲ BUY Fires", str(n_buy),
-                                                   f"{n_buy/_n*100:.0f}% of universe past −{sid.thr:.1f}σ",
+                                                   f"{n_buy/_n*100:.0f}% of universe crossed up",
                                                    "success" if n_buy else "neutral")
                     with m3: ui.render_metric_card("◆ SELL Fires", str(n_sell),
-                                                   f"{n_sell/_n*100:.0f}% of universe past +{sid.thr:.1f}σ",
+                                                   f"{n_sell/_n*100:.0f}% of universe crossed down",
                                                    "warning" if n_sell else "neutral")
-                    with m4: ui.render_metric_card("Weak-Close Breadth", f"{weak_bias:.0f}%",
-                                                   "symbols closing below their own mean",
-                                                   "success" if weak_bias > 50 else "danger")
+                    with m4: ui.render_metric_card("Bullish Breadth", f"{bull_bias:.0f}%",
+                                                   "symbols with the histogram above zero",
+                                                   "success" if bull_bias > 50 else "danger")
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-                    buy_narr_tab, sell_narr_tab = st.tabs(["Weakest Closes (buy side)", "Strongest Closes (sell side)"])
+                    buy_narr_tab, sell_narr_tab = st.tabs(["Long side", "Short side"])
                     with buy_narr_tab:
                         buy_rank_df = results_df.sort_values('Priority_Long', ascending=False, na_position='last')
                         st.components.v1.html(_build_narrative_table_html(buy_rank_df, side='buy', k=sid.k),
@@ -5825,8 +5826,9 @@ def main():
                 # ════ Pulse Narrative · TAB 2: SIGNAL STRENGTH ═════════════════════════════
                 with tab_strength:
                     ui.render_section_header(
-                        "Close-Location Extremes",
-                        "Top 10 each side by |z| — the most stretched closes in the universe",
+                        "Signal Strength",
+                        "Top 10 each side by priority — fired crossings first, then open hold "
+                        "windows, then the strongest levels",
                         icon="zap", accent="amber",
                     )
                     pn_top_buys  = results_df.sort_values('Priority_Long',  ascending=False, na_position='last').head(10)
@@ -5836,16 +5838,16 @@ def main():
                     _absz         = results_df['SID_Hist_Z'].abs() if 'SID_Hist_Z' in results_df.columns else pd.Series(dtype=float)
                     pn_avg_absz   = _absz.mean()
                     pn_max_absz   = _absz.max()
-                    pn_past_thr   = int((_absz > sid.thr).sum())
+                    pn_fired      = int((results_df['Side'].isin(['Buy', 'Sell'])).sum()) if 'Side' in results_df.columns else 0
                     pn_warming    = st.session_state.get("screener_run_stats", {}).get("warming_up", 0)
 
                     s1, s2, s3, s4 = st.columns(4)
-                    with s1: ui.render_metric_card("Avg |z|", _fmt_num(pn_avg_absz, "{:.2f}"),
-                                                   f"vs ±{sid.thr:.1f}σ trigger", "neutral")
-                    with s2: ui.render_metric_card("Max |z|", _fmt_num(pn_max_absz, "{:.2f}"),
-                                                   "most stretched close today", "info")
-                    with s3: ui.render_metric_card("Past Trigger", str(pn_past_thr),
-                                                   f"{pn_past_thr/_n*100:.0f}% of universe · ~9.3% is typical", "info")
+                    with s1: ui.render_metric_card("Avg |Hist|", _fmt_num(pn_avg_absz, "{:.2f}σ"),
+                                                   "how separated the two lines are", "neutral")
+                    with s2: ui.render_metric_card("Max |Hist|", _fmt_num(pn_max_absz, "{:.2f}σ"),
+                                                   "most one-sided conviction today", "info")
+                    with s3: ui.render_metric_card("Crossings", str(pn_fired),
+                                                   f"{pn_fired/_n*100:.0f}% of universe crossed on this bar", "info")
                     with s4:
                         _r = (study.get("buy", "holdout") or study.get("buy", "full")) if study else None
                         ui.render_metric_card(
@@ -5856,7 +5858,7 @@ def main():
                             _mv_kind)
                     if pn_warming:
                         st.caption(f"{pn_warming} symbol(s) excluded — fewer than {sid.min_bars} bars, "
-                                   "so the close-location z-score has no lookback yet.")
+                                   "so the oscillator chain is not warm yet.")
 
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                     pn_l, pn_s = st.columns(2)
@@ -5864,7 +5866,7 @@ def main():
                         st.markdown(
                             f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.62rem; '
                             f'font-weight:600; text-transform:uppercase; letter-spacing:0.1em; '
-                            f'color:{_SID_BUY}; margin:0 0 0.4rem 0;">▲ Top 10 Weakest Closes</p>',
+                            f'color:{_SID_BUY}; margin:0 0 0.4rem 0;">▲ Top 10 Long Side</p>',
                             unsafe_allow_html=True,
                         )
                         st.components.v1.html(
@@ -5875,7 +5877,7 @@ def main():
                         st.markdown(
                             f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.62rem; '
                             f'font-weight:600; text-transform:uppercase; letter-spacing:0.1em; '
-                            f'color:{_SID_SELL}; margin:0 0 0.4rem 0;">◆ Top 10 Strongest Closes</p>',
+                            f'color:{_SID_SELL}; margin:0 0 0.4rem 0;">◆ Top 10 Short Side</p>',
                             unsafe_allow_html=True,
                         )
                         st.components.v1.html(
@@ -5900,7 +5902,7 @@ def main():
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
                         f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
-                        f"{ENGINE_NAME} ±{sid.thr:.1f}σ · measured: {_mv_label}",
+                        f"{ENGINE_NAME} · {sid.trigger_label} · measured: {_mv_label}",
                         icon="zap",
                         accent="amber"
                     )
@@ -5932,18 +5934,18 @@ def main():
                         with mc3:
                             _sb_top = buys_df.iloc[0] if not buys_df.empty else None
                             ui.render_metric_card(
-                                "Weakest Close",
+                                "Strongest Cross Up",
                                 _sb_top['SimpleName'] if _sb_top is not None else "—",
-                                (f"z {float(_sb_top['SID_Hist_Z']):+.2f}σ" if _sb_top is not None
-                                 and pd.notna(_sb_top.get('SID_Hist_Z')) else "no BUY signals"),
+                                (f"force {float(_sb_top['SID_Impulse']):+.2f}σ" if _sb_top is not None
+                                 and pd.notna(_sb_top.get('SID_Impulse')) else "no BUY signals"),
                                 "info")
                         with mc4:
                             _ss_top = sells_df.iloc[0] if not sells_df.empty else None
                             ui.render_metric_card(
-                                "Strongest Close",
+                                "Strongest Cross Down",
                                 _ss_top['SimpleName'] if _ss_top is not None else "—",
-                                (f"z {float(_ss_top['SID_Hist_Z']):+.2f}σ" if _ss_top is not None
-                                 and pd.notna(_ss_top.get('SID_Hist_Z')) else "no SELL signals"),
+                                (f"force {float(_ss_top['SID_Impulse']):+.2f}σ" if _ss_top is not None
+                                 and pd.notna(_ss_top.get('SID_Impulse')) else "no SELL signals"),
                                 "info")
 
                         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -5958,7 +5960,7 @@ def main():
                             _r = sum(_stats[a]['count'] for a in _age_order)
                             st.markdown(
                                 f'<div style="font-family:var(--data); font-size:0.66rem; '
-                                f'color:{_tcol}; padding:0.2rem 0 0.5rem 0;">{_trend} — newest fires vs older, by |z|.'
+                                f'color:{_tcol}; padding:0.2rem 0 0.5rem 0;">{_trend} — newest crossings vs older, by crossing force.'
                                 f'</div>',
                                 unsafe_allow_html=True,
                             )
@@ -5968,27 +5970,29 @@ def main():
                         with buy_tab:
                             st.markdown(
                                 f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
-                                f'padding:0.2rem 0 0.5rem 0;">Close-location z below <b>−{sid.thr:.1f}σ</b> — a weak close '
-                                f'to fade up. Entry is the next session\'s open; the measured horizon is 5–10 bars. '
-                                f'This is the holdout-confirmed side.</div>',
+                                f'padding:0.2rem 0 0.5rem 0;">The conviction histogram crossed <b>above zero</b> '
+                                f'— the oscillator has pulled above its own signal line. Entry is the next '
+                                f'session\'s open; the declared hold is {sid.horizon} bars. Force is what separates '
+                                f'these rows from each other — the histogram itself is ~0 on a crossing bar.</div>',
                                 unsafe_allow_html=True,
                             )
                             _render_age_table(buys_df, 'buy')
                         with sell_tab:
                             st.markdown(
-                                f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
-                                f'padding:0.2rem 0 0.5rem 0;">Close-location z above <b>+{sid.thr:.1f}σ</b> — a strong close. '
-                                f'The source indicator labels this side <b>CAUTION</b> rather than a short entry: its '
-                                f'drift-free holdout was +0.0094 with a CI of [−0.030, +0.052], so it did not confirm '
-                                f'out of sample.</div>',
+                                '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
+                                'padding:0.2rem 0 0.5rem 0;">The conviction histogram crossed <b>below zero</b> '
+                                '— the oscillator has dropped under its own signal line. Symmetric with the buy '
+                                'side by construction, but symmetry is not evidence: the source indicator measured '
+                                'a bare zero-crossing as its <b>weakest</b> configuration, and nothing it measured '
+                                'reached significance. Read the Edge Study for this universe.</div>',
                                 unsafe_allow_html=True,
                             )
                             _render_age_table(sells_df, 'sell')
                     else:
                         st.info(
                             f"**No signals fired** for {selected_index} on {analysis_date} ({timeframe}). "
-                            f"All {_n_analyzed} symbols were analyzed but none closed past ±{sid.thr:.1f}σ in the last "
-                            f"5 bars — at the measured threshold that is normal (~9.3% of days fire). "
+                            f"All {_n_analyzed} symbols were analyzed but none had its conviction "
+                            f"histogram cross zero in the last 5 bars. "
                             "Try an adjacent trading date, a broader universe, or the Signal Strength tab for the "
                             "full ranking."
                         )
@@ -6004,8 +6008,9 @@ def main():
                 # ════ Action Dashboard · TAB 2: SIGNAL STRENGTH ═══════════════════════
                 with tab_strength:
                     ui.render_section_header(
-                        "Close-Location Ranking",
-                        f"Full universe ordered by fade score — the ±{sid.thr:.1f}σ trigger marks where it becomes actionable",
+                        "Conviction Ranking",
+                        "Full universe ordered by priority — bars that actually crossed zero come "
+                        "first, then open hold windows, then the histogram level",
                         icon="zap",
                         accent="amber"
                     )
@@ -6013,17 +6018,17 @@ def main():
                     _n = max(len(results_df), 1)
                     _absz = results_df['SID_Hist_Z'].abs() if 'SID_Hist_Z' in results_df.columns else pd.Series(dtype=float)
                     avg_absz    = _absz.mean()
-                    past_thr    = int((_absz > sid.thr).sum())
                     n_buy_all   = int((results_df['Side'] == 'Buy').sum())  if 'Side' in results_df.columns else 0
                     n_sell_all  = int((results_df['Side'] == 'Sell').sum()) if 'Side' in results_df.columns else 0
+                    n_fired_all = n_buy_all + n_sell_all
 
                     col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-                    with col_s1: ui.render_metric_card("Avg |z|", _fmt_num(avg_absz, "{:.2f}"),
-                                                       f"vs ±{sid.thr:.1f}σ trigger", "neutral")
-                    with col_s2: ui.render_metric_card("Past Trigger", str(past_thr),
-                                                       f"{past_thr/_n*100:.0f}% of universe · ~9.3% typical", "info")
+                    with col_s1: ui.render_metric_card("Avg |Hist|", _fmt_num(avg_absz, "{:.2f}σ"),
+                                                       "how separated the two lines are", "neutral")
+                    with col_s2: ui.render_metric_card("Crossings", str(n_fired_all),
+                                                       f"{n_fired_all/_n*100:.0f}% of universe crossed on this bar", "info")
                     with col_s3: ui.render_metric_card("▲ / ◆ Split", f"{n_buy_all} / {n_sell_all}",
-                                                       "weak closes vs strong closes", "info")
+                                                       "crossed up vs crossed down", "info")
                     with col_s4:
                         _r4 = (study.get("buy", "holdout") or study.get("buy", "full")) if study else None
                         ui.render_metric_card(
@@ -6055,7 +6060,7 @@ def main():
                         <span style="font-family:var(--display); font-size:1rem; font-weight:700;
                                      color:#F1F5F9; letter-spacing:0.04em;">Top 10 Each Side</span>
                         <span style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:#6B7280;">
-                            most stretched closes in the universe · a blank Side means it has not crossed the trigger</span>
+                            highest-priority rows in the universe · a blank Side means the histogram did not cross on this bar</span>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -6064,23 +6069,24 @@ def main():
 
                     _col_l, _col_s = st.columns(2)
                     with _col_l:
-                        st.markdown(_col_label("Top 10 Weakest Closes", "buy"), unsafe_allow_html=True)
+                        st.markdown(_col_label("Top 10 Long Side", "buy"), unsafe_allow_html=True)
                         st.components.v1.html(
                             _build_signal_strength_table_html(top_buys, side='buy', k=sid.k),
                             height=150 + len(top_buys) * 55)
                     with _col_s:
-                        st.markdown(_col_label("Top 10 Strongest Closes", "sell"), unsafe_allow_html=True)
+                        st.markdown(_col_label("Top 10 Short Side", "sell"), unsafe_allow_html=True)
                         st.components.v1.html(
                             _build_signal_strength_table_html(top_sells, side='sell', k=sid.k),
                             height=150 + len(top_sells) * 55)
 
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                     st.markdown(
-                        f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
-                        f'padding:0.2rem 0 0.6rem 0; line-height:1.55;">Full universe ranked by fade score '
-                        f'(−z). The ranking is continuous, but the measured edge is in the <b>event</b>: holding '
-                        f'a continuous position on this signal turns over daily, costs ~12%/yr at 3bp, and nets '
-                        f'−0.48 Sharpe. Only rows whose Side shows ▲ or ◆ have crossed the ±{sid.thr:.1f}σ trigger.</div>',
+                        '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
+                        'padding:0.2rem 0 0.6rem 0; line-height:1.55;">Full universe ranked by long-side '
+                        'priority. The ranking is continuous, but the claim is in the <b>event</b>: the '
+                        'histogram level says who is currently in control, and only its crossing is a signal. '
+                        'Two lines that hug zero touch constantly, which is why a continuous position on this '
+                        'construction is not tradeable. Only rows whose Side shows ▲ or ◆ crossed on this bar.</div>',
                         unsafe_allow_html=True,
                     )
                     _all_ranked = results_df.sort_values('Priority_Long', ascending=False, na_position='last')
@@ -6183,18 +6189,27 @@ def _engine_card_html(sid, study) -> str:
         sample_cell = _cell("SAMPLE", "—", DIM, "not measured on this universe yet")
         indep_cell = _cell("INDEP", "—", DIM, "not measured on this universe yet")
 
-    # Weekly is an unvalidated extrapolation of a daily study. That caveat must stay VISIBLE —
-    # burying it in a tooltip would quietly upgrade an extrapolation to a measured setting.
-    _extrap = sid.z_look == eng.SID_Hist_Z_LOOK_WEEKLY
-    trigger_cell = _cell("TRIGGER ⚠ EXTRAP" if _extrap else "TRIGGER",
-                         f"±{sid.thr:.1f}σ · {sid.horizon}b",
-                         "var(--amber)" if _extrap else "var(--ink-secondary)",
-                         f"Fires past ±{sid.thr:.1f}σ, holds {sid.horizon} bars, entry the next "
-                         f"session's open. Z-score over a {sid.z_look}-bar lookback. Every value "
-                         f"is a measured plateau, which is why none is adjustable."
-                         + (" EXTRAPOLATED: the source study was daily, so the 52-bar weekly "
-                            "lookback is a structural analogue, not a measured plateau."
-                            if _extrap else ""))
+    # The source indicator's own evidence section says a bare zero-crossing is its WEAKEST
+    # tested configuration. That caveat must stay VISIBLE — burying it in a tooltip would
+    # quietly present the shipped default as the validated one.
+    _bare = sid.k <= 0
+    trigger_cell = _cell("TRIGGER ⚠ BARE" if _bare else "TRIGGER",
+                         ("hist × 0" if _bare else f"hist × ±{sid.k:g}σ") + f" · {sid.horizon}b",
+                         "var(--amber)" if _bare else "var(--ink-secondary)",
+                         f"Fires where the conviction histogram crosses "
+                         f"{'zero' if _bare else f'±{sid.k:g}σ of its own distribution'}, holds "
+                         f"{sid.horizon} bars, entry the next session's open. Oscillator: "
+                         f"{sid.length}-bar lookback, {sid.smooth}-bar smoothing, {sid.signal}-bar "
+                         f"signal line, {sid.norm}-bar normalization, {sid.participation.lower()} "
+                         f"participation capped at {sid.cap:g}×. Every value is the source "
+                         f"indicator's own default, which is why none is adjustable — its "
+                         f"900-configuration search found fitted and out-of-sample edge "
+                         f"essentially uncorrelated."
+                         + (" BARE CROSSING: the source measures this, its k=0 case, as the "
+                            "WEAKEST setting of the magnitude gate — +0.0015R with t = 0.2 on "
+                            "its held-out instruments. What applies here is the Edge Study "
+                            "measured on your universe, not that number."
+                            if _bare else ""))
     cost_cell = _cell("COST", f"{sid.cost_bps:.0f}bp " + ("net +" if cost_gate_ok else "NET NEG"),
                       "var(--emerald)" if cost_gate_ok else "var(--rose)",
                       f"{sid.cost_bps:.1f} bp round-trip. The gate asks whether that cost, in the "
