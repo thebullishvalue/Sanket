@@ -1,5 +1,5 @@
 """
-edge.py — measured out-of-sample expectancy for the CLR signal, per universe.
+edge.py — measured out-of-sample expectancy for the Siddhi signal, per universe.
 
 Why this module exists
 ----------------------
@@ -58,14 +58,16 @@ Method (each step exists to kill a specific way of fooling yourself)
 
 What this module deliberately does NOT do
 -----------------------------------------
-* **It does not tune the signal.** Threshold and horizon stay pre-declared. With a few
-  hundred independent blocks, searching for the best threshold per universe would fit
-  noise and destroy the very credibility this module exists to establish. It measures the
-  expectancy of a fixed rule; it does not search for a better rule.
+* **It does not tune the signal.** Every oscillator parameter and the horizon stay
+  pre-declared. With a few hundred independent blocks, searching for the best lookback or
+  magnitude gate per universe would fit noise and destroy the very credibility this module
+  exists to establish — the source indicator measured that correlation between fitted and
+  out-of-sample edge at approximately zero, and said so. It measures the expectancy of a
+  fixed rule; it does not search for a better rule.
 * **It does not gate the signal.** The measurement is reported, not applied. Conviction in
-  ``engine.compute_ranking`` derives from |z| and the cost gate only. A universe that
-  measures no edge still fires its signals at full conviction — the number is information
-  for the person reading the screen, not a hidden multiplier.
+  ``engine.compute_ranking`` derives from the crossing impulse and the cost gate only. A
+  universe that measures no edge still fires its signals at full conviction — the number is
+  information for the person reading the screen, not a hidden multiplier.
 """
 from __future__ import annotations
 
@@ -80,7 +82,7 @@ import engine as eng
 N_BOOTSTRAP = 2000     # percentile CI resamples. Vectorised, so this is milliseconds.
 CI_LEVEL = 0.95
 
-# The largest drift-free effect the source study found on any asset class. Defined in
+# The largest edge the source indicator found on any instrument group. Defined in
 # engine.py (it is a claim about the signal) and aliased here: if our minimum detectable effect
 # exceeds it, the test cannot resolve even the best case ever observed for this signal — so it
 # is vacuous, and reporting "no edge" would be an unsupported claim rather than a finding.
@@ -94,53 +96,68 @@ MIN_EVENTS = 30
 # EVENT EXTRACTION  (per symbol; the caller streams symbols so nothing accumulates)
 # ════════════════════════════════════════════════════════════════════════════════════════
 def symbol_events(close: pd.Series, high: pd.Series, low: pd.Series,
-                  z_look: int, thr: float, horizon: int) -> pd.DataFrame:
-    """Extract CLR events for one symbol as a compact (date, side, fwd) table.
+                  volume: pd.Series | None = None, *,
+                  length: int = eng.SID_LENGTH, k: float = eng.SID_K,
+                  horizon: int = eng.SID_HORIZON,
+                  smooth: int = eng.SID_SMOOTH, signal: int = eng.SID_SIGNAL,
+                  norm: int = eng.SID_NORM, vol_n: int = eng.SID_VOL_N,
+                  cap: float = eng.SID_CAP,
+                  participation: str = eng.SID_PARTICIPATION,
+                  scaling: str = eng.SID_SCALING) -> pd.DataFrame:
+    """Extract Siddhi crossing events for one symbol as a compact (date, side, fwd) table.
 
     Returns a frame with columns ``date``, ``side`` (+1 buy / -1 sell) and ``fwd`` (the
     raw h-bar forward return from the next bar's open-proxy). Drift removal and vol
     normalisation happen later, in :func:`measure`, because they must be computed *within
     era* — doing them here would leak across the discovery/holdout boundary.
 
-    Deliberately lean: this is the whole per-symbol cost of the study. It touches only
-    close/high/low and runs in vectorised pandas, so a 15-year history is milliseconds and
-    the frame can be released immediately. It does NOT compute the volume profile, the
-    regime engine or the order-flow layer — the study does not need them, and on a shared
-    vCPU those would dominate the runtime.
+    THE EVENTS COME FROM THE ENGINE ITSELF. The previous version of this function
+    re-derived the signal inline, which meant every guard added to the engine had to be
+    mirrored here or the study would silently measure a rule the screener does not fire.
+    :func:`engine.siddhi_oscillator` is vectorised and touches only OHLCV, so calling it
+    costs nothing and removes that whole class of drift by construction.
+
+    Still deliberately lean: it does NOT compute the volume profile, the regime engine or
+    the order-flow layer — the study does not need them, and on a shared vCPU those would
+    dominate the runtime.
     """
     empty = pd.DataFrame({"date": pd.Series(dtype="datetime64[ns]"),
                           "side": pd.Series(dtype=float),
                           "fwd": pd.Series(dtype=float)})
     n = len(close)
-    if n < int(z_look) + int(horizon) + 3:
+    warm = eng.warmup_bars(length, norm, vol_n, smooth)
+    if n < warm + int(horizon) + 3:
         return empty
 
-    rng = high - low
-    clv = ((close - low) - (high - close)) / rng.where(rng > 0)
-    clv = clv.fillna(0.0)
+    o = eng.siddhi_oscillator(high, low, close, volume,
+                              length=length, smooth=smooth, signal=signal, norm=norm,
+                              vol_n=vol_n, cap=cap, participation=participation,
+                              scaling=scaling)
+    hist, hist_sd = o["hist"], o["hist_sd"]
+    thr = float(k) * hist_sd.fillna(0.0)
 
-    m = clv.rolling(int(z_look)).mean()
-    s = clv.rolling(int(z_look)).std(ddof=0)
-    # Same degenerate-window guard as `engine.add_clr_features`. It must be applied here
-    # too: this function re-derives the z-score rather than calling the engine, so without
-    # it the study would measure events the screener no longer fires, and the measured
-    # expectancy would describe a rule the user cannot trade.
-    z = (clv - m) / s.where(s >= eng.CLR_MIN_CLV_SIGMA)
+    # ta.crossover / ta.crossunder against ±thr. At the shipped k = 0 this is exactly
+    # "the histogram crossed zero", which is the screening condition.
+    up = (hist > thr) & (hist.shift(1) <= thr.shift(1))
+    dn = (hist < -thr) & (hist.shift(1) >= -thr.shift(1))
+
+    ready = pd.Series(np.arange(n) >= warm, index=close.index)
+    healthy = hist.notna() & hist.shift(1).notna() & (hist_sd > 1e-12)
 
     # EXEC-B: the signal bar closes, we enter on the NEXT bar and hold `horizon` bars.
-    # Using next-bar close as the open proxy (the app's frames are OHLC; the source study
-    # found entering at the signal close vs the next open tests barely different).
+    # Using next-bar close as the open proxy (the app's frames are OHLC; entering at the
+    # signal close vs the next open tests barely different).
     entry = close.shift(-1)
     exit_ = close.shift(-1 - int(horizon))
     fwd = exit_ / entry - 1.0
 
-    fires = (z.abs() > float(thr)) & fwd.notna() & z.notna()
+    fires = (up | dn) & ready & healthy & fwd.notna()
     if not fires.any():
         return empty
 
-    side = np.where(z[fires] < 0, 1.0, -1.0)   # weak close -> buy, strong close -> sell
+    side = np.where(up[fires], 1.0, -1.0)   # cross up -> buy, cross down -> sell
     return pd.DataFrame({
-        "date": pd.to_datetime(clv.index[fires]),
+        "date": pd.to_datetime(close.index[fires]),
         "side": side,
         "fwd": fwd[fires].to_numpy(dtype=float),
     })
@@ -316,9 +333,9 @@ class EdgeStudy:
     universe: str
     selected_index: str | None
     timeframe: str
-    iclass: str                       # label only — used to show the source study's prior
-    z_look: int
-    thr: float
+    iclass: str                       # label only — used to show the source's prior
+    length: int                       # oscillator lookback
+    k: float                          # magnitude gate in σ of the histogram (0 = zero-cross)
     horizon: int
     cost_bps: float
     # Coverage
@@ -484,7 +501,7 @@ def _measure_side(sub: pd.DataFrame, side_key: str, era: str, horizon: int,
 
 def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
             universe: str, selected_index, timeframe: str, iclass: str,
-            z_look: int, thr: float, horizon: int, cost_bps: float,
+            length: int, k: float, horizon: int, cost_bps: float,
             n_symbols_universe: int, n_bars_median: int,
             holdout_frac: float = 0.40, partial: bool = False,
             measured_at: str = "") -> EdgeStudy:
@@ -501,7 +518,7 @@ def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
     if events is None or events.empty:
         return EdgeStudy(
             universe=universe, selected_index=selected_index, timeframe=timeframe,
-            iclass=iclass, z_look=int(z_look), thr=float(thr), horizon=int(horizon),
+            iclass=iclass, length=int(length), k=float(k), horizon=int(horizon),
             cost_bps=float(cost_bps), n_symbols_universe=int(n_symbols_universe),
             n_symbols_studied=0, n_bars_median=int(n_bars_median), start="", end="",
             part_ratio=1.0, fire_rate=0.0, split_date="", results={},
@@ -544,7 +561,7 @@ def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
 
     return EdgeStudy(
         universe=universe, selected_index=selected_index, timeframe=timeframe,
-        iclass=iclass, z_look=int(z_look), thr=float(thr), horizon=int(horizon),
+        iclass=iclass, length=int(length), k=float(k), horizon=int(horizon),
         cost_bps=float(cost_bps),
         n_symbols_universe=int(n_symbols_universe),
         n_symbols_studied=int(ev["symbol"].nunique()),

@@ -1,13 +1,15 @@
 """
 Sanket - Market Signal Screener | A Pragyam Product Family Member
-Close-Location Reversal (CLR) · Quantitative Signal Screener Terminal
+Siddhi Conviction Oscillator · Quantitative Signal Screener Terminal
 
-Engine: CLOSE-LOCATION REVERSAL (CLR), ported from sb_v8.pine — the z-score of where price
-closes inside its own bar range.
-ONE screening condition, two events: a weak close (green triangle) is the BUY, a strong
-close (yellow diamond) is the SELL. The system's universe selector drives the indicator's
-instrument-class input, so the measured out-of-sample expectancy shown always matches the
-asset class on screen. See engine.py, sb_v8.pine, and ARCHITECTURE.md.
+Engine: SIDDHI CONVICTION OSCILLATOR, ported from siddhi.pine — a bounded oscillator
+measuring how much of the market's effort actually converted into price displacement,
+against its own signal line.
+ONE screening condition, two events: the conviction histogram crossing ABOVE zero (green
+triangle) is the BUY, crossing BELOW zero (yellow diamond) is the SELL. The system's
+universe selector drives which reference row is shown beside the expectancy `edge.py`
+measures on the symbols actually on screen. See engine.py, siddhi.pine, and
+ARCHITECTURE.md.
 """
 
 import os
@@ -84,12 +86,12 @@ st.set_page_config(
 VERSION = "v6.4.0"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
-# Named for what it measures. The source indicator (sb_v8.pine) titled itself
-# "SB v8 — CLOSE-LOCATION REVERSAL"; the "SB v8" half was a family tag from a lineage of
-# session-breadth indicators whose premise this engine refutes, so only the descriptive half
-# carries over. Defined here so the name appears in exactly one place.
-ENGINE_NAME = "Close-Location Reversal"
-ENGINE_CODE = "CLR"
+# Named for what it measures. The source indicator (siddhi.pine) titles itself
+# "Siddhi · Conviction Oscillator"; only the descriptive half carries over, so the app
+# never has to explain a proper noun to say what the screen is doing. Defined here so the
+# name appears in exactly one place.
+ENGINE_NAME = "Siddhi Conviction Oscillator"
+ENGINE_CODE = "SIDDHI"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -117,9 +119,11 @@ def _today_ist() -> datetime.date:
 _REGISTRY_KEY  = "data_registry"
 _MAX_DAYS_BACK = 900  # fetch the maximum once; all modes slice what they need.
 # 900 calendar days ≈ ~620 trading days, and fetch_batch_data pads a further 365 calendar
-# days on top (≈ 870 trading bars). The CLR z-score needs a full 252-bar lookback before
-# it can signal (engine.min_bars_for), so this leaves ~600 signal-bearing daily dates —
-# enough for the live cross-section and for a Historical Range harvest over the same pool.
+# days on top (≈ 870 trading bars). The Siddhi oscillator needs its whole chain warm before
+# it can signal — the normalization window plus the lookback, the participation baseline and
+# the final smoothing, ~245 bars at the defaults (engine.warmup_bars) — so this leaves ~625
+# signal-bearing daily dates: enough for the live cross-section and for a Historical Range
+# harvest over the same pool.
 # Bound the L1 registry so cycling through indices (or stock_list variations from
 # transient fetch failures) can't accumulate stale 500-day universe DataFrames in
 # session_state until the tab closes. Keep only the N most-recently-used universes;
@@ -205,14 +209,15 @@ def _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
     The engine tag invalidates frames cached under a previous signal/feature engine.
     History: 'rev1'–'rev6' = the retired reversion-ranker + delta-divergence/clamp-cross
     signal sets; 'mom1'/'mom2' (v5.0/v5.1) = the 12-1 momentum rank with the Set A/Set B
-    entry screeners; 'sbv8'/'clr1' (v6.0/v6.1) = close-location reversal, the only screening
-    condition.
+    entry screeners; 'sbv8'/'clr1' (v6.0/v6.1) = close-location reversal; 'sid1' (v7.0) =
+    the Siddhi conviction oscillator, the only screening condition.
 
-    ``sb_params`` = (z_look, thr, horizon). These are baked into the frame (buy_cond /
-    sell_cond / the hold window all depend on them), so a threshold change in the sidebar
-    must miss the cache rather than serve stale conditions.
+    ``sb_params`` = :attr:`SiddhiSettings.params_sig`. These are baked into the frame
+    (buy_cond / sell_cond / the hold window all depend on them), so a parameter change must
+    miss the cache rather than serve stale conditions. The 'sid1' tag is what retires every
+    frame the CLR engine cached.
     """
-    return ("clr1", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
+    return ("sid1", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
             tuple(levels), int(wt2_len), str(wt2_type), end_date,
             tuple(sb_params) if sb_params else None)
 
@@ -299,31 +304,59 @@ if _REGISTRY_KEY not in st.session_state:
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Engine parameter resolution — the settings the source indicator exposes as inputs.
-# Every default is a measured plateau (see engine.py), not a fitted value. The z-score
-# lookback follows the timeframe. `iclass` is a DISPLAY LABEL only: it selects which of the
-# source study's published rows to show as a comparison beside the measurement that
-# `edge.py` makes on the user's own universe. Nothing computes from it.
+# Every default is siddhi.pine's own, NOT a value fitted here: the source's own
+# 900-configuration search found the correlation between a setting's fitted edge and its
+# edge on unseen instruments to be approximately zero, so tuning these to a backtest is
+# the one thing its evidence section explicitly warns against. `iclass` is a DISPLAY LABEL
+# only: it selects which reference row to show beside the measurement that `edge.py` makes
+# on the user's own universe. Nothing computes from it.
 # ──────────────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
-class CLRSettings:
-    """One run's CLR configuration."""
-    z_look:   int
-    thr:      float
-    horizon:  int
+class SiddhiSettings:
+    """One run's Siddhi configuration."""
+    length:   int          # oscillator lookback — the horizon of the whole instrument
+    smooth:   int          # final EMA on the oscillator
+    signal:   int          # the signal-line EMA the histogram is measured against
+    norm:     int          # normalization window for the adaptive σ and the magnitude gate
+    vol_n:    int          # participation baseline length
+    cap:      float        # ceiling on the participation weight
+    participation: str     # Auto / Volume / True range / Off
+    scaling:  str          # Adaptive (self-normalized) / Raw share
+    k:        float        # magnitude gate in σ of the histogram; 0.0 = plain zero-cross
+    horizon:  int          # hold window in bars
     cost_bps: float
-    iclass:   str        # reference-row label, not an input to anything
+    iclass:   str          # reference-row label, not an input to anything
+
+    @property
+    def feature_kwargs(self) -> dict:
+        """Exactly the arguments :func:`engine.add_siddhi_features` takes.
+
+        One place, so a new oscillator input cannot be added to the engine and silently
+        left unwired here.
+        """
+        return dict(length=self.length, smooth=self.smooth, signal=self.signal,
+                    norm=self.norm, vol_n=self.vol_n, cap=self.cap,
+                    participation=self.participation, scaling=self.scaling,
+                    k=self.k, horizon=self.horizon)
 
     @property
     def params_sig(self) -> tuple:
         """The subset that changes a per-symbol analyzed frame (see _analysis_params_sig)."""
-        return (int(self.z_look), float(self.thr), int(self.horizon))
+        return (int(self.length), int(self.smooth), int(self.signal), int(self.norm),
+                int(self.vol_n), float(self.cap), str(self.participation),
+                str(self.scaling), float(self.k), int(self.horizon))
 
     @property
     def study_sig(self) -> tuple:
         """Identity of an edge study: the parameters it was measured at."""
-        return (int(self.z_look), float(self.thr), int(self.horizon))
+        return self.params_sig
 
-    # ── The SOURCE STUDY's published numbers for the nearest class. Reference only. ──
+    @property
+    def trigger_label(self) -> str:
+        """How the screening condition reads on screen — the one place it is worded."""
+        return "histogram crosses zero" if self.k <= 0 else f"histogram crosses ±{self.k:g}σ"
+
+    # ── The SOURCE INDICATOR's published numbers for the nearest class. Reference only. ──
     @property
     def prior_edge(self) -> float:
         return eng.class_edge(self.iclass)
@@ -338,7 +371,8 @@ class CLRSettings:
 
     @property
     def min_bars(self) -> int:
-        return eng.min_bars_for(self.z_look)
+        """Bars a symbol needs before the whole oscillator chain is warm enough to fire."""
+        return eng.warmup_bars(self.length, self.norm, self.vol_n, self.smooth)
 
     def cost_ok(self, study=None) -> bool:
         """Cost gate — measured from `study` when one exists, else the pooled prior."""
@@ -348,28 +382,35 @@ class CLRSettings:
         return eng.cost_basis(study)
 
 
-def _clr_settings(universe, selected_index, timeframe, overrides=None) -> CLRSettings:
-    """Resolve the active CLR settings for a (universe, timeframe) selection.
+def _siddhi_settings(universe, selected_index, timeframe, overrides=None) -> SiddhiSettings:
+    """Resolve the active Siddhi settings for a (universe, timeframe) selection.
 
-    ``overrides`` is the sidebar dict ({thr, horizon, cost_bps}); anything absent falls
-    back to the measured default.
+    ``overrides`` is an optional dict of any field above; anything absent falls back to the
+    source indicator's default.
     """
     o = overrides or {}
-    return CLRSettings(
-        z_look   = eng.z_look_for(timeframe),
-        thr      = float(o.get("thr", eng.CLR_THRESHOLD)),
-        horizon  = int(o.get("horizon", eng.CLR_HORIZON)),
-        cost_bps = float(o.get("cost_bps", eng.CLR_COST_BPS)),
+    return SiddhiSettings(
+        length   = int(o.get("length", eng.length_for(timeframe))),
+        smooth   = int(o.get("smooth", eng.SID_SMOOTH)),
+        signal   = int(o.get("signal", eng.SID_SIGNAL)),
+        norm     = int(o.get("norm", eng.SID_NORM)),
+        vol_n    = int(o.get("vol_n", eng.SID_VOL_N)),
+        cap      = float(o.get("cap", eng.SID_CAP)),
+        participation = str(o.get("participation", eng.SID_PARTICIPATION)),
+        scaling  = str(o.get("scaling", eng.SID_SCALING)),
+        k        = float(o.get("k", eng.SID_K)),
+        horizon  = int(o.get("horizon", eng.SID_HORIZON)),
+        cost_bps = float(o.get("cost_bps", eng.SID_COST_BPS)),
         iclass   = eng.instrument_class(universe, selected_index),
     )
 
 
-def _active_clr_settings() -> CLRSettings:
+def _active_siddhi_settings() -> SiddhiSettings:
     """The settings the last run resolved, for renderers that don't take them as args."""
-    clr = st.session_state.get("clr_settings")
-    if isinstance(clr, CLRSettings):
-        return clr
-    return _clr_settings(None, None, "Daily")
+    sid = st.session_state.get("siddhi_settings")
+    if isinstance(sid, SiddhiSettings):
+        return sid
+    return _siddhi_settings(None, None, "Daily")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -382,9 +423,9 @@ def _active_clr_settings() -> CLRSettings:
 # on a shared vCPU. The naive implementation — fetch 15 years for 500 symbols, run the full
 # analysis pipeline, hold the panel — is ~500 MB and OOMs. Three choices avoid that:
 #
-#   1. LEAN     the study computes the close-location z and forward returns ONLY. No volume
-#               profile (a Python double loop, the app's slowest path), no regime engine, no
-#               order flow. The study does not need them.
+#   1. LEAN     the study computes the conviction oscillator and forward returns ONLY. No
+#               volume profile (a Python double loop, the app's slowest path), no regime
+#               engine, no order flow. The study does not need them.
 #   2. STREAMING symbols are fetched and reduced in chunks; each chunk's frames are released
 #               before the next is fetched. What accumulates is event tuples at a ~9% fire
 #               rate — a few MB, not a panel.
@@ -411,10 +452,10 @@ _EDGE_KEY = "edge_studies"          # session cache: {key: EdgeStudy}
 _EDGE_DISK_DIR = ".sanket_cache"    # ephemeral on Streamlit Cloud; treated as best-effort
 
 
-def _edge_key(universe, selected_index, timeframe, clr: CLRSettings) -> str:
+def _edge_key(universe, selected_index, timeframe, sid: SiddhiSettings) -> str:
     """Cache identity for a study: universe + timeframe + the parameters it was measured at."""
     parts = [str(universe), str(selected_index), str(timeframe),
-             f"z{clr.z_look}", f"t{clr.thr:g}", f"h{clr.horizon}"]
+             "p" + _slug("_".join(str(x) for x in sid.study_sig))]
     return _slug("__".join(parts))
 
 
@@ -469,16 +510,16 @@ def _edge_cache_put(key: str, study) -> None:
         console.detail(f"Edge study: disk cache write skipped ({type(e).__name__}: {e})")
 
 
-def _active_edge_study(universe=None, selected_index=None, timeframe=None, clr=None):
+def _active_edge_study(universe=None, selected_index=None, timeframe=None, sid=None):
     """The study matching the current selection, or None if it has not been measured."""
-    if clr is None:
-        clr = _active_clr_settings()
+    if sid is None:
+        sid = _active_siddhi_settings()
     if universe is None:
         meta = st.session_state.get("screener_meta") or {}
         universe = meta.get("universe")
         selected_index = meta.get("selected_index")
         timeframe = meta.get("timeframe", "Daily")
-    return _edge_cache_get(_edge_key(universe, selected_index, timeframe, clr))
+    return _edge_cache_get(_edge_key(universe, selected_index, timeframe, sid))
 
 
 # CSS kind per verdict rung, so a verdict can never read "success" in one place and
@@ -512,7 +553,7 @@ def _study_summary_line(study, side: str = "buy") -> str:
             f"n_eff {r.n_eff:.0f} · resolves ≥{r.mde:.3f}")
 
 
-def _render_edge_study_panel(clr: CLRSettings, study) -> None:
+def _render_edge_study_panel(sid: SiddhiSettings, study) -> None:
     """Full Edge Study readout — the numbers behind the verdict, per side and per era."""
     ui.render_section_header(
         "Edge Study",
@@ -573,7 +614,7 @@ def _render_edge_study_panel(clr: CLRSettings, study) -> None:
                 format="%+.4f"),
             "CI high": st.column_config.NumberColumn(format="%+.4f"),
             "Net": st.column_config.NumberColumn(
-                help=f"Edge minus the cost charge at {clr.cost_bps:.1f} bp, converted into the "
+                help=f"Edge minus the cost charge at {sid.cost_bps:.1f} bp, converted into the "
                      "same vol units using each instrument's own h-bar sigma.",
                 format="%+.4f"),
             "Hit %": st.column_config.NumberColumn(
@@ -597,8 +638,8 @@ def _render_edge_study_panel(clr: CLRSettings, study) -> None:
         f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
         f'padding:0.7rem 0 0.1rem 0; line-height:1.6;">'
         f'<b style="color:var(--ink-secondary);">Method.</b> Event study at the pre-declared '
-        f'parameters (±{study.thr:.1f}σ, {study.z_look}-bar lookback, {study.horizon}-bar hold, '
-        f'entry the bar after the signal). Each instrument\'s own mean forward return is removed '
+        f'parameters (histogram crossing {"zero" if study.k <= 0 else f"±{study.k:g}σ"}, '
+        f'{study.length}-bar lookback, {study.horizon}-bar hold, entry the bar after the signal). Each instrument\'s own mean forward return is removed '
         f'<i>within era</i>, so a rising market cannot read as edge; the residual is divided by '
         f'that instrument\'s own sigma so asset classes are comparable. Confidence intervals come '
         f'from a block bootstrap over <i>dates</i> — blocks absorb the overlap between '
@@ -615,7 +656,7 @@ def _render_edge_study_panel(clr: CLRSettings, study) -> None:
     )
 
 
-def ensure_edge_study(universe, selected_index, timeframe, clr,
+def ensure_edge_study(universe, selected_index, timeframe, sid,
                       progress_slot=None, progress_offset=0, progress_scale=100):
     """Guarantee a current edge measurement for this selection. Runs on EVERY run.
 
@@ -632,7 +673,7 @@ def ensure_edge_study(universe, selected_index, timeframe, clr,
     the attempt is recorded for the day and the run proceeds with the last measurement if there
     is one, or "not measured" if there is not.
     """
-    key = _edge_key(universe, selected_index, timeframe, clr)
+    key = _edge_key(universe, selected_index, timeframe, sid)
     fresh = _edge_cache_get(key, require_fresh=True)
     if fresh is not None:
         console.detail(f"Edge study: reusing today's measurement · "
@@ -646,7 +687,7 @@ def ensure_edge_study(universe, selected_index, timeframe, clr,
         console.detail("Edge study: already failed today for this selection — not retrying")
         return _edge_cache_get(key)
 
-    study = run_edge_study(universe, selected_index, timeframe, clr,
+    study = run_edge_study(universe, selected_index, timeframe, sid,
                            progress_slot=progress_slot,
                            progress_offset=progress_offset, progress_scale=progress_scale)
     if study is None:
@@ -711,7 +752,7 @@ def _fetch_study_chunk(symbols: list, start, end):
     return out
 
 
-def run_edge_study(universe, selected_index, timeframe, clr: CLRSettings,
+def run_edge_study(universe, selected_index, timeframe, sid: SiddhiSettings,
                    progress_slot=None, progress_offset=0, progress_scale=100):
     """Measure CLR's out-of-sample expectancy on this universe. Returns an EdgeStudy.
 
@@ -740,8 +781,8 @@ def run_edge_study(universe, selected_index, timeframe, clr: CLRSettings,
     console.item("Universe", f"{len(all_symbols)} symbols"
                              + (f" → sampled {len(symbols)}" if sampled else ""))
     console.item("History", f"{start} to {end} (~{_STUDY_YEARS}y)")
-    console.item("Parameters", f"z_look {clr.z_look} · ±{clr.thr:.1f}σ · hold {clr.horizon} · "
-                               f"{clr.cost_bps:.1f}bp")
+    console.item("Parameters", f"lookback {sid.length} · sig {sid.signal} · norm {sid.norm} · "
+                               f"{sid.trigger_label} · hold {sid.horizon} · {sid.cost_bps:.1f}bp")
 
     _p(3, "Measuring Edge", f"{len(symbols)} symbols · ~{_STUDY_YEARS}y")
 
@@ -760,11 +801,15 @@ def run_edge_study(universe, selected_index, timeframe, clr: CLRSettings,
             try:
                 if timeframe == "Weekly":
                     f = resample_to_weekly(f)
-                if len(f) < clr.min_bars + clr.horizon + 2:
+                if len(f) < sid.min_bars + sid.horizon + 2:
                     continue
+                # Volume matters here: participation weighting is what makes
+                # effort-without-result detectable, and dropping it would measure a
+                # different oscillator than the screener fires on.
                 ev = edge.symbol_events(f["Close"], f["High"], f["Low"],
-                                        clr.z_look, clr.thr, clr.horizon)
-                base = edge.symbol_baseline(f["Close"], clr.horizon)
+                                        f["Volume"] if "Volume" in f else None,
+                                        **sid.feature_kwargs)
+                base = edge.symbol_baseline(f["Close"], sid.horizon)
                 if base.empty:
                     continue
                 baselines[tkr] = base
@@ -793,8 +838,8 @@ def run_edge_study(universe, selected_index, timeframe, clr: CLRSettings,
     study = edge.measure(
         ev_all, baselines, ret_matrix,
         universe=universe, selected_index=selected_index, timeframe=timeframe,
-        iclass=clr.iclass, z_look=clr.z_look, thr=clr.thr, horizon=clr.horizon,
-        cost_bps=clr.cost_bps,
+        iclass=sid.iclass, length=sid.length, k=sid.k, horizon=sid.horizon,
+        cost_bps=sid.cost_bps,
         n_symbols_universe=len(all_symbols),
         n_bars_median=int(np.median(bar_counts)) if bar_counts else 0,
         partial=bool(n_failed_chunks),
@@ -1591,7 +1636,7 @@ def fetch_batch_data(stock_list, end_date=None, days_back=300, include_live=True
             # 1d bars are stamped with an intraday time while historical daily bars are
             # stamped 00:00:00 — an exact-timestamp .difference() would therefore append a
             # SECOND "today" row next to the 00:00 one, double-counting today and shifting
-            # every rolling window (including the close-location z) by a bar.
+            # every rolling window (including the oscillator) by a bar.
             _hint_has_today = any(idx.date() == _ist_today for idx in sample_df.index)
             if not _hint_has_today:
                 try:
@@ -1707,7 +1752,7 @@ def to_excel(df):
     from the export; the per-age BUY_*/SELL_* columns carry the same information legibly.
     """
     output = io.BytesIO()
-    _drop = [c for c in ('Z_Hist', 'Close_Hist') if c in df.columns]
+    _drop = [c for c in ('Z_Hist', 'Imp_Hist', 'Close_Hist') if c in df.columns]
     if _drop:
         df = df.drop(columns=_drop)
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -1717,18 +1762,21 @@ def to_excel(df):
         # that is descriptive context — the distinction matters more than the ordering.
         legend_data = {
             "Column Identifier": [
-                "— THE SIGNAL (CLR) —",
-                "CLR_CLV",
-                "CLR_Z",
-                "CLR_Z_Cap",
-                "Signal / Fade_Score / CLR_Score",
+                "— THE SIGNAL (SIDDHI) —",
+                "SID_Raw",
+                "SID_Osc / SID_Sig",
+                "SID_Hist",
+                "SID_Hist_Z",
+                "SID_Impulse",
+                "SID_Zone",
+                "Signal / Signal_Score / SID_Score",
                 "buy_cond / BUY_*",
                 "sell_cond / SELL_*",
                 "Side",
                 "Conviction",
-                "CLR_State",
-                "CLR_Hold_Dir / CLR_Hold_Age",
-                "CLR_Rank_Pct",
+                "SID_State",
+                "SID_Hold_Dir / SID_Hold_Age",
+                "SID_Rank_Pct",
                 "Priority_Long / Priority_Short",
                 "Signal_Reason",
                 "— CONTEXT ONLY (never a signal input; none predicts outcome out of sample) —",
@@ -1747,32 +1795,35 @@ def to_excel(df):
             ],
             "Metric Description": [
                 "",
-                "Close location in [-1, +1]: ((C-L) - (H-C)) / (H-L). -1 = closed on the low, +1 = on the high.",
-                "THE MEASURE. Z-score of CLR_CLV over the trailing lookback (252 daily / 52 weekly bars). Population stdev, matching Pine ta.stdev. Suppressed when the window's CLV sigma collapses below 0.30 — those bars produce meaningless 15-sigma readings, not extreme closes.",
-                "Largest |z| this bar's window could arithmetically produce, (1 -/+ mean)/sigma. Because CLR_CLV is bounded in [-1,+1] the ceiling is ~1.9, so |z| never approaches 3. Conviction is scaled against this.",
-                "Fade score = -CLR_Z. Positive = bullish. The sign flip IS the finding: a strong close predicts weakness.",
-                "BUY event (green triangle): CLR_Z below -threshold, a weak close to fade up. BUY_Today/_1d/_2d/_3d/_5d mark the signal's age.",
-                "SELL event (yellow diamond): CLR_Z above +threshold. NOTE: this side did NOT confirm out of sample (holdout +0.0094, CI [-0.030, +0.052]).",
-                "Buy / Sell / '-' — only a fired event is actionable; sub-threshold rows are context.",
-                "How far |z| sits between the firing threshold and CLR_Z_Cap, x the cost gate, in [0,1]. Cap-relative, so two bars at the same |z| can differ (Spearman vs |z| = 0.93; under the old |z|/3 scale it was exactly 1.00, i.e. pure duplication). A DESCRIPTION of the close, not a validated forecast. Not a probability.",
-                "WARMING UP (no full lookback yet) / DEGENERATE (CLV sigma collapsed, z suppressed) / BUY / SELL / NEUTRAL for this bar.",
-                "Hold window: direction (+1 buy, -1 sell, 0 none) and bars elapsed since it opened. Edge lives at 5-10 bars. Measured on Nifty 50: a day-0 signal did NOT outperform a day-3 one out of sample — age is not a quality grade.",
-                "Cross-sectional fade-score percentile within the universe on this date.",
-                "Fade score x 100 and its negation — the ranking keys the UI tables sort on.",
-                "Plain-language read of the row: which event (if any), the z that produced it, and any scope caveat.",
+                "Raw participation-weighted share of effort that became displacement: 100 x SMA(c*w, len) / SMA(|c|*w, len), where c = (C - C[1]) / TrueRange and w = capped volume (or range) relative to its own baseline. Honest about absolute conviction, but it cannot reach its own bounds — which is why it is rescaled.",
+                "The oscillator (100*tanh(raw / 3*sigma), then EMA-smoothed) and its signal-line EMA. Bounded +/-100 under adaptive scaling. Above zero, participation-weighted effort is net upward.",
+                "THE SCREENING VARIABLE. SID_Osc - SID_Sig. Its CROSSING of zero is the entire condition: up = BUY, down = SELL.",
+                "The histogram in sigma of its own distribution over the normalization window — what makes one symbol's reading comparable to another's, and therefore rankable. This is the STATE (who is in control), not the event.",
+                "One-bar change in the histogram, in the same sigma units — how forcefully the gap opened. Conviction is built from this, because at a crossing the LEVEL is zero by construction.",
+                "Where the oscillator sits against the zones: Extreme Bull (>=60) / Bull (>=30) / Neutral / Bear / Extreme Bear. Context, never a gate — a zone reading is the SETTING for a signal, not a signal.",
+                "Score = SID_Hist_Z. Positive = the oscillator leads its signal line. The universe is ranked on this level; it fires on the crossing.",
+                "BUY event (green triangle): the histogram crossed ABOVE zero on this bar. BUY_Today/_1d/_2d/_3d/_5d mark the signal's age.",
+                "SELL event (yellow diamond): the histogram crossed BELOW zero on this bar.",
+                "Buy / Sell / '-' — only a bar on which the histogram actually CROSSED is actionable; every other row is context, however extreme its level.",
+                "Force of the crossing: tanh(|SID_Impulse|) x the cost gate, in [0,1]. A DESCRIPTION of how the gap opened, not a validated forecast. Not a probability.",
+                "WARMING UP (the oscillator chain is not warm yet) / DEGENERATE (the histogram's sigma has collapsed, so its z-score is arithmetic, not market) / BUY / SELL / NEUTRAL for this bar.",
+                "Hold window: direction (+1 buy, -1 sell, 0 none) and bars elapsed since it opened. Nothing establishes that a day-0 signal beats a day-3 one — age is a position tracker, not a quality grade.",
+                "Cross-sectional percentile of SID_Hist_Z within the universe on this date.",
+                "BANDED ranking keys the UI tables sort on: a crossing fired today outranks an open hold window, which outranks a merely bullish level. A crossing sits at zero, so sorting on the level alone would bury every fresh signal mid-list.",
+                "Plain-language read of the row: which event (if any), the histogram that produced it, and any scope caveat.",
                 "",
                 "Where cumulative delta sits vs its 20-bar mean: Accumulation(+) / Distribution(+) / Neutral. Measured: no out-of-sample expectancy — its one holdout-significant result reversed the sign it had in discovery.",
                 "Inferred per-bar buy-sell volume delta (OHLC close-location proxy).",
                 "Cumulative volume delta (running sum of Bar_Delta).",
                 "3-bar change in CVD — flow building (+) or draining (-). Scales with the symbol's absolute volume, so it is NOT comparable across names; z-score it within symbol first. Measured: no out-of-sample expectancy.",
-                "Signed z-score of Bar_Delta vs its 20-bar distribution. Volume-weighted, so distinct from CLR_Z.",
+                "Signed z-score of Bar_Delta vs its 20-bar distribution. A close-location proxy, so entirely distinct from the Siddhi oscillator.",
                 "Absorption strength: |Bar_Delta| / its 20-bar average.",
                 "Rolling 20-bar inferred buy share in [0,1] (0.5 = balanced) — volume-normalized, cross-sectionally comparable.",
                 "Absorption context in [0,1]: high delta soaked by a small range; >0.25 approximates inferred_delta.pine rawAbsorb. Only 1.6% of fires reach 0.25 (median 0.003), so it reads ~0 for almost every signal. Measured: no out-of-sample expectancy.",
                 "HMM regime label and the probability of the detected state. Per-name RISK CONTEXT.",
                 "Volatility regime (LOW/NORMAL/HIGH/EXTREME) via GARCH. Risk context.",
                 "Structural change point (CUSUM) identifying regime shifts. Risk context.",
-                "Forward returns at the CLR horizons (Historical Range mode only). LABELS for evaluation — never inputs.",
+                "Forward returns at the declared horizons (Historical Range mode only). LABELS for evaluation — never inputs.",
             ]
         }
         pd.DataFrame(legend_data).to_excel(writer, index=False, sheet_name='Legend')
@@ -1783,9 +1834,9 @@ def to_excel(df):
 # SHARED MATH HELPERS  (SMA + True Range — the only primitives the engine needs)
 # ──────────────────────────────────────────────────────────────────────────────
 #  The WRCI-era MA library (EMA/HMA/WMA/VWMA/ALMA/RMA, f_smooth, linreg, RSI) and
-#  the Ehlers AutoTune filter were removed with the WRCI engine. CLR needs neither:
-#  the signal is a rolling mean/stdev of the close location (engine.add_sb_features).
-#  What remains here serves the descriptive order-flow context only.
+#  the Ehlers AutoTune filter were removed with the WRCI engine. Siddhi needs neither:
+#  it carries its own EMA/SMA/stdev chain inside engine.siddhi_oscillator, transcribed
+#  from the Pine. What remains here serves the descriptive order-flow context only.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def calculate_sma(series, length):
@@ -1848,20 +1899,21 @@ def _rolling_volume_profile(high, low, vol, win=20, bins=24, va_pct=0.70):
 def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, osLevel1=-80, osLevel2=-40,
                       wt2_len=20, wt2_type="ALMA",
                       hci_thres=0.25, hci_look=102, hci_sig_len=53, hci_sig_type="SMA", hci_roc_len=15,
-                      clr=None):
-    """Per-symbol feature engine — the CLR close-location signal plus order-flow context.
+                      sid=None):
+    """Per-symbol feature engine — the Siddhi conviction signal plus order-flow context.
 
-    The SIGNAL is CLR (see engine.py / sb_v8.pine): the z-score of where price closes
-    inside its own bar range. It is attached here via ``eng.add_clr_features`` — one
-    screening condition producing two events, a BUY on a weak close (``buy_cond``, the
-    green triangle) and a SELL on a strong close (``sell_cond``, the yellow diamond).
-    The cross-section is ranked later by ``eng.compute_ranking`` on the fade score.
+    The SIGNAL is Siddhi (see engine.py / siddhi.pine): a participation-weighted oscillator
+    measuring how much of each bar's effort became displacement, against its own signal
+    line. It is attached here via ``eng.add_siddhi_features`` — one screening condition
+    producing two events, a BUY where the histogram crosses ABOVE zero (``buy_cond``, the
+    green triangle) and a SELL where it crosses BELOW (``sell_cond``, the yellow diamond).
+    The cross-section is ranked later by ``eng.compute_ranking``.
 
     Everything else written here is DESCRIPTIVE CONTEXT, never a signal input: the inferred
     delta / CVD / volume profile (OHLC proxies, validated to add no cross-sectional edge),
     the MA alignment count, and the F1/F2 features the regime engine consumes.
 
-    ``clr`` is the run's :class:`CLRSettings`; ``None`` falls back to the measured defaults.
+    ``sid`` is the run's :class:`SiddhiSettings`; ``None`` falls back to the source defaults.
     The unused WRCI-era params (n1/n2/obLevel*/osLevel*/wt2_*/hci_*) are retained in the
     signature only so existing call sites keep working; ``reg_len`` still drives the ATR
     window. ``_analysis_params_sig`` carries an engine tag plus the SB parameters, so frames
@@ -1997,12 +2049,18 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
         default='Neutral',
     )
 
-    # ── THE SCREENING CONDITION — CLR close-location reversal (engine.py) ────
-    # The only signal in the system. Writes CLR_CLV / CLR_Z / Fade_Score plus the two
-    # plotted events (buy_cond = green triangle, sell_cond = yellow diamond) and the
+    # ── THE SCREENING CONDITION — Siddhi conviction oscillator (engine.py) ────
+    # The only signal in the system. Writes SID_Osc / SID_Sig / SID_Hist / SID_Hist_Z /
+    # Signal_Score plus the two plotted events (buy_cond = the histogram crossing ABOVE
+    # zero, the green triangle; sell_cond = crossing BELOW, the yellow diamond) and the
     # hold window. Cross-sectional ranking happens later, once the universe is assembled.
-    _sb = clr if clr is not None else _clr_settings(None, None, "Daily")
-    df = eng.add_clr_features(df, z_look=_sb.z_look, thr=_sb.thr, horizon=_sb.horizon)
+    #
+    # Note this reads Volume directly from `df`, NOT the zero-volume-substituted `vol`
+    # built above for the order-flow proxies: participation weighting is supposed to fall
+    # through to true range on a volume-less symbol, and feeding it a synthetic 1.0 would
+    # silently make every bar equally weighted instead.
+    _sb = sid if sid is not None else _siddhi_settings(None, None, "Daily")
+    df = eng.add_siddhi_features(df, **_sb.feature_kwargs)
 
     return df
 
@@ -2226,7 +2284,7 @@ def run_regime_analysis(df):
     Pure per-name RISK CONTEXT. Its Regime / Vol_Regime / Change_Point outputs are
     displayed alongside the signal and aggregated in the range-mode Regime tab; they do
     NOT enter the CLR signal or its conviction, which is a function of the
-    close-location z-score, the instrument class's measured expectancy, and the cost gate.
+    conviction oscillator, the instrument class's measured expectancy, and the cost gate.
     """
     hmm    = AdaptiveHMM()
     garch  = GARCHDetector()
@@ -2352,14 +2410,14 @@ def render_landing_page():
         <div class='system-card portfolio'>
             <h3>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                CLOSE-LOCATION REVERSAL
+                SIDDHI CONVICTION OSCILLATOR
             </h3>
-            <p>One screening condition: where price closes inside its own bar range, z-scored over a trailing year. The sign is the finding — a <strong>strong close predicts weakness</strong>, so the fade of a weak close is the buy.</p>
+            <p>One screening condition: how much of the market's <strong>effort</strong> actually became price <strong>displacement</strong>, weighted by who showed up for each bar — measured against its own signal line. Effort without result is the thing being detected.</p>
             <div class='spec'>
-                <span>Measure:</span> ((C−L) − (H−C)) / (H−L), z over 252 bars<br>
-                <span>Discovery:</span> IC −0.0634, z −7.96, p_bonf 1.2e-13<br>
-                <span>Holdout:</span> confirmed at h=1 and h=5 (2014–2026)<br>
-                <span>Sorting:</span> Rank by fade score (−z)
+                <span>Measure:</span> 100 · Σ(c·w) / Σ(|c|·w), c = ΔC / TR, w = capped RVOL<br>
+                <span>Scaling:</span> 100·tanh(raw / 3σ) — the raw share cannot reach its bounds<br>
+                <span>Fallback:</span> volume-less symbols weight on relative true range<br>
+                <span>Sorting:</span> fired crossings first, then open holds, then level
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -2371,12 +2429,12 @@ def render_landing_page():
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
                 TWO EVENTS
             </h3>
-            <p><span style="color:#00E676;">▲ BUY</span> on a weak close (z &lt; −1.5σ) — holdout-confirmed in both eras. <span style="color:#FFA726;">◆ SELL</span> on a strong close (z &gt; +1.5σ) — the Pine calls this side CAUTION: it did not confirm out of sample.</p>
+            <p><span style="color:#00E676;">▲ BUY</span> when the conviction histogram crosses <strong>above zero</strong>. <span style="color:#FFA726;">◆ SELL</span> when it crosses <strong>below</strong>. Symmetric, and a state change rather than a level — nothing fires while the histogram merely sits on one side.</p>
             <div class='spec'>
-                <span>Horizon:</span> 5–10 trading days · no intraday edge<br>
+                <span>Horizon:</span> 10 bars · the lookback is the horizon · no intraday claim<br>
                 <span>Entry:</span> next session's open after the signal bar<br>
-                <span>Why events:</span> a continuous position costs 12%/yr and nets −0.48 Sharpe<br>
-                <span>Conviction:</span> |z| within its attainable range × cost gate
+                <span>Why events:</span> two lines near zero touch constantly; the crossing is the event<br>
+                <span>Conviction:</span> force of the crossing (Δhist in σ) × cost gate
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -2408,7 +2466,7 @@ def render_landing_page():
         </h4>
         <p>Configure via the <strong>Sidebar</strong>: select <strong>Universe</strong>, <strong>Timeframe</strong>, <strong>Analysis Mode</strong>, and any mode-specific settings.<br>
            Click the <strong>RUN</strong> button — its label adapts to the active mode (Screener · Pulse · Harvest · Correlation).<br>
-           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will z-score each symbol's close location · fire BUY / SELL past ±1.5σ · rank the cross-section by fade score · and report what the edge measures on your universe</span></p>
+           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will build each symbol's conviction oscillator · fire BUY / SELL where its histogram crosses zero · rank the cross-section by that histogram · and report what the edge measures on your universe</span></p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -2441,7 +2499,7 @@ class SidebarState:
     corr_target_ticker: Optional[str]
     corr_lookback: int
     corr_method: str
-    clr: "CLRSettings"     # resolved engine config for this run
+    sid: "SiddhiSettings"     # resolved engine config for this run
 
 
 def render_sidebar() -> SidebarState:
@@ -2584,8 +2642,8 @@ def render_sidebar() -> SidebarState:
         # Engine Status panel — rendered in every mode. Surfaces the CLR engine, the
         # instrument class derived from the universe above, that class's measured
         # out-of-sample expectancy, and the four Pine parameters. Returns the resolved
-        # CLRSettings for this run.
-        clr = _render_engine_status_sidebar(universe, selected_index, timeframe)
+        # SiddhiSettings for this run.
+        sid = _render_engine_status_sidebar(universe, selected_index, timeframe)
 
         # System Spec Card — always rendered as the LAST block in the sidebar.
         try:
@@ -2614,7 +2672,7 @@ def render_sidebar() -> SidebarState:
             <div class="spec-row"><span class="spec-label">Universe</span><span class="spec-value" style="font-size:0.7rem;">{universe_display}</span></div>
             <div class="spec-row"><span class="spec-label">Timeframe</span><span class="spec-value">{timeframe}</span></div>
             <div class="spec-row"><span class="spec-label">Mode</span><span class="spec-value" style="font-size:0.7rem;">{analysis_mode}</span></div>
-            <div class="spec-row"><span class="spec-label">Asset Class</span><span class="spec-value" style="font-size:0.7rem;">{clr.iclass}</span></div>
+            <div class="spec-row"><span class="spec-label">Asset Class</span><span class="spec-value" style="font-size:0.7rem;">{sid.iclass}</span></div>
         """
         if analysis_mode == "Correlation Analysis":
             spec_html += f'<div class="spec-row"><span class="spec-label">Target</span><span class="spec-value" style="font-size:0.7rem;">{target_selected}</span></div>'
@@ -2641,7 +2699,7 @@ def render_sidebar() -> SidebarState:
             corr_target_ticker=corr_target_ticker,
             corr_lookback=corr_lookback,
             corr_method=corr_method,
-            clr=clr,
+            sid=sid,
         )
 
 
@@ -2649,26 +2707,26 @@ def render_sidebar() -> SidebarState:
 # MAIN SCREENER FUNCTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True, external_progress_slot=None, progress_offset=0, progress_scale=100, wt2_len=20, wt2_type="ALMA", clr=None, study=None):
-    """Execute the CLR screen and return the ranked cross-section.
+def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n1, wt_n2, levels, timeframe, show_progress=True, external_progress_slot=None, progress_offset=0, progress_scale=100, wt2_len=20, wt2_type="ALMA", sid=None, study=None):
+    """Execute the Siddhi screen and return the ranked cross-section.
 
-    Fetches market data for the universe, computes the per-symbol close-location z-score
-    (plus order-flow / regime context), then ranks the whole cross-section by the fade
-    score (engine.compute_ranking).
+    Fetches market data for the universe, builds each symbol's conviction oscillator and
+    its histogram (plus order-flow / regime context), then ranks the whole cross-section
+    (engine.compute_ranking) with the bars that actually CROSSED zero banded to the top.
 
     Args:
-        clr: the run's :class:`CLRSettings`; ``None`` resolves defaults for this universe.
+        sid: the run's :class:`SiddhiSettings`; ``None`` resolves defaults for this universe.
         study: an optional :class:`edge.EdgeStudy` measured on this universe. Used for the
             cost gate and the per-row read; never to filter or scale a signal.
         external_progress_slot: Optional Streamlit container for external progress tracking (e.g., from correlation analysis)
         progress_offset: Starting percentage for external progress tracking (default 0)
         progress_scale: Scale factor for progress percentage within external slot (default 100 = full)
 
-    Returns: DataFrame with signals ranked by fade score, or None on error.
+    Returns: DataFrame with signals ranked by priority, or None on error.
     """
     obLevel1, obLevel2, osLevel1, osLevel2 = levels
-    if clr is None:
-        clr = _clr_settings(universe, selected_index, timeframe)
+    if sid is None:
+        sid = _siddhi_settings(universe, selected_index, timeframe)
     progress_slot = external_progress_slot if external_progress_slot is not None else (st.empty() if show_progress else None)
 
     if show_progress or external_progress_slot is not None:
@@ -2714,17 +2772,19 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.section("Engine Parameters")
     console.item("Engine", f"{ENGINE_NAME} ({ENGINE_CODE})")
     console.item("Timeframe", timeframe)
-    console.item("Z-score lookback", f"{clr.z_look} bars (needs {clr.min_bars} to signal)")
-    console.item("Trigger", f"±{clr.thr:.1f}σ · hold {clr.horizon} bars · entry next open")
+    console.item("Oscillator", f"lookback {sid.length} · smooth {sid.smooth} · signal {sid.signal} · "
+                               f"norm {sid.norm} (needs {sid.min_bars} bars to signal)")
+    console.item("Participation", f"{sid.participation} · baseline {sid.vol_n} · cap {sid.cap:g}x")
+    console.item("Trigger", f"{sid.trigger_label} · hold {sid.horizon} bars · entry next open")
     _vl, _vk, _vd = _study_state(study, "buy")
     console.item("Measured edge (buy)", f"{_vl} — {_study_summary_line(study, 'buy')}")
     console.item("Measured edge (sell)", f"{_study_state(study, 'sell')[0]} — "
                                          f"{_study_summary_line(study, 'sell')}")
-    console.item("Reference class", f"{clr.iclass} · source study {clr.prior_edge:+.3f} vol · "
-                                    f"{clr.prior_hit:.1f}% hit (prior, not applied)")
-    console.item("Cost gate", f"{clr.cost_bps:.1f} bp · "
-                              + ("net positive" if clr.cost_ok(study) else "NET NEGATIVE")
-                              + f" · basis {clr.cost_basis(study)}")
+    console.item("Reference class", f"{sid.iclass} · source study {sid.prior_edge:+.3f} vol · "
+                                    f"{sid.prior_hit:.1f}% hit (prior, not applied)")
+    console.item("Cost gate", f"{sid.cost_bps:.1f} bp · "
+                              + ("net positive" if sid.cost_ok(study) else "NET NEGATIVE")
+                              + f" · basis {sid.cost_basis(study)}")
     console.item("Instruments", f"{len(data_dict)} of {len(stock_list)} fetched successfully")
     if show_progress or external_progress_slot is not None:
         pct_val = progress_offset + (20 * progress_scale / 100)
@@ -2737,7 +2797,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     # If a range harvest just ran for this exact universe + params + date, its analyzed
     # frames are cached — reuse them instead of recomputing the whole per-stock pipeline.
     _cache_sig = _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
-                                      wt2_len, wt2_type, end_date, clr.params_sig)
+                                      wt2_len, wt2_type, end_date, sid.params_sig)
     _cache_hits = 0
 
     _tf_label = "weekly" if timeframe == "Weekly" else "daily"
@@ -2760,11 +2820,12 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 if timeframe == "Weekly":
                     df = resample_to_weekly(df)
 
-            # Warmup guard — a symbol cannot carry a CLR signal until it has a full
-            # z-score lookback (the Pine's `dBars < zLook + 2` refusal). Applied on both
-            # cache hit and miss so a short frame cached by the (unguarded) harvest can't
-            # slip a symbol whose z-score would be NaN.
-            _min_bars = max(reg_len + 30, clr.min_bars)
+            # Warmup guard — a symbol cannot carry a signal until the whole oscillator
+            # chain is warm (the Pine's `ready` gate: normalization window + lookback +
+            # participation baseline + smoothing). Applied on both cache hit and miss so a
+            # short frame cached by the (unguarded) harvest can't slip a symbol whose
+            # oscillator would be NaN.
+            _min_bars = max(reg_len + 30, sid.min_bars)
             if len(df) < _min_bars:
                 console.detail(f"{ticker}: Skipped (warming up: {len(df)} of {_min_bars} bars needed)")
                 _warmup_skipped += 1
@@ -2772,7 +2833,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
             if _cached is None:
                 df = run_full_analysis(df, reg_len, wt_n1, wt_n2, obLevel1, obLevel2, osLevel1, osLevel2,
-                                       wt2_len=wt2_len, wt2_type=wt2_type, clr=clr)
+                                       wt2_len=wt2_len, wt2_type=wt2_type, sid=sid)
                 df = run_regime_analysis(df)        # adds HMM_Bull/Bear, Vol_Regime, Change_Point, Regime_Confidence
 
             # Sample at analysis_date — snap to the correct historical bar.
@@ -2810,11 +2871,14 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
             signal_type = _classify_signal_type(last_row)
 
-            # The z-score at each of the last 5 bars, so an aged signal can report the z
-            # that fired it (offset 0 = the snapshot bar … 4 = five bars back).
-            _z_win = df['CLR_Z'].iloc[max(0, idx_pos - 4): idx_pos + 1].tolist()
+            # The histogram (in σ) at each of the last 5 bars, so an aged signal can report
+            # the reading that fired it (offset 0 = the snapshot bar … 4 = five bars back).
+            _z_win = df['SID_Hist_Z'].iloc[max(0, idx_pos - 4): idx_pos + 1].tolist()
             _z_hist = list(reversed(_z_win))            # [today, 1 back, 2 back, …]
             _z_hist += [float('nan')] * (5 - len(_z_hist))
+            _imp_win = df['SID_Impulse'].iloc[max(0, idx_pos - 4): idx_pos + 1].tolist()
+            _imp_hist = list(reversed(_imp_win))
+            _imp_hist += [float('nan')] * (5 - len(_imp_hist))
             _close_win = df['Close'].iloc[max(0, idx_pos - 4): idx_pos + 1].tolist()
             _close_hist = list(reversed(_close_win))
             _close_hist += [float('nan')] * (5 - len(_close_hist))
@@ -2845,19 +2909,26 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "Symbol": ticker,
                 "DisplayName": display_name,
                 "SimpleName": simple_name,
-                # Signal == the CLR fade score (-z). Positive = bullish (weak close).
-                "Signal": round(float(last_row['Fade_Score']), 3) if pd.notna(last_row['Fade_Score']) else np.nan,
-                "CLR_Z": float(last_row['CLR_Z']) if pd.notna(last_row['CLR_Z']) else np.nan,
-                # Arithmetic ceiling for this bar's window — conviction is scaled against it
-                # because a z-score of a [-1,+1] bounded variable cannot reach 3. See engine.py.
-                "CLR_Z_Cap": (float(last_row['CLR_Z_Cap'])
-                              if pd.notna(last_row.get('CLR_Z_Cap')) else np.nan),
-                "CLR_CLV": float(last_row['CLR_CLV']) if pd.notna(last_row['CLR_CLV']) else np.nan,
-                "CLR_State": str(last_row.get('CLR_State', 'NEUTRAL')),
-                "CLR_Hold_Dir": int(last_row.get('CLR_Hold_Dir', 0) or 0),
-                "CLR_Hold_Age": (float(last_row['CLR_Hold_Age'])
-                                if pd.notna(last_row.get('CLR_Hold_Age')) else np.nan),
-                "CLR_Horizon": int(clr.horizon),
+                # Signal == the conviction histogram in σ. Positive = the oscillator leads
+                # its signal line. This is the STATE; the EVENT is buy_cond / sell_cond.
+                "Signal": round(float(last_row['Signal_Score']), 3) if pd.notna(last_row['Signal_Score']) else np.nan,
+                "SID_Hist_Z": float(last_row['SID_Hist_Z']) if pd.notna(last_row['SID_Hist_Z']) else np.nan,
+                # One-bar change in the histogram, in σ — how forcefully the gap opened.
+                # Conviction is built from this, because a crossing sits at zero. See engine.py.
+                "SID_Impulse": (float(last_row['SID_Impulse'])
+                              if pd.notna(last_row.get('SID_Impulse')) else np.nan),
+                "SID_Osc": float(last_row['SID_Osc']) if pd.notna(last_row['SID_Osc']) else np.nan,
+                "SID_Hist": float(last_row['SID_Hist']) if pd.notna(last_row['SID_Hist']) else np.nan,
+                "SID_Zone": str(last_row.get('SID_Zone', '—')),
+                "SID_State": str(last_row.get('SID_State', 'NEUTRAL')),
+                # The raw events, so compute_ranking reads booleans rather than re-deriving
+                # Side from a state string.
+                "buy_cond": bool(last_row.get('buy_cond', False)),
+                "sell_cond": bool(last_row.get('sell_cond', False)),
+                "SID_Hold_Dir": int(last_row.get('SID_Hold_Dir', 0) or 0),
+                "SID_Hold_Age": (float(last_row['SID_Hold_Age'])
+                                if pd.notna(last_row.get('SID_Hold_Age')) else np.nan),
+                "SID_Horizon": int(sid.horizon),
                 "Bar_Delta": round(last_row['Bar_Delta'], 2) if not pd.isna(last_row['Bar_Delta']) else 0.0,
                 "CVD": round(last_row['CVD'], 2) if not pd.isna(last_row['CVD']) else 0.0,
                 "CVD_Slope": round(last_row['CVD_Slope'], 2) if not pd.isna(last_row['CVD_Slope']) else 0.0,
@@ -2879,20 +2950,21 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "F1_PriceMom":   float(last_row.get('F1_PriceMom', 0)),
                 "F2_VolQual":    float(last_row.get('F2_VolQual', 0)),
                 "ATR_Pct":       last_row.get('ATR_Pct'),
-                # ── BUY_* — green triangle (weak close, z < -thr), by signal age ──
+                # ── BUY_* — green triangle (histogram crossed up), by signal age ──
                 "BUY_Today": "●" if sample_range.iloc[-1]['buy_cond'] else "—",
                 "BUY_1d": "●" if sample_range.iloc[-2]['buy_cond'] else "—",
                 "BUY_2d": "●" if sample_range.iloc[-3]['buy_cond'] else "—",
                 "BUY_3d": "●" if sample_range.iloc[-4]['buy_cond'] else "—",
                 "BUY_5d": "●" if sample_range.tail(5)['buy_cond'].any() else "—",
-                # ── SELL_* — yellow diamond (strong close, z > +thr), by signal age ──
+                # ── SELL_* — yellow diamond (histogram crossed down), by signal age ──
                 "SELL_Today": "●" if sample_range.iloc[-1]['sell_cond'] else "—",
                 "SELL_1d": "●" if sample_range.iloc[-2]['sell_cond'] else "—",
                 "SELL_2d": "●" if sample_range.iloc[-3]['sell_cond'] else "—",
                 "SELL_3d": "●" if sample_range.iloc[-4]['sell_cond'] else "—",
                 "SELL_5d": "●" if sample_range.tail(5)['sell_cond'].any() else "—",
-                # Per-age z-score / close so an aged row reports the bar that fired it.
+                # Per-age histogram / close so an aged row reports the bar that fired it.
                 "Z_Hist":     _z_hist,
+                "Imp_Hist":   _imp_hist,
                 "Close_Hist": _close_hist,
                 # Additional fields for detail cards
                 "Osc_Value": round(last_row.get('Delta_Z', 0), 2),
@@ -2900,9 +2972,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "ZScore_Value": round(last_row.get('Delta_Z', 0), 2),
             })
 
-            _z_disp = float(last_row['CLR_Z']) if pd.notna(last_row['CLR_Z']) else float('nan')
-            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: z={_z_disp:+.2f}  "
-                           f"state={last_row.get('CLR_State', '—')}  zone={last_row['Condition']}")
+            _z_disp = float(last_row['SID_Hist_Z']) if pd.notna(last_row['SID_Hist_Z']) else float('nan')
+            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: hist={_z_disp:+.2f}σ  "
+                           f"state={last_row.get('SID_State', '—')}  "
+                           f"osc={last_row.get('SID_Zone', '—')}  flow={last_row['Condition']}")
 
         except Exception as e:
             console.failure(f"Analysis Failed: {ticker}", str(e))
@@ -2913,7 +2986,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     if _cache_hits:
         console.detail(f"Analyzed-frame cache: reused {_cache_hits}/{len(data_dict)} frames from the range harvest (skipped re-analysis)")
     if _warmup_skipped:
-        console.detail(f"Warmup: {_warmup_skipped} symbol(s) skipped — fewer than {clr.min_bars} bars, so the z-score has no lookback")
+        console.detail(f"Warmup: {_warmup_skipped} symbol(s) skipped — fewer than {sid.min_bars} bars, so the oscillator is not warm")
     # One-shot cache — release the harvested frames now that the screener has consumed them.
     _analyzed_cache_clear()
 
@@ -2921,7 +2994,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.summary("RUN SUMMARY", {
         "Universe": universe,
         "Universe Index": selected_index,
-        "Instrument Class": clr.iclass,
+        "Instrument Class": sid.iclass,
         "Total Symbols": len(stock_list),
         "Data Success": len(data_dict),
         "Analyzed Stocks": len(results),
@@ -2960,22 +3033,24 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             )
         elif _warmup_skipped >= _n_fetched:
             st.warning(
-                f"**Every symbol is still warming up.** CLR needs {clr.min_bars} "
-                f"{'weekly' if timeframe == 'Weekly' else 'daily'} bars before the close-location "
-                f"z-score has a lookback, and none of the {_n_fetched} symbols in {selected_index} "
-                f"has that much history as of {analysis_date}. Try the Daily timeframe, or a "
-                "universe with longer-listed instruments."
+                f"**Every symbol is still warming up.** The oscillator needs {sid.min_bars} "
+                f"{'weekly' if timeframe == 'Weekly' else 'daily'} bars before its normalization "
+                f"window, lookback, participation baseline and smoothing are all warm, and none "
+                f"of the {_n_fetched} symbols in {selected_index} has that much history as of "
+                f"{analysis_date}. Try the Daily timeframe, or a universe with longer-listed "
+                "instruments."
             )
         else:
             st.info(
                 f"**Nothing to show** — {_n_fetched} of {_n_total} symbols had data for {analysis_date}, "
-                "but none produced a usable close-location reading. "
+                "but none produced a usable conviction reading. "
                 "Try an adjacent trading date, or check that the selected date is a market session."
             )
         # Return empty DataFrame with expected columns to prevent downstream KeyErrors
         expected_cols = [
-            "Symbol", "DisplayName", "SimpleName", "Signal", "CLR_Z", "CLR_Z_Cap", "CLR_CLV",
-            "CLR_State", "CLR_Hold_Dir", "CLR_Hold_Age", "CLR_Horizon",
+            "Symbol", "DisplayName", "SimpleName", "Signal", "SID_Hist_Z", "SID_Impulse",
+            "SID_Osc", "SID_Hist", "SID_Zone", "buy_cond", "sell_cond",
+            "SID_State", "SID_Hold_Dir", "SID_Hold_Age", "SID_Horizon",
             "Bar_Delta", "CVD", "CVD_Slope", "Delta_Z", "Buy_Share", "Absorption_Score",
             "Zone", "SignalType", "Price", "PctChange",
             "BUY_Today", "BUY_1d", "BUY_2d", "BUY_3d", "BUY_5d",
@@ -2986,21 +3061,23 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     results_df = pd.DataFrame(results)
 
-    # Cross-sectional ranking (engine.py): order by the fade score (-z), assign Side from
-    # which side of ±thr the close location landed, and set conviction from |z|'s position
-    # inside its attainable range × the cost gate. The measured expectancy (`study`) informs
-    # the cost gate and the per-row read; it never scales or filters a signal. One call emits
-    # the whole UI contract.
+    # Cross-sectional ranking (engine.py): score on the histogram in σ units, take Side
+    # from whether the histogram actually CROSSED on this bar, and set conviction from the
+    # force of that crossing × the cost gate. Priority is banded — a fired crossing outranks
+    # an open hold window, which outranks a merely bullish level — because a zero-crossing
+    # sits at zero and would otherwise sort into the middle of the universe. The measured
+    # expectancy (`study`) informs the cost gate and the per-row read; it never scales or
+    # filters a signal. One call emits the whole UI contract.
     if not results_df.empty:
-        results_df = eng.compute_ranking(results_df, cost_bps=clr.cost_bps,
-                                         thr=clr.thr, study=study)
+        results_df = eng.compute_ranking(results_df, cost_bps=sid.cost_bps,
+                                         k=sid.k, horizon=sid.horizon, study=study)
 
     return results_df
 
 
 def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_len, wt_n1, wt_n2, levels, timeframe, wt2_len=20, wt2_type="ALMA",
                             external_progress_slot=None, progress_offset=0, progress_scale=100,
-                            clr=None, study=None):
+                            sid=None, study=None):
     """Compute the per-(date, symbol) CLR frame for a date range.
 
     Pure compute path: fetches history, runs the full / regime analyses on every symbol,
@@ -3012,8 +3089,8 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     ``external_progress_slot`` lets a caller share one progress bar over
     [offset, offset+scale] instead of stacking a second bar.
     """
-    if clr is None:
-        clr = _clr_settings(universe, selected_index, timeframe)
+    if sid is None:
+        sid = _siddhi_settings(universe, selected_index, timeframe)
     _own_slot = external_progress_slot is None
     progress_slot = st.empty() if _own_slot else external_progress_slot
     def _p(pct, label, sub):
@@ -3057,7 +3134,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     # Analyzed-frame cache for this run — lets a screener that follows skip
     # re-running the identical per-stock analysis pipeline (see helper comment).
     _cache_sig = _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
-                                      wt2_len, wt2_type, end_date, clr.params_sig)
+                                      wt2_len, wt2_type, end_date, sid.params_sig)
     _analyzed_cache_reset(_cache_sig)
 
     for i, (ticker, df) in enumerate(data_dict.items()):
@@ -3073,15 +3150,15 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
             if timeframe == "Weekly":
                 df = resample_to_weekly(df)
             df = run_full_analysis(df, reg_len, wt_n1, wt_n2, *levels,
-                                   wt2_len=wt2_len, wt2_type=wt2_type, clr=clr)
+                                   wt2_len=wt2_len, wt2_type=wt2_type, sid=sid)
             df = run_regime_analysis(df)
             # Cache the analyzed frame so run_screener_analysis can reuse it instead
             # of recomputing. Stored by reference — the harvest-only columns appended
             # below (Ret_*, SignalType) are harmless extras; the screener copies on read.
             _analyzed_cache_put(ticker, df, _cache_sig)
 
-            # Forward-return labels at the CLR horizons (5-10 bars is where the edge
-            # lives; 1 and 21 bracket its decay). Labels only — never signal inputs.
+            # Forward-return labels at the declared horizons (10 bars is the hold; 1, 5
+            # and 21 bracket it). Labels only — never signal inputs.
             for h in eng.HOLD_HORIZONS:
                 df[f'Ret_{h}b'] = df['Close'].shift(-h) / df['Close'] - 1
 
@@ -3099,13 +3176,17 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                 all_results.append({
                     'Date': date,
                     'Symbol': ticker,
-                    # Signal == the CLR fade score (-z). Positive = bullish (weak close).
-                    'Signal': row['Fade_Score'],
-                    'CLR_Z': row['CLR_Z'],
-                    'CLR_CLV': row['CLR_CLV'],
-                    'CLR_State': row.get('CLR_State', 'NEUTRAL'),
-                    'CLR_Hold_Dir': row.get('CLR_Hold_Dir', 0),
-                    'CLR_Hold_Age': row.get('CLR_Hold_Age'),
+                    # Signal == the conviction histogram in σ. Positive = the oscillator
+                    # leads its signal line. The EVENT is buy_cond / sell_cond below.
+                    'Signal': row['Signal_Score'],
+                    'SID_Hist_Z': row['SID_Hist_Z'],
+                    'SID_Osc': row['SID_Osc'],
+                    'SID_Hist': row['SID_Hist'],
+                    'SID_Impulse': row.get('SID_Impulse'),
+                    'SID_Zone': row.get('SID_Zone', '—'),
+                    'SID_State': row.get('SID_State', 'NEUTRAL'),
+                    'SID_Hold_Dir': row.get('SID_Hold_Dir', 0),
+                    'SID_Hold_Age': row.get('SID_Hold_Age'),
                     'Bar_Delta': row['Bar_Delta'],
                     'CVD': row['CVD'],
                     'CVD_Slope': row['CVD_Slope'],
@@ -3155,11 +3236,11 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     console.summary("HISTORICAL RANGE SUMMARY", {
         "Universe": universe,
         "Universe Index": selected_index,
-        "Instrument Class": clr.iclass,
+        "Instrument Class": sid.iclass,
         "Historical Range": f"{start_date} to {end_date}",
         "Total Signals Fired": summary['total_signals'],
         "Buy / Sell": f"{summary['total_buys']} / {summary['total_sells']}",
-        "Avg Fade Score": round(summary['avg_signal'], 3),
+        "Avg Histogram (σ)": round(summary['avg_signal'], 3),
         "Buy:Sell Ratio": round(summary['overall_ratio'], 2),
         "Dominant Zone": summary['most_common_zone'],
         "HMM Regime": summary['dominant_regime'],
@@ -3175,9 +3256,10 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         "start_date":     start_date,
         "end_date":       end_date,
         "timeframe":      timeframe,
-        "iclass":         clr.iclass,
-        "thr":            clr.thr,
-        "z_look":         clr.z_look,
+        "iclass":         sid.iclass,
+        "k":              sid.k,
+        "length":         sid.length,
+        "trigger":        sid.trigger_label,
     }
 
     # Only clear our OWN bar. When sharing the Single-Date bar, the screener that
@@ -3191,7 +3273,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _aggregate_timeseries(ts_df):
-    """Aggregate the per-(date, symbol) CLR frame into daily metrics + summary stats.
+    """Aggregate the per-(date, symbol) Siddhi frame into daily metrics + summary stats.
 
     Pure function — used by both ``run_timeseries_analysis`` (for the console
     summary on harvest) and ``render_timeseries_dashboard`` (re-rendered on every
@@ -3221,8 +3303,8 @@ def _aggregate_timeseries(ts_df):
     daily_agg['Flow_Strength'] = daily_agg['Signal'].abs()
 
     # Signal breadth: % of the universe firing each event on a given day. This is the
-    # read that matters for CLR — a day where 30% of names close weak is a very
-    # different tape from one where 3% do.
+    # read that matters — a day where 30% of names flip their conviction histogram is a
+    # very different tape from one where 3% do.
     total_per_day_all = ts_df.groupby('Date').size()
     daily_agg['Buy_Breadth_Pct']  = (daily_agg['BuySignal']  / total_per_day_all * 100).fillna(0)
     daily_agg['Sell_Breadth_Pct'] = (daily_agg['SellSignal'] / total_per_day_all * 100).fillna(0)
@@ -3241,11 +3323,13 @@ def _aggregate_timeseries(ts_df):
     daily_agg['Regime_Bear_Pct']       = (regime_bear  / total_per_day * 100).fillna(0)
     daily_agg['Regime_Transition_Pct'] = (regime_trans / total_per_day * 100).fillna(0)
 
-    # Mean |z| of the day's fired signals — how far past the threshold the tape actually
-    # went, not just how many names crossed it.
+    # Mean crossing FORCE of the day's fired signals — how hard the histogram opened on
+    # the bars that crossed, not just how many names crossed. The histogram itself cannot
+    # be used here: a crossing sits at zero by construction, so averaging its level over
+    # fired bars would report noise around zero on every day, forever.
     _fired = ts_df[ts_df['BuySignal'] | ts_df['SellSignal']] if 'BuySignal' in ts_df.columns else ts_df.iloc[0:0]
-    if len(_fired) and 'CLR_Z' in _fired.columns:
-        daily_agg['Avg_Fired_Z'] = _fired.groupby('Date')['CLR_Z'].apply(lambda s: s.abs().mean())
+    if len(_fired) and 'SID_Impulse' in _fired.columns:
+        daily_agg['Avg_Fired_Z'] = _fired.groupby('Date')['SID_Impulse'].apply(lambda s: s.abs().mean())
     else:
         daily_agg['Avg_Fired_Z'] = np.nan
 
@@ -3293,11 +3377,11 @@ def render_timeseries_dashboard():
     range_label = (f"{start_date} to {end_date}"
                    if start_date and end_date
                    else f"{len(daily_agg)} periods")
-    _iclass = meta.get('iclass', '—')
-    _thr    = float(meta.get('thr', eng.CLR_THRESHOLD))
+    _iclass  = meta.get('iclass', '—')
+    _trigger = meta.get('trigger') or "histogram crosses zero"
     ui.render_section_header(
         f"Historical Range ({range_label})",
-        f"{ENGINE_NAME} · ±{_thr:.1f}σ · {_iclass}",
+        f"{ENGINE_NAME} · {_trigger} · {_iclass}",
         icon="history", accent="violet",
     )
 
@@ -3309,13 +3393,13 @@ def render_timeseries_dashboard():
                               f"{summary['total_buys']} buy · {summary['total_sells']} sell", "info")
     with c2:
         ui.render_metric_card("Avg Buy Breadth", f"{summary['avg_buy_breadth']:.1f}%",
-                              f"{timeframe_label} · weak closes", "success")
+                              f"{timeframe_label} · crossed up", "success")
     with c3:
         ui.render_metric_card("Avg Sell Breadth", f"{summary['avg_sell_breadth']:.1f}%",
-                              f"{timeframe_label} · strong closes", "danger")
+                              f"{timeframe_label} · crossed down", "danger")
     with c4:
-        ui.render_metric_card("Avg Fired |z|", f"{_avg_z:.2f}" if np.isfinite(_avg_z) else "—",
-                              f"vs ±{_thr:.1f}σ trigger", "warning")
+        ui.render_metric_card("Avg Crossing Force", f"{_avg_z:.2f}σ" if np.isfinite(_avg_z) else "—",
+                              "Δhistogram on the fired bars", "warning")
     with c5:
         ui.render_metric_card("Buy:Sell Ratio", f"{summary['overall_ratio']:.2f}",
                               f"{'Buy' if summary['overall_ratio'] > 1 else 'Sell'}-skewed tape", "info")
@@ -3334,15 +3418,15 @@ def render_timeseries_dashboard():
     # ── TAB 1 · Signal Dashboard ───────────────────────────────────────────
     with tab1:
         ui.render_section_header("Signal Breadth",
-                                 f"% of universe firing BUY / SELL past ±{_thr:.1f}σ",
+                                 "% of universe whose conviction histogram crossed zero",
                                  icon="activity", accent="cyan")
         fig_breadth = go.Figure()
         fig_breadth.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Buy_Breadth_Pct'],
-                                         mode='lines', name='Buy % (weak closes)',
+                                         mode='lines', name='Buy % (crossed up)',
                                          fill='tozeroy', fillcolor='rgba(0,230,118,0.12)',
                                          line=dict(color='#00E676', width=2)))
         fig_breadth.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Sell_Breadth_Pct'],
-                                         mode='lines', name='Sell % (strong closes)',
+                                         mode='lines', name='Sell % (crossed down)',
                                          fill='tozeroy', fillcolor='rgba(255,167,38,0.12)',
                                          line=dict(color='#FFA726', width=2)))
         _pct_raw = max(daily_agg['Buy_Breadth_Pct'].max(), daily_agg['Sell_Breadth_Pct'].max())
@@ -3402,13 +3486,13 @@ def render_timeseries_dashboard():
 
     # ── TAB 3 · Regime Analysis ────────────────────────────────────────────
     with tab3:
-        ui.render_section_header("Aggregate Close-Location Skew",
-                                 "Universe-mean fade score (−z) over time",
+        ui.render_section_header("Aggregate Conviction Skew",
+                                 "Universe-mean conviction histogram (σ) over time",
                                  icon="activity", accent="rose")
-        # Signal = per-name fade score (−z, σ≈1); its daily cross-sectional MEAN
-        # concentrates near zero (σ ≈ 1/√N ≈ 0.08 for ~150 names), so the extreme
-        # bands sit at ±0.25 (~3σ of that mean) rather than at the ±1.5σ per-name
-        # trigger. Green (positive) = the universe closed weak = bullish for CLR.
+        # Signal = per-name conviction histogram in σ; its daily cross-sectional MEAN
+        # concentrates near zero (σ ≈ 1/√N ≈ 0.08 for ~150 names), so the extreme bands
+        # sit at ±0.25 (~3σ of that mean) rather than anywhere near a per-name reading.
+        # Green (positive) = most of the universe has its oscillator above its signal line.
         _sig_band = 0.25
         colors = ['#00E676' if v > _sig_band else '#FFA726' if v < -_sig_band else '#64748B'
                   for v in daily_agg['Signal']]
@@ -3420,7 +3504,7 @@ def render_timeseries_dashboard():
                                      fill='tozeroy', fillcolor='rgba(255,167,38,0.05)',
                                      line=dict(width=0), showlegend=False, hoverinfo='skip'))
         fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Signal'],
-                                     mode='lines+markers', name='Avg fade score',
+                                     mode='lines+markers', name='Avg histogram (σ)',
                                      line=dict(color='#D4A853', width=2),
                                      marker=dict(size=6, color=colors)))
         fig_avg.add_hline(y=_sig_band,  line=dict(color='rgba(0,230,118,0.5)', width=1, dash='dash'))
@@ -3492,8 +3576,8 @@ def render_timeseries_dashboard():
             }
             st.dataframe(pd.DataFrame(regime_stats), width='stretch', hide_index=True)
         with col_r2:
-            ui.render_section_header("Fade-Score Distribution",
-                                     "Universe-mean fade score (−z) statistics",
+            ui.render_section_header("Conviction-Histogram Distribution",
+                                     "Universe-mean conviction histogram (σ) statistics",
                                      icon="database", accent="rose")
             signal_stats = {
                 "Metric": ["Mean", "Median", "Min", "Max", "Std Dev"],
@@ -3518,17 +3602,17 @@ def render_timeseries_dashboard():
                         'Buy_Breadth_Pct', 'Sell_Breadth_Pct',
                         'Regime_Bull_Pct', 'Regime_Bear_Pct', 'Change_Point']
         display_ts = display_ts[display_cols]
-        display_ts.columns = ['Date', 'Buy Sig', 'Sell Sig', 'Avg Fade', 'Avg Fired |z|',
+        display_ts.columns = ['Date', 'Buy Sig', 'Sell Sig', 'Avg Hist', 'Avg Force',
                               'Buy Breadth %', 'Sell Breadth %',
                               'Bull Regime %', 'Bear Regime %', 'Change Pts']
         st.dataframe(
             display_ts, width='stretch', hide_index=True,
             column_config={
                 'Date':          st.column_config.TextColumn(help="Trading day (YYYY-MM-DD)."),
-                'Buy Sig':       st.column_config.NumberColumn(help=f"Symbols firing the CLR BUY (green triangle) — close-location z below −{_thr:.1f}σ, a weak close to fade up."),
-                'Sell Sig':      st.column_config.NumberColumn(help=f"Symbols firing the CLR SELL (yellow diamond) — close-location z above +{_thr:.1f}σ. Note: this side did not confirm out of sample."),
-                'Avg Fade':      st.column_config.NumberColumn(help="Cross-sectional mean fade score (−z) on this day. The daily mean concentrates near 0; ±0.25 is already a strongly one-sided tape.", format="%.3f"),
-                'Avg Fired |z|': st.column_config.NumberColumn(help=f"Mean |z| of the symbols that actually fired — how far past the ±{_thr:.1f}σ trigger the tape went, blank on days with no fires.", format="%.2f"),
+                'Buy Sig':       st.column_config.NumberColumn(help="Symbols firing the BUY (green triangle) — the conviction histogram crossed ABOVE zero on this bar."),
+                'Sell Sig':      st.column_config.NumberColumn(help="Symbols firing the SELL (yellow diamond) — the conviction histogram crossed BELOW zero on this bar."),
+                'Avg Hist':      st.column_config.NumberColumn(help="Cross-sectional mean conviction histogram (in σ) on this day — how one-sided the tape's conviction is. The daily mean concentrates near 0; ±0.25 is already strongly one-sided.", format="%.3f"),
+                'Avg Force':     st.column_config.NumberColumn(help="Mean crossing force of the symbols that actually fired — the one-bar change in the histogram, in σ, on the fired bars. Blank on days with no fires. The histogram's LEVEL cannot be averaged here: a crossing sits at zero by construction.", format="%.2f"),
                 'Buy Breadth %': st.column_config.NumberColumn(help="Percent of the universe firing BUY on this day.", format="%.1f"),
                 'Sell Breadth %':st.column_config.NumberColumn(help="Percent of the universe firing SELL on this day.", format="%.1f"),
                 'Bull Regime %': st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BULL' (risk context, not a signal input)."),
@@ -3558,7 +3642,7 @@ def render_timeseries_dashboard():
 # CORRELATION MODE ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_correlation_analysis(universe, selected_index, target_ticker, lookback, method, timeframe, analysis_date=None, clr=None, study=None):
+def run_correlation_analysis(universe, selected_index, target_ticker, lookback, method, timeframe, analysis_date=None, sid=None, study=None):
     """Execute correlation analysis between universe constituents and a target asset.
 
     Returns a dict with correlation data, rolling correlations, prices, and returns,
@@ -3566,8 +3650,8 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
     """
     if analysis_date is None:
         analysis_date = _today_ist()
-    if clr is None:
-        clr = _clr_settings(universe, selected_index, timeframe)
+    if sid is None:
+        sid = _siddhi_settings(universe, selected_index, timeframe)
     progress_slot = st.empty()
     progress_bar(progress_slot, 5, "Initializing Correlation Engine", "Fetching Market Data")
 
@@ -3753,17 +3837,17 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         )
         if _can_reuse:
             console.detail("Correlation: reusing cached screener results from session state")
-            clr_results = _sdf
+            sid_results = _sdf
         else:
             _corr_reg_len, _corr_n1, _corr_n2 = 20, 10, 21
             _corr_levels = (80, 40, -80, -40)
             _corr_wt2_len, _corr_wt2_type = 20, "ALMA"
-            clr_results = run_screener_analysis(
+            sid_results = run_screener_analysis(
                 universe, selected_index, analysis_date,
                 _corr_reg_len, _corr_n1, _corr_n2, _corr_levels, timeframe,
                 show_progress=False, external_progress_slot=progress_slot,
                 progress_offset=60, progress_scale=30,
-                wt2_len=_corr_wt2_len, wt2_type=_corr_wt2_type, clr=clr, study=study,
+                wt2_len=_corr_wt2_len, wt2_type=_corr_wt2_type, sid=sid, study=study,
             )
 
         progress_bar(progress_slot, 90, "Building Results DataFrame", "Computing Divergence Metrics")
@@ -3796,30 +3880,30 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
             # Pull this symbol's CLR read from the screener output already computed
             # above, so the confluence ranking carries the live signal state.
-            clr_signal = np.nan            # fade score (-z)
-            clr_zone = "—"
-            clr_signal_type = "Neutral"
-            clr_z = np.nan
-            clr_side = "—"
-            clr_conv = np.nan
+            sid_signal = np.nan            # conviction histogram, in σ
+            sid_zone = "—"
+            sid_signal_type = "Neutral"
+            sid_z = np.nan
+            sid_side = "—"
+            sid_conv = np.nan
             priority_long = np.nan
             priority_short = np.nan
-            if clr_results is not None and len(clr_results) > 0:
-                clr_row = clr_results[clr_results['SimpleName'] == symbol.replace('.NS', '').replace('^', '')]
-                if len(clr_row) > 0:
-                    clr_signal = clr_row['Signal'].values[0]
-                    clr_zone = clr_row['Zone'].values[0]
-                    clr_signal_type = clr_row['SignalType'].values[0]
-                    if 'CLR_Z' in clr_row.columns:
-                        clr_z = clr_row['CLR_Z'].values[0]
-                    if 'Side' in clr_row.columns:
-                        clr_side = clr_row['Side'].values[0]
-                    if 'Conviction' in clr_row.columns:
-                        clr_conv = clr_row['Conviction'].values[0]
-                    if 'Priority_Long' in clr_row.columns:
-                        priority_long = clr_row['Priority_Long'].values[0]
-                    if 'Priority_Short' in clr_row.columns:
-                        priority_short = clr_row['Priority_Short'].values[0]
+            if sid_results is not None and len(sid_results) > 0:
+                sid_row = sid_results[sid_results['SimpleName'] == symbol.replace('.NS', '').replace('^', '')]
+                if len(sid_row) > 0:
+                    sid_signal = sid_row['Signal'].values[0]
+                    sid_zone = sid_row['Zone'].values[0]
+                    sid_signal_type = sid_row['SignalType'].values[0]
+                    if 'SID_Hist_Z' in sid_row.columns:
+                        sid_z = sid_row['SID_Hist_Z'].values[0]
+                    if 'Side' in sid_row.columns:
+                        sid_side = sid_row['Side'].values[0]
+                    if 'Conviction' in sid_row.columns:
+                        sid_conv = sid_row['Conviction'].values[0]
+                    if 'Priority_Long' in sid_row.columns:
+                        priority_long = sid_row['Priority_Long'].values[0]
+                    if 'Priority_Short' in sid_row.columns:
+                        priority_short = sid_row['Priority_Short'].values[0]
 
             # Correlation-implied expected move = beta × target move, where
             # beta = corr × σ_sym/σ_tgt over the same lookback window (see above).
@@ -3844,12 +3928,12 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 'Target_Pct': target_change,
                 'Expected_Change': expected_change,
                 'Divergence': divergence,
-                'CLR_Signal': clr_signal,          # fade score (-z)
-                'CLR_Z': clr_z,
-                'CLR_Zone': clr_zone,
-                'CLR_Signal_Type': clr_signal_type,
-                'Side': clr_side,
-                'Conviction': clr_conv,
+                'CLR_Signal': sid_signal,          # conviction histogram, in σ
+                'SID_Hist_Z': sid_z,
+                'Regime_Zone': sid_zone,
+                'CLR_Signal_Type': sid_signal_type,
+                'Side': sid_side,
+                'Conviction': sid_conv,
                 'Priority_Long':  priority_long,
                 'Priority_Short': priority_short,
             })
@@ -3862,34 +3946,40 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         corr_df = corr_df.sort_values('Corr_Current', key=abs, ascending=False)
 
-        # ── Confluence score ──────────────────────────────────────────────
-        # |Corr| × normalised |fade score|, i.e. how strong this symbol's own CLR
-        # close-location reading is relative to the rest of the universe. Normalising by
-        # the observed max keeps the score in [0,1] across universes whose |z| spreads
-        # differ.
+        # ── Confluence score ────────────────────────────────────────────
+        # |Corr| × normalised signal strength, i.e. how loud this symbol's own Siddhi read
+        # is relative to the rest of the universe. Normalising by the observed max keeps the
+        # score in [0,1] across universes whose readings spread differently.
         #
-        # A conviction weight (0.5 + 0.5·Conviction) used to be applied on top. It has been
-        # removed: conviction is a monotone function of |z| times a universe-level constant,
-        # and `pri_norm` is already the normalised |fade score| — i.e. |z|. Multiplying the
-        # two counted the same variable twice, compressing the ranking toward whatever the
-        # |z| term already said while presenting itself as a second, independent check. The
-        # Nifty 50 study confirmed the redundancy directly: standardised, conviction and
-        # |z| produce identical regression slopes to four decimals. Conviction remains in
-        # the table as a description of the close; it no longer scales the ranking.
-        if 'Priority_Long' in corr_df.columns and corr_df['Priority_Long'].notna().any():
-            abs_pri = corr_df['Priority_Long'].abs().fillna(0)
+        # Strength is DIRECTION-FREE: max(Priority_Long, Priority_Short). The priority bands
+        # are per-side and mutually exclusive, so this reads out as "fired a crossing" >
+        # "inside an open hold window" > "just a level", whichever side it is on — which is
+        # what the confluence question actually asks. Taking |Priority_Long| instead (what
+        # the previous engine did, where it equalled |z|) would now score a strongly bearish
+        # CONTEXT row the same as an open hold window, because the bands are not symmetric
+        # about zero.
+        #
+        # A conviction weight (0.5 + 0.5·Conviction) used to be applied on top. It stays
+        # removed: conviction already describes the crossing that put a row in the top band,
+        # so multiplying it in would count the same fact twice — compressing the ranking
+        # toward what the band already said while presenting itself as an independent check.
+        # Conviction remains in the table as a description; it does not scale the ranking.
+        _pri_cols = [c for c in ('Priority_Long', 'Priority_Short') if c in corr_df.columns]
+        if _pri_cols and corr_df[_pri_cols].notna().any().any():
+            abs_pri = corr_df[_pri_cols].max(axis=1).fillna(0).clip(lower=0)
             pri_norm = abs_pri / max(abs_pri.max(), 1e-6)        # [0, 1]
             corr_df['Priority_Strength'] = pri_norm
             corr_df['Confluence_Score'] = (corr_df['Corr_Current'].abs() * pri_norm).clip(0.0, 1.0)
             _n_fired = int((corr_df['Side'].isin(['Buy', 'Sell'])).sum()) if 'Side' in corr_df.columns else 0
-            console.item("Confluence formula", "|Corr| × normalised |fade score|")
-            console.item("Fired signals in universe", f"{_n_fired} symbol(s) past ±{clr.thr:.1f}σ")
+            console.item("Confluence formula", "|Corr| × normalised signal strength")
+            console.item("Fired signals in universe",
+                         f"{_n_fired} symbol(s) crossed on this bar")
         else:
             # Defensive fallback — no screener output to join against, so rank on the
             # correlation alone rather than inventing a signal strength.
             corr_df['Priority_Strength'] = 0.0
             corr_df['Confluence_Score'] = corr_df['Corr_Current'].abs().clip(0.0, 1.0)
-            console.item("Confluence formula", "|Corr| only (fallback — no CLR screener data)")
+            console.item("Confluence formula", "|Corr| only (fallback — no screener data)")
 
         # Get target name from maps (maps are display_name -> ticker, so reverse lookup)
         target_name = target_ticker
@@ -3915,8 +4005,9 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             "lookback": lookback,
             "method": method,
             "timeframe": timeframe,
-            "thr": clr.thr,
-            "iclass": clr.iclass,
+            "trigger": sid.trigger_label,
+            "k": sid.k,
+            "iclass": sid.iclass,
         }
 
     except Exception as e:
@@ -3941,9 +4032,9 @@ _RED    = "#FB7185"
 # The indicator's own marker colours, so the app and the TradingView chart read the
 # same: green triangle = BUY, yellow/amber diamond = SELL. (sb_v8.pine colorBull /
 # colorWarn / colorNeut.)
-_CLR_BUY  = "#00E676"
-_CLR_SELL = "#FFA726"
-_CLR_NEUT = "#787B86"
+_SID_BUY  = "#00E676"
+_SID_SELL = "#FFA726"
+_SID_NEUT = "#787B86"
 
 # 'buy'/'sell' are the canonical side keys. 'long'/'short' are accepted so any
 # lingering caller keeps working rather than silently getting the sell palette.
@@ -3963,14 +4054,14 @@ def _side_palette(side: str) -> dict:
     """Side-keyed accent colors — BUY green triangle / SELL amber diamond."""
     if _is_buy_side(side):
         return {
-            "accent_light": _CLR_BUY,
+            "accent_light": _SID_BUY,
             "border_color": "rgba(0, 230, 118, 0.3)",
             "header_bg":    "rgba(0, 230, 118, 0.13)",
             "mark":         "▲",
             "label":        "BUY",
         }
     return {
-        "accent_light": _CLR_SELL,
+        "accent_light": _SID_SELL,
         "border_color": "rgba(255, 167, 38, 0.3)",
         "header_bg":    "rgba(255, 167, 38, 0.13)",
         "mark":         "◆",
@@ -4006,16 +4097,16 @@ def _human_vol(value: float, signed: bool = True) -> str:
     return f"{sign}{a:.0f}"
 
 
-def _build_confluence_table_html(df: pd.DataFrame, thr: float = None) -> str:
+def _build_confluence_table_html(df: pd.DataFrame, k: float = None) -> str:
     """Build the ranked HTML table for confluence setups.
 
-    Displays symbol, correlation, the CLR close-location z + side, flow zone,
-    actual/expected/divergence, conviction, and the confluence score. ``thr`` is the run's
+    Displays symbol, correlation, the conviction histogram + side, flow zone,
+    actual/expected/divergence, conviction, and the confluence score. ``k`` is the run's
     active trigger, so the z cell's colouring agrees with the Side the engine assigned.
 
     Returns: Complete HTML document string ready for st.components.v1.html().
     """
-    thr = eng.CLR_THRESHOLD if thr is None else float(thr)
+    k = eng.SID_K if k is None else float(k)
     table_rows = []
     if df.empty:
         table_rows.append(f"""
@@ -4034,13 +4125,13 @@ def _build_confluence_table_html(df: pd.DataFrame, thr: float = None) -> str:
         for idx, (_, row) in enumerate(df.iterrows(), 1):
             symbol = html.escape(str(row.get('SimpleName', '')))
             corr = float(row.get('Corr_Current', 0))
-            zone = html.escape(str(row.get('CLR_Zone', 'Neutral')))
+            zone = html.escape(str(row.get('Regime_Zone', 'Neutral')))
             actual = float(row.get('PctChange', 0))
             expected = float(row.get('Expected_Change', 0))
             divergence = float(row.get('Divergence', 0))
             confluence = float(row.get('Confluence_Score', 0))
 
-            z_cell    = _z_cell(row.get('CLR_Z'), thr)
+            z_cell    = _hist_cell(row.get('SID_Hist_Z'), k)
             side_cell = _side_cell(row.get('Side'))
             conv_cell = _conv_cell(row.get('Conviction'))
 
@@ -4123,14 +4214,14 @@ def _build_confluence_table_html(df: pd.DataFrame, thr: float = None) -> str:
                 <th class="numeric">Rank</th>
                 <th>Symbol</th>
                 <th class="numeric">Corr</th>
-                <th class="numeric" title="Close-location z — the CLR core measure">Close-Loc z</th>
-                <th class="numeric" title="▲ BUY (weak close) · ◆ SELL (strong close) · — inside the band">Side</th>
+                <th class="numeric" title="The conviction histogram in σ of its own distribution — the state. Above zero the oscillator leads its signal line.">Hist σ</th>
+                <th class="numeric" title="▲ BUY (histogram crossed above zero) · ◆ SELL (crossed below) · — no crossing on this bar">Side</th>
                 <th class="numeric" title="Cumulative-delta flow zone — context only">Zone</th>
                 <th class="numeric" title="Symbol's price change on the analysis date">Actual %</th>
                 <th class="numeric" title="Expected move = target return × beta (rolling correlation × vol ratio over the lookback)">Expected %</th>
                 <th class="numeric" title="Divergence = Actual − Expected (positive = outperforming expectation)">Div %</th>
-                <th class="numeric" title="How far |z| sits between the firing threshold and the largest reading this bar's own window could produce, × the cost gate. Cap-relative, so two bars at the same z can differ. A description, not a validated forecast. Not a probability.">Conv</th>
-                <th class="numeric" title="Confluence = |Correlation| × normalised |fade score|">Confluence</th>
+                <th class="numeric" title="How forcefully the histogram opened on the crossing bar — its one-bar change in σ of its own distribution, through tanh, × the cost gate. The LEVEL cannot be used: a crossing sits at zero by construction. A description of the crossing, not a validated forecast. Not a probability.">Conv</th>
+                <th class="numeric" title="Confluence = |Correlation| × normalised signal strength (fired crossing > open hold window > level)">Confluence</th>
             </tr>
         </thead>
         <tbody>
@@ -4155,7 +4246,8 @@ def render_correlation_results(corr_data: dict) -> None:
     target_name = corr_data["target_name"]
     lookback = corr_data["lookback"]
     method = corr_data["method"]
-    thr = float(corr_data.get("thr", eng.CLR_THRESHOLD))
+    k = float(corr_data.get("k", eng.SID_K))
+    trigger = corr_data.get("trigger") or "histogram crosses zero"
     iclass = corr_data.get("iclass", "—")
 
     tab1, tab2, tab3 = st.tabs([
@@ -4255,7 +4347,7 @@ def render_correlation_results(corr_data: dict) -> None:
     with tab2:
         ui.render_section_header(
             "Confluence Setups",
-            f"Confluence: Correlation × CLR close-location strength · ±{thr:.1f}σ · {iclass}",
+            f"Confluence: Correlation × Siddhi signal strength · {trigger} · {iclass}",
             icon="zap",
             accent="cyan"
         )
@@ -4269,7 +4361,7 @@ def render_correlation_results(corr_data: dict) -> None:
             </div>
             <div style="color:#F1F5F9; line-height:1.6;">
                 Each setup type is ranked by <span style="color:#38BDF8; font-weight:600;">Confluence Score</span> (0-1)
-                = |Correlation| × normalised |fade score|. Highest rank = strongest
+                = |Correlation| × normalised signal strength. Highest rank = strongest
                 overlap between the correlation relationship and a live CLR reading. Look for:
                 <span style="font-weight:600;">(1) Score &gt;0.7</span>,
                 <span style="font-weight:600;">(2) |Div %| &gt;3%</span>,
@@ -4280,7 +4372,7 @@ def render_correlation_results(corr_data: dict) -> None:
                     <span style="color:#38BDF8; font-weight:600;">Corr</span> — Correlation strength
                 </div>
                 <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
-                    <span style="color:#38BDF8; font-weight:600;">Close-Loc z</span> — where the bar closed in its range
+                    <span style="color:#38BDF8; font-weight:600;">Hist σ</span> — the conviction histogram, in its own σ
                 </div>
                 <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
                     <span style="color:#38BDF8; font-weight:600;">Side</span> — ▲ BUY / ◆ SELL / — no fire
@@ -4308,7 +4400,7 @@ def render_correlation_results(corr_data: dict) -> None:
         def classify_setup(row):
             corr = row['Corr_Current']
             div = row['Divergence']
-            zone = row['CLR_Zone']
+            zone = row['Regime_Zone']
 
             # Div = Actual − Expected: NEGATIVE = the name underperformed what the
             # correlation implied (a laggard), POSITIVE = it outran the implication.
@@ -4460,7 +4552,7 @@ def render_correlation_results(corr_data: dict) -> None:
                         Top Confluence</p>""", unsafe_allow_html=True)
                     top_half = setup_data.head(5)
                     if len(top_half) > 0:
-                        st.components.v1.html(_build_confluence_table_html(top_half, thr=thr), height=100 + len(top_half) * 48)
+                        st.components.v1.html(_build_confluence_table_html(top_half, k=k), height=100 + len(top_half) * 48)
                 with col_right:
                     st.markdown(f"""<p style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600;
                                    text-transform:uppercase; letter-spacing:0.1em; color:{config['color']};
@@ -4468,7 +4560,7 @@ def render_correlation_results(corr_data: dict) -> None:
                         Also Considered</p>""", unsafe_allow_html=True)
                     bottom_half = setup_data.iloc[5:10]
                     if len(bottom_half) > 0:
-                        st.components.v1.html(_build_confluence_table_html(bottom_half, thr=thr), height=100 + len(bottom_half) * 48)
+                        st.components.v1.html(_build_confluence_table_html(bottom_half, k=k), height=100 + len(bottom_half) * 48)
                     else:
                         st.info("No additional setups")
 
@@ -4522,30 +4614,40 @@ def _fmt_num(v, fmt="{:+.2f}", dash="—"):
     return dash if not np.isfinite(f) else fmt.format(f)
 
 
-# Close-location z bands. Colour follows the CLR semantics, NOT price direction:
-# a deeply NEGATIVE z (weak close) is the bullish read, so it renders green.
-def _z_cell(z, thr: float = None) -> str:
-    """Render a close-location z-score cell, coloured by CLR meaning."""
-    thr = eng.CLR_THRESHOLD if thr is None else float(thr)
+# Conviction-histogram bands. The histogram is reported in sigma of its OWN distribution,
+# which is what makes one symbol's reading comparable to another's. Colour follows the sign
+# — above zero the oscillator leads its signal line, which is the bullish state — but note
+# that the LEVEL is context, not the event: the signal is the CROSSING, and a bar that just
+# crossed reads close to zero by construction. The Side column carries the event.
+def _hist_cell(z, k: float = None) -> str:
+    """Render the conviction histogram (in σ) for one symbol, coloured by which side of zero."""
+    k = eng.SID_K if k is None else float(k)
     try:
         f = float(z)
     except (TypeError, ValueError):
         f = float('nan')
     if not np.isfinite(f):
         return '<td class="numeric" style="color:#4B5563;">—</td>'
-    if f <= -thr:
-        col, note = '#00E676', 'weak close — BUY (fade up)'
-    elif f >= thr:
-        col, note = '#FFA726', 'strong close — SELL (holdout-unconfirmed side)'
+    if f > 0:
+        col, note = '#00E676', 'above zero — conviction leads its signal line (bullish state)'
+    elif f < 0:
+        col, note = '#FFA726', 'below zero — conviction trails its signal line (bearish state)'
     else:
-        col, note = '#787B86', f'inside ±{thr:.1f}σ — context only'
-    title = f'close-location z {f:+.2f} · {note}'
+        col, note = '#787B86', 'exactly at zero'
+    gate = 'zero' if k <= 0 else f'±{k:g}σ'
+    title = (f'conviction histogram {f:+.2f}σ · {note}. '
+             f'This is the STATE, not the signal — the signal is the bar on which it crosses '
+             f'{gate}, and on that bar this number is near zero.')
     return (f'<td class="numeric" style="color:{col}; font-weight:700;" '
             f'title="{html.escape(title)}">{f:+.2f}</td>')
 
 
+# Kept under the old name so no call site has to know the engine changed underneath it.
+_z_cell = _hist_cell
+
+
 def _conv_cell(conv) -> str:
-    """Render the conviction cell — |z|'s position in its attainable range × the cost gate."""
+    """Render the conviction cell — the force of the crossing × the cost gate."""
     try:
         c = float(conv)
     except (TypeError, ValueError):
@@ -4556,10 +4658,12 @@ def _conv_cell(conv) -> str:
     elif c >= 0.55: col = '#A3E635'
     elif c >= 0.40: col = '#D4A853'
     else:           col = '#FB923C'
-    title = (f'Conviction {c*100:.0f}% — how far |z| sits between the firing threshold and the '
-             f'largest reading this bar\'s own window could produce, x the cost gate. '
-             f'Cap-relative position, so two bars at the same z can differ. A description of the close, '
-             f'not a validated forecast, and not a probability.')
+    title = (f'Conviction {c*100:.0f}% — how forcefully the histogram opened on the crossing '
+             f'bar: the one-bar change in the histogram, in sigma of its own distribution, '
+             f'passed through tanh, x the cost gate. The LEVEL cannot be used here — a crossing '
+             f'sits at zero by construction, so scoring it off the level would rate every fresh '
+             f'signal at nothing. A description of the crossing, not a validated forecast, and '
+             f'not a probability.')
     return (f'<td class="numeric" style="color:{col}; font-weight:700;" '
             f'title="{html.escape(title)}">{c*100:.0f}%</td>')
 
@@ -4569,16 +4673,17 @@ def _side_cell(side) -> str:
     s = str(side or '—')
     if s == 'Buy':
         return ('<td class="numeric" style="color:#00E676; font-weight:700; font-size:0.68rem;" '
-                'title="green triangle — weak close, fade long">▲ BUY</td>')
+                'title="green triangle — the conviction histogram crossed ABOVE zero on this '
+                'bar: the oscillator has pulled above its own signal line.">▲ BUY</td>')
     if s == 'Sell':
         return ('<td class="numeric" style="color:#FFA726; font-weight:700; font-size:0.68rem;" '
-                'title="yellow diamond — strong close. The Pine labels this side CAUTION: it did '
-                'not confirm out of sample.">◆ SELL</td>')
+                'title="yellow diamond — the conviction histogram crossed BELOW zero on this '
+                'bar: the oscillator has dropped under its own signal line.">◆ SELL</td>')
     return '<td class="numeric" style="color:#4B5563; font-size:0.68rem;">—</td>'
 
 
 def _hold_cell(age, horizon, direction) -> str:
-    """Render the hold window as "day N/H" — how far into the measured 5-10 bar window."""
+    """Render the hold window as "day N/H" — how far into the declared horizon this signal is."""
     try:
         a = float(age)
         h = int(horizon)
@@ -4599,12 +4704,17 @@ def _hold_cell(age, horizon, direction) -> str:
             f'title="{html.escape(title)}">{n}/{h}</td>')
 
 
-def _entry_status(row, offset: int):
+def _entry_status(row, offset: int, side: str = 'buy'):
     """Has price already run since the signal fired — i.e. is the entry now late?
 
     Directional move from the fire bar to the snapshot bar, normalised by the symbol's
     own recent return volatility x sqrt(bars elapsed) so the bands are asset-agnostic
     (sigma units). Returns (label, color, title).
+
+    ``side`` carries the trade's direction explicitly. Under the previous engine it was
+    inferred from the sign of the z that fired (negative z = fade long); a Siddhi crossing
+    sits at zero, so its sign says nothing about which way it crossed and the caller —
+    which already knows the bucket it is filling — has to say.
     """
     if offset == 0:
         return ('Now', '#94a3b8', 'fresh — fired on the snapshot bar')
@@ -4614,12 +4724,8 @@ def _entry_status(row, offset: int):
     fire_close, now_close = closes[offset], closes[0]
     if not (pd.notna(fire_close) and pd.notna(now_close) and float(fire_close) > 0):
         return ('—', '#4B5563', '')
-    # Direction of the trade the signal implied, read from the z that fired it.
-    zs = row.get('Z_Hist')
-    fire_z = zs[offset] if isinstance(zs, (list, tuple)) and offset < len(zs) else float('nan')
-    if not (pd.notna(fire_z) and np.isfinite(float(fire_z))):
-        return ('—', '#4B5563', '')
-    side_sign = 1.0 if float(fire_z) < 0 else -1.0      # weak close → long, strong → sell
+    # Direction of the trade the signal implied: a cross UP is the long.
+    side_sign = 1.0 if _is_buy_side(side) else -1.0
     dm = (float(now_close) - float(fire_close)) / float(fire_close) * side_sign
     rv = row.get('RetVol20')
     scale = (float(rv) * (offset ** 0.5)) if (rv is not None and pd.notna(rv) and float(rv) > 0) else None
@@ -4647,14 +4753,19 @@ def _status_cell(status) -> str:
 
 
 def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timeframe: str = 'Daily') -> tuple:
-    """Bucket fired CLR signals by age (Today, 1d, 2d, 3d, within 5d) for the timeline.
+    """Bucket fired signals by age (Today, 1d, 2d, 3d, within 5d) for the timeline.
 
     side: 'buy' (green triangle, BUY_* columns) or 'sell' (yellow diamond, SELL_*).
     timeframe: 'Daily' or 'Weekly' — determines the age label names.
 
     A symbol appears in the NEWEST bucket it fired in and nowhere else. Each row carries
-    the z that actually fired it (``_fire_z``, read from Z_Hist at that offset) plus an
+    the readings from the bar that actually fired it — ``_fire_z`` (the histogram, from
+    Z_Hist at that offset) and ``_fire_imp`` (the crossing force, from Imp_Hist) — plus an
     entry-exhaustion read, so an aged signal reports its own bar rather than today's.
+
+    The bucket STATISTICS are built on the crossing force, not the histogram. On a fire bar
+    the histogram is ~0 by construction, so averaging it would report noise around zero for
+    every bucket and make the strengthening/weakening trend meaningless.
     """
     prefix = 'BUY' if side == 'buy' else 'SELL'
     target_indicator = "●"
@@ -4687,15 +4798,20 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timefram
             # bucket did NOT fire at offsets 0-3 — and since the *_5d column is an .any()
             # over offsets 0-4, offset 4 is then the fire bar exactly. Every offset is
             # therefore knowable; the snapshot z is only a fallback for a missing window.
-            _zs = r.get('Z_Hist')
-            _fz = float('nan')
-            if isinstance(_zs, (list, tuple)) and _offset < len(_zs):
-                _fz = _zs[_offset]
-            if not (pd.notna(_fz) and np.isfinite(float(_fz))):
-                _fz = r.get('CLR_Z', float('nan'))
+            def _at_fire(hist_col, fallback_col):
+                v = r.get(hist_col)
+                if isinstance(v, (list, tuple)) and _offset < len(v):
+                    x = v[_offset]
+                    if pd.notna(x) and np.isfinite(float(x)):
+                        return x
+                return r.get(fallback_col, float('nan'))
+
+            _fz  = _at_fire('Z_Hist', 'SID_Hist_Z')
+            _fim = _at_fire('Imp_Hist', 'SID_Impulse')
             r['_fire_z'] = _fz
+            r['_fire_imp'] = _fim
             r['_age_offset'] = _offset
-            r['_entry'] = _entry_status(r, _offset)
+            r['_entry'] = _entry_status(r, _offset, side)
             buckets[age].append(r)
             seen.add(sym)
 
@@ -4703,12 +4819,13 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timefram
     stats = {}
     for age, rows in buckets.items():
         if rows:
-            fire_zs = [float(r['_fire_z']) for r in rows
-                       if pd.notna(r['_fire_z']) and np.isfinite(float(r['_fire_z']))]
+            _finite = lambda key: [float(r[key]) for r in rows
+                                   if pd.notna(r.get(key)) and np.isfinite(float(r[key]))]
+            fire_zs, fire_imps = _finite('_fire_z'), _finite('_fire_imp')
             stats[age] = {
                 'count': len(rows),
-                'avg_signal': float(np.mean([-z for z in fire_zs])) if fire_zs else 0.0,
-                'avg_abs_z': float(np.mean([abs(z) for z in fire_zs])) if fire_zs else 0.0,
+                'avg_signal': float(np.mean(fire_zs)) if fire_zs else 0.0,
+                'avg_abs_z': float(np.mean([abs(i) for i in fire_imps])) if fire_imps else 0.0,
                 'avg_pct_change': float(np.mean([r.get('PctChange', 0) or 0 for r in rows])),
                 'rows': rows,
             }
@@ -4716,16 +4833,19 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timefram
             stats[age] = {'count': 0, 'avg_signal': 0.0, 'avg_abs_z': 0.0,
                           'avg_pct_change': 0.0, 'rows': []}
 
-    # Trend: are the newest fires more extreme than the older ones? |z| is the honest
-    # scale here — a fresh batch at 2.4 sigma is a stronger tape than one at 1.6.
+    # Trend: are the newest crossings opening harder than the older ones? The crossing
+    # force is the honest scale here — a fresh batch snapping open at 0.8 sigma per bar is
+    # a more decisive tape than one drifting across at 0.2.
     newest_label = age_labels[0]
     older_labels = age_labels[1:]
     newest_avg = stats[newest_label]['avg_abs_z'] if stats[newest_label]['count'] > 0 else 0.0
     _older = [stats[a]['avg_abs_z'] for a in older_labels if stats[a]['count'] > 0]
     older_avg = float(np.mean(_older)) if _older else 0.0
 
-    # |z| bucket means live on a ~1.5-3.0 scale, so 0.25 sigma is a meaningful shift.
-    _TREND_EPS = 0.25
+    # Crossing-force bucket means live on a ~0.2-1.0 scale, so 0.10 sigma per bar is a
+    # meaningful shift. (Under the previous engine this compared |z| on a 1.5-3.0 scale
+    # with an 0.25 epsilon; the scale changed, so the epsilon had to.)
+    _TREND_EPS = 0.10
     if newest_avg > older_avg + _TREND_EPS:
         trend = f"{SVGS['UP']} Strengthening"
         trend_color = "#2DD4A8"
@@ -4740,14 +4860,14 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timefram
 
 
 def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'Daily',
-                             thr: float = None) -> str:
-    """Build the age-grouped HTML table of fired CLR signals, with section headers."""
+                             k: float = None) -> str:
+    """Build the age-grouped HTML table of fired signals, with section headers."""
     _pal = _side_palette(side)
     accent_light = _pal["accent_light"]
     border_color = _pal["border_color"]
     header_bg    = _pal["header_bg"]
     _mark, _label = _pal["mark"], _pal["label"]
-    thr = eng.CLR_THRESHOLD if thr is None else float(thr)
+    k = eng.SID_K if k is None else float(k)
     _NCOLS = 11
 
     table_rows = []
@@ -4767,7 +4887,7 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
         table_rows.append(f"""
         <tr style="background: {header_bg}; border-bottom: 2px solid {border_color};">
             <td colspan="{_NCOLS}" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
-                {_mark} {age} · {count} {_label} signal{'s' if count != 1 else ''} · Avg |z|: {avg_abs_z:.2f}σ · Avg %: {avg_pct:+.1f}
+                {_mark} {age} · {count} {_label} signal{'s' if count != 1 else ''} · Avg force: {avg_abs_z:.2f}σ · Avg %: {avg_pct:+.1f}
             </td>
         </tr>
         """)
@@ -4786,15 +4906,19 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
             cvd_slope_color  = _signed_color(cvd_slope, pos="#4a9eff", neg="#D4A853")
             cvd_slope_arrow  = _delta_arrow(cvd_slope)
 
-            # The z that FIRED this signal (its own bar), and the fade score it implies.
-            _fz = row.get('_fire_z', row.get('CLR_Z'))
-            z_cell = _z_cell(_fz, thr)
-            _fade = (-float(_fz) if (pd.notna(_fz) and np.isfinite(float(_fz))) else float('nan'))
-            fade_txt = _fmt_num(_fade)
+            # The readings at the bar that FIRED this signal (its own bar, not today's).
+            # `Force` is the one that carries information: the histogram is ~0 on a
+            # crossing bar by construction, so it is shown for completeness, not ranking.
+            _fz = row.get('_fire_z', row.get('SID_Hist_Z'))
+            z_cell = _hist_cell(_fz, k)
+            _force = row.get('_fire_imp', row.get('SID_Impulse'))
+            _force = (float(_force) if (pd.notna(_force) and np.isfinite(float(_force)))
+                      else float('nan'))
+            force_txt = _fmt_num(_force)
 
             conv_cell  = _conv_cell(row.get('Conviction'))
-            hold_cell  = _hold_cell(row.get('CLR_Hold_Age'), row.get('CLR_Horizon', eng.CLR_HORIZON),
-                                    row.get('CLR_Hold_Dir'))
+            hold_cell  = _hold_cell(row.get('SID_Hold_Age'), row.get('SID_Horizon', eng.SID_HORIZON),
+                                    row.get('SID_Hold_Dir'))
             entry_cell = _status_cell(row.get('_entry', ('—', '#4B5563', '')))
 
             table_rows.append(f"""
@@ -4802,7 +4926,7 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
                 <td class="symbol">{symbol}</td>
                 <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
-                <td class="numeric" style="color: {accent_light}; font-weight: 600;">{fade_txt}</td>
+                <td class="numeric" style="color: {accent_light}; font-weight: 600;">{force_txt}</td>
                 {z_cell}
                 {conv_cell}
                 {hold_cell}
@@ -4904,10 +5028,10 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
                     <th>Symbol</th>
                     <th class="numeric">Price</th>
                     <th class="numeric">% Change</th>
-                    <th class="numeric" title="Fade score = −z at the bar that fired. Positive = bullish.">Fade</th>
-                    <th class="numeric" title="Close-location z at the bar that fired (CLR core measure)">Close-Loc z</th>
-                    <th class="numeric" title="How far |z| sits between the firing threshold and the largest reading this bar's own window could produce, × the cost gate. Cap-relative, so two bars at the same z can differ. A description, not a validated forecast. Not a probability.">Conv</th>
-                    <th class="numeric" title="Bars into the measured hold window (entry was the open after the signal bar)">Hold</th>
+                    <th class="numeric" title="Crossing force: the one-bar change in the conviction histogram, in σ of its own distribution, at the bar that fired. How hard the gap opened.">Force</th>
+                    <th class="numeric" title="The conviction histogram at the bar that fired. Near zero by construction — that IS what a crossing is — so read Force, not this.">Hist σ</th>
+                    <th class="numeric" title="How forcefully the histogram opened on the crossing bar — its one-bar change in σ of its own distribution, through tanh, × the cost gate. The LEVEL cannot be used: a crossing sits at zero by construction. A description of the crossing, not a validated forecast. Not a probability.">Conv</th>
+                    <th class="numeric" title="Bars into the declared hold window (entry was the open after the signal bar)">Hold</th>
                     <th class="numeric" title="Has price already run in the signal's direction since it fired (σ units)?">Entry</th>
                     <th class="numeric" title="Cumulative-delta flow zone — context only, not a signal input">Zone</th>
                     <th class="numeric">CVD Slope</th>
@@ -4924,11 +5048,11 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
     """
     return table_html
 
-def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy', thr: float = None) -> str:
+def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy', k: float = None) -> str:
     """Build the full-universe HTML table for Pulse Narrative mode (every symbol)."""
     _pal = _side_palette(side)
     border_color = _pal["border_color"]
-    thr = eng.CLR_THRESHOLD if thr is None else float(thr)
+    k = eng.SID_K if k is None else float(k)
     _NCOLS = 11
 
     table_rows = []
@@ -4954,12 +5078,15 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy', thr: float 
             cvd_slope_color = _signed_color(cvd_slope, pos="#4a9eff", neg="#D4A853")
             cvd_slope_arrow = _delta_arrow(cvd_slope)
 
-            fade_txt   = _fmt_num(row.get('Signal'))
-            z_cell     = _z_cell(row.get('CLR_Z'), thr)
+            # `Signal` IS SID_Hist_Z, so showing both would duplicate one number. The
+            # crossing force goes beside the level instead — it is what separates one
+            # crossing from another, and the level cannot (a crossing sits at zero).
+            fade_txt   = _fmt_num(row.get('SID_Impulse'))
+            z_cell     = _hist_cell(row.get('SID_Hist_Z'), k)
             side_cell  = _side_cell(row.get('Side'))
             conv_cell  = _conv_cell(row.get('Conviction'))
-            hold_cell  = _hold_cell(row.get('CLR_Hold_Age'), row.get('CLR_Horizon', eng.CLR_HORIZON),
-                                    row.get('CLR_Hold_Dir'))
+            hold_cell  = _hold_cell(row.get('SID_Hold_Age'), row.get('SID_Horizon', eng.SID_HORIZON),
+                                    row.get('SID_Hold_Dir'))
 
             table_rows.append(f"""
             <tr>
@@ -5042,11 +5169,11 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy', thr: float 
                     <th>Symbol</th>
                     <th class="numeric">Price</th>
                     <th class="numeric">% Change</th>
-                    <th class="numeric" title="Fade score = −z. Positive = bullish (a weak close).">Fade</th>
-                    <th class="numeric" title="Close-location z — the CLR core measure">Close-Loc z</th>
-                    <th class="numeric" title="▲ BUY past −thr · ◆ SELL past +thr · — inside the band (context only)">Side</th>
-                    <th class="numeric" title="How far |z| sits between the firing threshold and the largest reading this bar's own window could produce, × the cost gate. Cap-relative, so two bars at the same z can differ. A description, not a validated forecast. Not a probability.">Conv</th>
-                    <th class="numeric" title="Bars into the measured hold window">Hold</th>
+                    <th class="numeric" title="Crossing force: the one-bar change in the conviction histogram, in σ of its own distribution. How hard the gap is opening — the quantity that separates one crossing from another.">Force</th>
+                    <th class="numeric" title="The conviction histogram in σ of its own distribution. Above zero the oscillator leads its signal line. This is the STATE; the EVENT is the crossing, and on a crossing bar this reads near zero.">Hist σ</th>
+                    <th class="numeric" title="▲ BUY — the histogram crossed above zero on this bar · ◆ SELL — it crossed below · — no crossing (context only)">Side</th>
+                    <th class="numeric" title="How forcefully the histogram opened on the crossing bar — its one-bar change in σ of its own distribution, through tanh, × the cost gate. The LEVEL cannot be used: a crossing sits at zero by construction. A description of the crossing, not a validated forecast. Not a probability.">Conv</th>
+                    <th class="numeric" title="Bars into the declared hold window">Hold</th>
                     <th class="numeric">Bar Δ</th>
                     <th class="numeric">CVD Slope</th>
                     <th class="numeric">Absorp</th>
@@ -5064,12 +5191,13 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy', thr: float 
 
 
 
-def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', thr: float = None) -> str:
-    """Build the ranked HTML table of CLR candidates for one side.
+def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', k: float = None) -> str:
+    """Build the ranked HTML table of Siddhi candidates for one side.
 
-    Ranks by the cross-sectional fade-score percentile: for 'buy' the weakest closes in
-    the universe come first, for 'sell' the strongest. Rows below the ±thr trigger still
-    appear — the table is the full ordering — but their Side reads '—' (context only).
+    Ranks by the side's priority percentile, which is BANDED: symbols whose histogram
+    crossed on this bar come first, then those still inside an open hold window, then the
+    rest ordered by their histogram level. Every symbol still appears — the table is the
+    full ordering — but a row that did not cross reads '—' in Side (context only).
 
     Returns: Complete HTML document string ready for st.components.v1.html().
     """
@@ -5078,7 +5206,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', thr: 
     border_color = _pal["border_color"]
     _is_buy = _is_buy_side(side)
     _pct_col = _priority_pct_col(side)
-    thr = eng.CLR_THRESHOLD if thr is None else float(thr)
+    k = eng.SID_K if k is None else float(k)
     _NCOLS = 13
 
     table_rows = []
@@ -5125,8 +5253,11 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', thr: 
 
             vol_color = {"LOW": "#60a5fa", "NORMAL": "#94a3b8", "HIGH": "#fbbf24", "EXTREME": "#f87171"}.get(vol_reg, "#94a3b8")
 
-            fade_txt  = _fmt_num(row.get('Signal'))
-            z_cell    = _z_cell(row.get('CLR_Z'), thr)
+            # `Signal` IS SID_Hist_Z, so the two columns would duplicate. Show the
+            # crossing force beside the level instead — it is the quantity that separates
+            # one crossing from another.
+            fade_txt  = _fmt_num(row.get('SID_Impulse'))
+            z_cell    = _hist_cell(row.get('SID_Hist_Z'), k)
             side_cell = _side_cell(row.get('Side'))
             conv_cell = _conv_cell(row.get('Conviction'))
 
@@ -5219,13 +5350,13 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', thr: 
                 <tr>
                     <th class="numeric">Rank</th>
                     <th>Symbol</th>
-                    <th class="numeric" title="Cross-sectional fade-score percentile within this universe">Percentile</th>
+                    <th class="numeric" title="This side's priority percentile within the universe. Banded: a crossing fired on this bar outranks an open hold window, which outranks a level.">Percentile</th>
                     <th class="numeric">Price</th>
                     <th class="numeric">% Change</th>
-                    <th class="numeric" title="Fade score = −z. Positive = bullish (a weak close).">Fade</th>
-                    <th class="numeric" title="Close-location z — the CLR core measure">Close-Loc z</th>
-                    <th class="numeric" title="▲ BUY past −thr · ◆ SELL past +thr · — inside the band (context only)">Side</th>
-                    <th class="numeric" title="How far |z| sits between the firing threshold and the largest reading this bar's own window could produce, × the cost gate. Cap-relative, so two bars at the same z can differ. A description, not a validated forecast. Not a probability.">Conv</th>
+                    <th class="numeric" title="Crossing force: the one-bar change in the conviction histogram, in σ of its own distribution. How hard the gap is opening — the quantity that separates one crossing from another.">Force</th>
+                    <th class="numeric" title="The conviction histogram in σ of its own distribution. Above zero the oscillator leads its signal line. This is the STATE; the EVENT is the crossing, and on a crossing bar this reads near zero.">Hist σ</th>
+                    <th class="numeric" title="▲ BUY — the histogram crossed above zero on this bar · ◆ SELL — it crossed below · — no crossing (context only)">Side</th>
+                    <th class="numeric" title="How forcefully the histogram opened on the crossing bar — its one-bar change in σ of its own distribution, through tanh, × the cost gate. The LEVEL cannot be used: a crossing sits at zero by construction. A description of the crossing, not a validated forecast. Not a probability.">Conv</th>
                     <th class="numeric">Bar Δ</th>
                     <th class="numeric">CVD Slope</th>
                     <th class="numeric" title="HMM regime — risk context, not a signal input">Regime</th>
@@ -5246,20 +5377,20 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', thr: 
 
 
 _SIGNAL_TYPE_REFERENCE = [
-    ("▲ BUY · Weak Close (green triangle)", "emerald",
-     "The screening condition. Fires when the close-location z-score drops below −1.5σ — the bar "
-     "closed unusually near its low relative to its own trailing year. A weak close predicts "
-     "STRENGTH, so this is the buy: fade it, enter at the next session's open, hold 5-10 bars. "
-     "This is the side that survived: drift-free discovery +0.0546 and holdout +0.0534, confirmed "
-     "in both eras. The 1.5σ trigger fires on ~9.3% of days, which is what cuts turnover ~35x and "
-     "makes the signal clear costs at all."),
-    ("◆ SELL · Strong Close (yellow diamond)", "amber",
-     "Fires when the close-location z rises above +1.5σ — the bar closed unusually near its high. "
-     "The same mean-reversion logic says expect weakness. Read the caveat, though: the source "
-     "indicator labels this side CAUTION rather than a short entry, because its drift-free holdout "
-     "was +0.0094 with a CI of [−0.030, +0.052] — it did NOT confirm out of sample. Sanket surfaces "
-     "it as a sell signal as configured; treat it as stronger evidence for trimming longs than for "
-     "initiating shorts."),
+    ("▲ BUY · Histogram crosses above zero (green triangle)", "emerald",
+     "The screening condition. The conviction oscillator — the participation-weighted share of "
+     "each bar's effort that became actual displacement — has pulled ABOVE its own signal line. "
+     "Enter at the next session's open and hold the declared horizon. Read it as the moment "
+     "conviction turned up, not as a claim about how far it will run: the level says who is in "
+     "control, the crossing says when that changed, and only the crossing is the signal."),
+    ("◆ SELL · Histogram crosses below zero (yellow diamond)", "amber",
+     "The mirror. The oscillator has dropped UNDER its own signal line: the effort going into the "
+     "tape has stopped converting into upward displacement. The two sides are symmetric here, "
+     "which the previous engine's were not — but symmetry is not evidence. Know what the source "
+     "indicator measured before leaning on either: a bare zero-crossing is its weakest tested "
+     "configuration (+0.0205R on the instruments it was fitted to, +0.0015R with t = 0.2 on eight "
+     "held-out ones), and NOTHING it measured reaches significance once overlapping forward "
+     "windows are accounted for. The Edge Study below is what applies to your universe."),
     ("Scope · measured on YOUR universe, not inherited", "violet",
      "Whether this rule carries an edge is a question about your symbols, so the app measures it "
      "on them rather than quoting a class average. The Edge Study below runs an event study over "
@@ -5274,15 +5405,15 @@ _SIGNAL_TYPE_REFERENCE = [
 
 
 def _render_system_data_tab(results_df, analysis_date, universe=None, selected_index=None,
-                            clr=None, study=None):
+                            sid=None, study=None):
     """System Data tab — exports, raw factor frame, and the signal-type legend.
 
     Used by both Single Date and Pulse Narrative modes (their tab_raw share content).
-    Universe context is threaded through so download filenames stay self-describing; ``clr``
+    Universe context is threaded through so download filenames stay self-describing; ``sid``
     and ``study`` drive the Edge Study readout at the bottom.
     """
-    if clr is None:
-        clr = _active_clr_settings()
+    if sid is None:
+        sid = _active_siddhi_settings()
     ui.render_section_header(
         "System Data",
         "Exports, raw factor frame, and reference legends",
@@ -5290,8 +5421,8 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     )
 
     # ── Downloads ─────────────────────────────────────────────────────────
-    # Split on the FIRED events, not on the sign of the score: a positive fade score
-    # below the trigger is context, not a buy candidate.
+    # Split on the FIRED events, not on the sign of the score: a positive histogram with
+    # no crossing on this bar is context, not a buy candidate.
     _side = results_df['Side'] if 'Side' in results_df.columns else None
     buy_df  = results_df[_side == 'Buy']  if _side is not None else results_df.iloc[0:0]
     sell_df = results_df[_side == 'Sell'] if _side is not None else results_df.iloc[0:0]
@@ -5310,9 +5441,9 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
             key="sysdata_dl_full",
             help=(
                 f"All {len(results_df)} symbols with every computed column. "
-                "Includes a Legend sheet defining each one: the CLR signal (close location, z, "
-                "fade score, buy/sell events, hold window, conviction), the descriptive order-flow "
-                "context, and the regime columns."
+                "Includes a Legend sheet defining each one: the Siddhi signal (raw share, "
+                "oscillator, signal line, histogram, crossing force, buy/sell events, hold "
+                "window, conviction), the descriptive order-flow context, and the regime columns."
             ),
         )
     with dl2:
@@ -5327,7 +5458,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
             width='stretch',
             key="sysdata_dl_buy",
             disabled=len(buy_df) == 0,
-            help=f"{len(buy_df)} symbols firing the green triangle (weak close, z below the trigger).",
+            help=f"{len(buy_df)} symbols firing the green triangle (histogram crossed above zero).",
         )
     with dl3:
         st.download_button(
@@ -5341,7 +5472,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
             width='stretch',
             key="sysdata_dl_sell",
             disabled=len(sell_df) == 0,
-            help=f"{len(sell_df)} symbols firing the yellow diamond (strong close, z above the trigger).",
+            help=f"{len(sell_df)} symbols firing the yellow diamond (histogram crossed below zero).",
         )
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -5349,11 +5480,11 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     # ── Raw Data Table ────────────────────────────────────────────────────
     ui.render_section_header(
         "Raw Signal Frame",
-        f"{len(results_df)} symbols · sorted by fade score (weakest closes first)",
+        f"{len(results_df)} symbols · sorted by the conviction histogram (most bullish first)",
         icon="list", accent="emerald",
     )
-    cols = ["DisplayName", "Price", "CLR_Z", "Signal", "Side", "Conviction",
-            "CLR_State", "CLR_Hold_Age", "SignalType", "CLR_CLV", "CLR_Rank_Pct"]
+    cols = ["DisplayName", "Price", "SID_Hist_Z", "SID_Impulse", "Side", "Conviction",
+            "SID_State", "SID_Hold_Age", "SignalType", "SID_Osc", "SID_Zone", "SID_Rank_Pct"]
     if "% Chng Since" in results_df.columns and results_df["% Chng Since"].notna().any():
         cols.insert(2, "% Chng Since")
     cols += ["Zone", "Bar_Delta", "CVD_Slope", "Delta_Z", "Abs_Strength",
@@ -5368,13 +5499,14 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     # Rename internal column names to domain-readable labels for display
     _col_display_names = {
         "DisplayName":  "Symbol",
-        "CLR_Z":         "Close-Loc z",
-        "Signal":       "Fade Score",
-        "CLR_State":     "State",
-        "CLR_Hold_Age":  "Hold Age",
+        "SID_Hist_Z":    "Hist σ",
+        "SID_Impulse":   "Force",
+        "SID_State":     "State",
+        "SID_Hold_Age":  "Hold Age",
         "SignalType":   "Type",
-        "CLR_CLV":       "Close Location",
-        "CLR_Rank_Pct":  "Fade %ile",
+        "SID_Osc":       "Oscillator",
+        "SID_Zone":      "Zone (osc)",
+        "SID_Rank_Pct":  "Hist %ile",
         "Bar_Delta":    "Bar Δ",
         "CVD_Slope":    "CVD Slope",
         "Delta_Z":      "Δ-Z",
@@ -5382,25 +5514,28 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
         "Signal_Reason": "Read",
     }
     display_frame = (results_df[cols]
-                     .sort_values("Signal", ascending=False, na_position='last')
+                     .sort_values("SID_Hist_Z", ascending=False, na_position='last')
                      .rename(columns=_col_display_names))
     _sysdata_colcfg = {
-        "Close-Loc z": st.column_config.NumberColumn(
-            help=("The signal. Z-score of where the bar closed inside its own range, over the "
-                  "trailing lookback. Below −1.5σ fires BUY, above +1.5σ fires SELL."),
+        "Hist σ": st.column_config.NumberColumn(
+            help=("The screening variable: the conviction histogram (oscillator minus its signal "
+                  "line) in σ of its own distribution. Its CROSSING of zero is the signal — up "
+                  "fires BUY, down fires SELL — so on a fired bar this reads near zero."),
             format="%+.2f",
         ),
-        "Fade Score": st.column_config.NumberColumn(
-            help="−z. Positive = bullish (a weak close). This is what the tables rank on.",
+        "Force": st.column_config.NumberColumn(
+            help=("Crossing force: the one-bar change in the histogram, in the same σ units. What "
+                  "separates a crossing that snaps open from one that drifts across."),
             format="%+.2f",
         ),
-        "Close Location": st.column_config.NumberColumn(
-            help="((C−L) − (H−C)) / (H−L) in [−1, +1]. −1 = closed on the low, +1 = on the high.",
-            format="%+.3f",
+        "Oscillator": st.column_config.NumberColumn(
+            help=("The conviction oscillator itself, bounded ±100 under adaptive scaling. Above "
+                  "zero, participation-weighted effort is net upward. Context for the signal."),
+            format="%+.1f",
         ),
         "Conviction": st.column_config.ProgressColumn(
-            help=("|z| magnitude × the instrument class's measured out-of-sample expectancy × the "
-                  "cost gate, in [0,1]. Not a probability — a relative weighting."),
+            help=("tanh(|Force|) × the cost gate, in [0,1]. Not a probability — a description of "
+                  "how forcefully the crossing opened."),
             format="%.2f", min_value=0.0, max_value=1.0,
         ),
         "Hold Age": st.column_config.NumberColumn(
@@ -5426,7 +5561,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
         "violet":  "var(--violet)",
         "cyan":    "var(--cyan)",
         "rose":    "var(--rose)",
-        "emerald": _CLR_BUY,
+        "emerald": _SID_BUY,
     }
     # min-height + flex layout keeps all cards visually equal regardless of body text
     # length. Without it cards stretch to their own content because Streamlit's columns
@@ -5457,7 +5592,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
 
     # ── Edge Study ────────────────────────────────────────────────────────
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    _render_edge_study_panel(clr, study)
+    _render_edge_study_panel(sid, study)
 
 
 def main():
@@ -5507,7 +5642,7 @@ def main():
     corr_target_ticker = sbs.corr_target_ticker
     corr_lookback      = sbs.corr_lookback
     corr_method        = sbs.corr_method
-    clr                = sbs.clr          # resolved engine settings for this run
+    sid                = sbs.sid          # resolved engine settings for this run
 
     # ── Run button click — single-pass execution ─────────────────────────
     # Previously: click → set flag → st.rerun() → run analysis → st.rerun() → render body.
@@ -5527,8 +5662,8 @@ def main():
         # Reuses a same-day measurement (identical inputs ⇒ identical answer), re-measures
         # once the date rolls, and never blocks the run if it fails.
         _study_slot = st.empty()
-        _had_study = _edge_cache_get(_edge_key(universe, selected_index, timeframe, clr)) is not None
-        study = ensure_edge_study(universe, selected_index, timeframe, clr,
+        _had_study = _edge_cache_get(_edge_key(universe, selected_index, timeframe, sid)) is not None
+        study = ensure_edge_study(universe, selected_index, timeframe, sid,
                                   progress_slot=_study_slot, progress_offset=0,
                                   progress_scale=_STUDY_PROGRESS_SHARE)
         # The sidebar card was painted before this ran — repaint it so a study measured on
@@ -5562,7 +5697,7 @@ def main():
                 wt2_len=wt2_len, wt2_type=wt2_type,
                 external_progress_slot=_study_slot,
                 progress_offset=_an_offset, progress_scale=_an_scale,
-                clr=clr, study=study,
+                sid=sid, study=study,
             )
             _study_slot.empty()
             if results_df is None:
@@ -5581,7 +5716,7 @@ def main():
             run_timeseries_analysis(
                 universe, selected_index, start_date, end_date,
                 reg_len, wt_n1, wt_n2, levels, timeframe,
-                wt2_len=wt2_len, wt2_type=wt2_type, clr=clr, study=study,
+                wt2_len=wt2_len, wt2_type=wt2_type, sid=sid, study=study,
                 external_progress_slot=_study_slot,
                 progress_offset=_an_offset, progress_scale=_an_scale,
             )
@@ -5597,7 +5732,7 @@ def main():
             _study_slot.empty()
             corr_data = run_correlation_analysis(
                 universe, selected_index, corr_target_ticker,
-                corr_lookback, corr_method, timeframe, analysis_date, clr=clr, study=study,
+                corr_lookback, corr_method, timeframe, analysis_date, sid=sid, study=study,
             )
             st.session_state["corr_data"] = corr_data
 
@@ -5619,7 +5754,7 @@ def main():
     # The measured study for the current selection, if one exists (a prior run may have
     # measured it, or the disk cache may have survived). Renderers read this instead of a
     # hardcoded class constant.
-    study = _edge_cache_get(_edge_key(universe, selected_index, timeframe, clr))
+    study = _edge_cache_get(_edge_key(universe, selected_index, timeframe, sid))
     _mv_label, _mv_kind, _mv_detail = _study_state(study, "buy")
 
     if show_landing:
@@ -5655,7 +5790,7 @@ def main():
                     _pn_date    = analysis_date.strftime("%d %b %Y") if hasattr(analysis_date, "strftime") else str(analysis_date)
                     ui.render_section_header(
                         f"Pulse Narrative — {timeframe} Universe State",
-                        f"{_pn_n} / {_pn_total} symbols · {_pn_date} · {clr.iclass} · "
+                        f"{_pn_n} / {_pn_total} symbols · {_pn_date} · {sid.iclass} · "
                         f"full universe ranked by close-location fade score",
                         icon="zap", accent="amber"
                     )
@@ -5668,10 +5803,10 @@ def main():
                     with m1: ui.render_metric_card("Universe Fade", _fmt_num(avg_fade, "{:+.3f}"),
                                                    "Mean −z · >0 = closing weak", "neutral")
                     with m2: ui.render_metric_card("▲ BUY Fires", str(n_buy),
-                                                   f"{n_buy/_n*100:.0f}% of universe past −{clr.thr:.1f}σ",
+                                                   f"{n_buy/_n*100:.0f}% of universe past −{sid.thr:.1f}σ",
                                                    "success" if n_buy else "neutral")
                     with m3: ui.render_metric_card("◆ SELL Fires", str(n_sell),
-                                                   f"{n_sell/_n*100:.0f}% of universe past +{clr.thr:.1f}σ",
+                                                   f"{n_sell/_n*100:.0f}% of universe past +{sid.thr:.1f}σ",
                                                    "warning" if n_sell else "neutral")
                     with m4: ui.render_metric_card("Weak-Close Breadth", f"{weak_bias:.0f}%",
                                                    "symbols closing below their own mean",
@@ -5680,11 +5815,11 @@ def main():
                     buy_narr_tab, sell_narr_tab = st.tabs(["Weakest Closes (buy side)", "Strongest Closes (sell side)"])
                     with buy_narr_tab:
                         buy_rank_df = results_df.sort_values('Priority_Long', ascending=False, na_position='last')
-                        st.components.v1.html(_build_narrative_table_html(buy_rank_df, side='buy', thr=clr.thr),
+                        st.components.v1.html(_build_narrative_table_html(buy_rank_df, side='buy', k=sid.k),
                                               height=min(1200, 150 + len(buy_rank_df) * 52), scrolling=True)
                     with sell_narr_tab:
                         sell_rank_df = results_df.sort_values('Priority_Short', ascending=False, na_position='last')
-                        st.components.v1.html(_build_narrative_table_html(sell_rank_df, side='sell', thr=clr.thr),
+                        st.components.v1.html(_build_narrative_table_html(sell_rank_df, side='sell', k=sid.k),
                                               height=min(1200, 150 + len(sell_rank_df) * 52), scrolling=True)
 
                 # ════ Pulse Narrative · TAB 2: SIGNAL STRENGTH ═════════════════════════════
@@ -5698,15 +5833,15 @@ def main():
                     pn_top_sells = results_df.sort_values('Priority_Short', ascending=False, na_position='last').head(10)
 
                     _n = max(len(results_df), 1)
-                    _absz         = results_df['CLR_Z'].abs() if 'CLR_Z' in results_df.columns else pd.Series(dtype=float)
+                    _absz         = results_df['SID_Hist_Z'].abs() if 'SID_Hist_Z' in results_df.columns else pd.Series(dtype=float)
                     pn_avg_absz   = _absz.mean()
                     pn_max_absz   = _absz.max()
-                    pn_past_thr   = int((_absz > clr.thr).sum())
+                    pn_past_thr   = int((_absz > sid.thr).sum())
                     pn_warming    = st.session_state.get("screener_run_stats", {}).get("warming_up", 0)
 
                     s1, s2, s3, s4 = st.columns(4)
                     with s1: ui.render_metric_card("Avg |z|", _fmt_num(pn_avg_absz, "{:.2f}"),
-                                                   f"vs ±{clr.thr:.1f}σ trigger", "neutral")
+                                                   f"vs ±{sid.thr:.1f}σ trigger", "neutral")
                     with s2: ui.render_metric_card("Max |z|", _fmt_num(pn_max_absz, "{:.2f}"),
                                                    "most stretched close today", "info")
                     with s3: ui.render_metric_card("Past Trigger", str(pn_past_thr),
@@ -5720,7 +5855,7 @@ def main():
                              else "not measured on this universe"),
                             _mv_kind)
                     if pn_warming:
-                        st.caption(f"{pn_warming} symbol(s) excluded — fewer than {clr.min_bars} bars, "
+                        st.caption(f"{pn_warming} symbol(s) excluded — fewer than {sid.min_bars} bars, "
                                    "so the close-location z-score has no lookback yet.")
 
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -5729,22 +5864,22 @@ def main():
                         st.markdown(
                             f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.62rem; '
                             f'font-weight:600; text-transform:uppercase; letter-spacing:0.1em; '
-                            f'color:{_CLR_BUY}; margin:0 0 0.4rem 0;">▲ Top 10 Weakest Closes</p>',
+                            f'color:{_SID_BUY}; margin:0 0 0.4rem 0;">▲ Top 10 Weakest Closes</p>',
                             unsafe_allow_html=True,
                         )
                         st.components.v1.html(
-                            _build_signal_strength_table_html(pn_top_buys, side='buy', thr=clr.thr),
+                            _build_signal_strength_table_html(pn_top_buys, side='buy', k=sid.k),
                             height=150 + len(pn_top_buys) * 55,
                         )
                     with pn_s:
                         st.markdown(
                             f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.62rem; '
                             f'font-weight:600; text-transform:uppercase; letter-spacing:0.1em; '
-                            f'color:{_CLR_SELL}; margin:0 0 0.4rem 0;">◆ Top 10 Strongest Closes</p>',
+                            f'color:{_SID_SELL}; margin:0 0 0.4rem 0;">◆ Top 10 Strongest Closes</p>',
                             unsafe_allow_html=True,
                         )
                         st.components.v1.html(
-                            _build_signal_strength_table_html(pn_top_sells, side='sell', thr=clr.thr),
+                            _build_signal_strength_table_html(pn_top_sells, side='sell', k=sid.k),
                             height=150 + len(pn_top_sells) * 55,
                         )
 
@@ -5752,7 +5887,7 @@ def main():
                 with tab_raw:
                     _render_system_data_tab(results_df, analysis_date,
                                             universe=universe, selected_index=selected_index,
-                                            clr=clr, study=study)
+                                            sid=sid, study=study)
             else:
                 tab_signals, tab_strength, tab_raw = st.tabs(["Action Dashboard", "Signal Strength", "System Data"])
                 with tab_signals:
@@ -5765,7 +5900,7 @@ def main():
                     ui.render_section_header(
                         f"{timeframe_label} Signals",
                         f"{_n_analyzed} / {_n_universe} symbols · {timeframe} · {_date_str} · "
-                        f"{ENGINE_NAME} ±{clr.thr:.1f}σ · measured: {_mv_label}",
+                        f"{ENGINE_NAME} ±{sid.thr:.1f}σ · measured: {_mv_label}",
                         icon="zap",
                         accent="amber"
                     )
@@ -5799,16 +5934,16 @@ def main():
                             ui.render_metric_card(
                                 "Weakest Close",
                                 _sb_top['SimpleName'] if _sb_top is not None else "—",
-                                (f"z {float(_sb_top['CLR_Z']):+.2f}σ" if _sb_top is not None
-                                 and pd.notna(_sb_top.get('CLR_Z')) else "no BUY signals"),
+                                (f"z {float(_sb_top['SID_Hist_Z']):+.2f}σ" if _sb_top is not None
+                                 and pd.notna(_sb_top.get('SID_Hist_Z')) else "no BUY signals"),
                                 "info")
                         with mc4:
                             _ss_top = sells_df.iloc[0] if not sells_df.empty else None
                             ui.render_metric_card(
                                 "Strongest Close",
                                 _ss_top['SimpleName'] if _ss_top is not None else "—",
-                                (f"z {float(_ss_top['CLR_Z']):+.2f}σ" if _ss_top is not None
-                                 and pd.notna(_ss_top.get('CLR_Z')) else "no SELL signals"),
+                                (f"z {float(_ss_top['SID_Hist_Z']):+.2f}σ" if _ss_top is not None
+                                 and pd.notna(_ss_top.get('SID_Hist_Z')) else "no SELL signals"),
                                 "info")
 
                         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -5818,7 +5953,7 @@ def main():
                             _, _stats, _trend, _tcol = _bucket_signals_by_age(
                                 df_, side=side_key, timeframe=timeframe)
                             _html = _build_signal_table_html(_stats, side=side_key,
-                                                             timeframe=timeframe, thr=clr.thr)
+                                                             timeframe=timeframe, k=sid.k)
                             _g = sum(1 for a in _age_order if _stats[a]['count'] > 0)
                             _r = sum(_stats[a]['count'] for a in _age_order)
                             st.markdown(
@@ -5833,7 +5968,7 @@ def main():
                         with buy_tab:
                             st.markdown(
                                 f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
-                                f'padding:0.2rem 0 0.5rem 0;">Close-location z below <b>−{clr.thr:.1f}σ</b> — a weak close '
+                                f'padding:0.2rem 0 0.5rem 0;">Close-location z below <b>−{sid.thr:.1f}σ</b> — a weak close '
                                 f'to fade up. Entry is the next session\'s open; the measured horizon is 5–10 bars. '
                                 f'This is the holdout-confirmed side.</div>',
                                 unsafe_allow_html=True,
@@ -5842,7 +5977,7 @@ def main():
                         with sell_tab:
                             st.markdown(
                                 f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
-                                f'padding:0.2rem 0 0.5rem 0;">Close-location z above <b>+{clr.thr:.1f}σ</b> — a strong close. '
+                                f'padding:0.2rem 0 0.5rem 0;">Close-location z above <b>+{sid.thr:.1f}σ</b> — a strong close. '
                                 f'The source indicator labels this side <b>CAUTION</b> rather than a short entry: its '
                                 f'drift-free holdout was +0.0094 with a CI of [−0.030, +0.052], so it did not confirm '
                                 f'out of sample.</div>',
@@ -5852,13 +5987,13 @@ def main():
                     else:
                         st.info(
                             f"**No signals fired** for {selected_index} on {analysis_date} ({timeframe}). "
-                            f"All {_n_analyzed} symbols were analyzed but none closed past ±{clr.thr:.1f}σ in the last "
+                            f"All {_n_analyzed} symbols were analyzed but none closed past ±{sid.thr:.1f}σ in the last "
                             f"5 bars — at the measured threshold that is normal (~9.3% of days fire). "
                             "Try an adjacent trading date, a broader universe, or the Signal Strength tab for the "
                             "full ranking."
                         )
                         if _n_warming:
-                            st.caption(f"{_n_warming} symbol(s) excluded — fewer than {clr.min_bars} bars of history.")
+                            st.caption(f"{_n_warming} symbol(s) excluded — fewer than {sid.min_bars} bars of history.")
 
                 # Action Dashboard's own Signal Strength + System Data tabs.
                 # Pulse Narrative has its own equivalents inside the `if` branch above
@@ -5870,21 +6005,21 @@ def main():
                 with tab_strength:
                     ui.render_section_header(
                         "Close-Location Ranking",
-                        f"Full universe ordered by fade score — the ±{clr.thr:.1f}σ trigger marks where it becomes actionable",
+                        f"Full universe ordered by fade score — the ±{sid.thr:.1f}σ trigger marks where it becomes actionable",
                         icon="zap",
                         accent="amber"
                     )
 
                     _n = max(len(results_df), 1)
-                    _absz = results_df['CLR_Z'].abs() if 'CLR_Z' in results_df.columns else pd.Series(dtype=float)
+                    _absz = results_df['SID_Hist_Z'].abs() if 'SID_Hist_Z' in results_df.columns else pd.Series(dtype=float)
                     avg_absz    = _absz.mean()
-                    past_thr    = int((_absz > clr.thr).sum())
+                    past_thr    = int((_absz > sid.thr).sum())
                     n_buy_all   = int((results_df['Side'] == 'Buy').sum())  if 'Side' in results_df.columns else 0
                     n_sell_all  = int((results_df['Side'] == 'Sell').sum()) if 'Side' in results_df.columns else 0
 
                     col_s1, col_s2, col_s3, col_s4 = st.columns(4)
                     with col_s1: ui.render_metric_card("Avg |z|", _fmt_num(avg_absz, "{:.2f}"),
-                                                       f"vs ±{clr.thr:.1f}σ trigger", "neutral")
+                                                       f"vs ±{sid.thr:.1f}σ trigger", "neutral")
                     with col_s2: ui.render_metric_card("Past Trigger", str(past_thr),
                                                        f"{past_thr/_n*100:.0f}% of universe · ~9.3% typical", "info")
                     with col_s3: ui.render_metric_card("▲ / ◆ Split", f"{n_buy_all} / {n_sell_all}",
@@ -5931,12 +6066,12 @@ def main():
                     with _col_l:
                         st.markdown(_col_label("Top 10 Weakest Closes", "buy"), unsafe_allow_html=True)
                         st.components.v1.html(
-                            _build_signal_strength_table_html(top_buys, side='buy', thr=clr.thr),
+                            _build_signal_strength_table_html(top_buys, side='buy', k=sid.k),
                             height=150 + len(top_buys) * 55)
                     with _col_s:
                         st.markdown(_col_label("Top 10 Strongest Closes", "sell"), unsafe_allow_html=True)
                         st.components.v1.html(
-                            _build_signal_strength_table_html(top_sells, side='sell', thr=clr.thr),
+                            _build_signal_strength_table_html(top_sells, side='sell', k=sid.k),
                             height=150 + len(top_sells) * 55)
 
                     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -5945,19 +6080,19 @@ def main():
                         f'padding:0.2rem 0 0.6rem 0; line-height:1.55;">Full universe ranked by fade score '
                         f'(−z). The ranking is continuous, but the measured edge is in the <b>event</b>: holding '
                         f'a continuous position on this signal turns over daily, costs ~12%/yr at 3bp, and nets '
-                        f'−0.48 Sharpe. Only rows whose Side shows ▲ or ◆ have crossed the ±{clr.thr:.1f}σ trigger.</div>',
+                        f'−0.48 Sharpe. Only rows whose Side shows ▲ or ◆ have crossed the ±{sid.thr:.1f}σ trigger.</div>',
                         unsafe_allow_html=True,
                     )
                     _all_ranked = results_df.sort_values('Priority_Long', ascending=False, na_position='last')
                     st.components.v1.html(
-                        _build_signal_strength_table_html(_all_ranked, side='buy', thr=clr.thr),
+                        _build_signal_strength_table_html(_all_ranked, side='buy', k=sid.k),
                         height=min(150 + len(_all_ranked) * 55, 900), scrolling=True)
 
                 # ════ Action Dashboard · TAB 3: SYSTEM DATA ═══════════════════════════
                 with tab_raw:
                     _render_system_data_tab(results_df, analysis_date,
                                             universe=universe, selected_index=selected_index,
-                                            clr=clr, study=study)
+                                            sid=sid, study=study)
 
         # ── Bulk-range dashboard (Historical Range only) ──
         # Re-renders on every Streamlit run from session-state ts_results_df,
@@ -5972,7 +6107,7 @@ def main():
         # Always render footer
         render_footer()
 
-def _engine_card_html(clr, study) -> str:
+def _engine_card_html(sid, study) -> str:
     """The Engine Status card as HTML. Pure, so it can be repainted after a study runs.
 
     Content is a 2x4 grid — eight cells, one fact each. The sidebar gives each column roughly
@@ -5985,7 +6120,7 @@ def _engine_card_html(clr, study) -> str:
     and at what settings and cost.
     """
     buy_label = _study_state(study, "buy")[0]
-    cost_gate_ok = clr.cost_ok(study)
+    cost_gate_ok = sid.cost_ok(study)
     card_class = _verdict_kind(buy_label) if study is not None else "neutral"
     if not cost_gate_ok:
         card_class = "danger"
@@ -6050,23 +6185,23 @@ def _engine_card_html(clr, study) -> str:
 
     # Weekly is an unvalidated extrapolation of a daily study. That caveat must stay VISIBLE —
     # burying it in a tooltip would quietly upgrade an extrapolation to a measured setting.
-    _extrap = clr.z_look == eng.CLR_Z_LOOK_WEEKLY
+    _extrap = sid.z_look == eng.SID_Hist_Z_LOOK_WEEKLY
     trigger_cell = _cell("TRIGGER ⚠ EXTRAP" if _extrap else "TRIGGER",
-                         f"±{clr.thr:.1f}σ · {clr.horizon}b",
+                         f"±{sid.thr:.1f}σ · {sid.horizon}b",
                          "var(--amber)" if _extrap else "var(--ink-secondary)",
-                         f"Fires past ±{clr.thr:.1f}σ, holds {clr.horizon} bars, entry the next "
-                         f"session's open. Z-score over a {clr.z_look}-bar lookback. Every value "
+                         f"Fires past ±{sid.thr:.1f}σ, holds {sid.horizon} bars, entry the next "
+                         f"session's open. Z-score over a {sid.z_look}-bar lookback. Every value "
                          f"is a measured plateau, which is why none is adjustable."
                          + (" EXTRAPOLATED: the source study was daily, so the 52-bar weekly "
                             "lookback is a structural analogue, not a measured plateau."
                             if _extrap else ""))
-    cost_cell = _cell("COST", f"{clr.cost_bps:.0f}bp " + ("net +" if cost_gate_ok else "NET NEG"),
+    cost_cell = _cell("COST", f"{sid.cost_bps:.0f}bp " + ("net +" if cost_gate_ok else "NET NEG"),
                       "var(--emerald)" if cost_gate_ok else "var(--rose)",
-                      f"{clr.cost_bps:.1f} bp round-trip. The gate asks whether that cost, in the "
+                      f"{sid.cost_bps:.1f} bp round-trip. The gate asks whether that cost, in the "
                       f"vol units the edge is measured in, stays under the largest effect this "
                       f"signal has ever shown ({eng.LARGEST_KNOWN_EFFECT:.3f}). It never compares "
                       f"cost against the MEASURED edge — that would let a no-edge verdict halve "
-                      f"conviction. Basis: {clr.cost_basis(study)}.")
+                      f"conviction. Basis: {sid.cost_basis(study)}.")
 
     cells = (_side_cells("buy", "▲") + _side_cells("sell", "◆")
              + hit_cell + mde_cell
@@ -6097,8 +6232,8 @@ def _refresh_engine_card() -> None:
     if slot is None or args is None:
         return
     try:
-        clr = _active_clr_settings()
-        slot.markdown(_engine_card_html(clr, _edge_cache_get(_edge_key(*args, clr))),
+        sid = _active_siddhi_settings()
+        slot.markdown(_engine_card_html(sid, _edge_cache_get(_edge_key(*args, sid))),
                       unsafe_allow_html=True)
     except Exception:
         pass
@@ -6120,25 +6255,25 @@ def _render_engine_status_sidebar(current_universe: str, current_index,
     opt-in: it runs on every run (see :func:`ensure_edge_study`), so there is nothing to tick.
 
     Caller must be inside a ``with st.sidebar:`` context. Returns the resolved
-    :class:`CLRSettings` and stashes it in session state so renderers that do not take it as
+    :class:`SiddhiSettings` and stashes it in session state so renderers that do not take it as
     an argument can read it back.
     """
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-title">Engine Status</div>', unsafe_allow_html=True)
 
-    clr = _clr_settings(current_universe, current_index, current_timeframe)
-    st.session_state["clr_settings"] = clr
+    sid = _siddhi_settings(current_universe, current_index, current_timeframe)
+    st.session_state["siddhi_settings"] = sid
 
-    study = _edge_cache_get(_edge_key(current_universe, current_index, current_timeframe, clr))
+    study = _edge_cache_get(_edge_key(current_universe, current_index, current_timeframe, sid))
     # Painted into a placeholder so it can be repainted after a run measures a study — the
     # sidebar renders BEFORE the analysis executes (single-pass render), so without this the
     # card would show "not measured" for one extra interaction after you measured.
     _slot = st.empty()
-    _slot.markdown(_engine_card_html(clr, study), unsafe_allow_html=True)
+    _slot.markdown(_engine_card_html(sid, study), unsafe_allow_html=True)
     st.session_state["_engine_card_slot"] = _slot
     st.session_state["_engine_card_args"] = (current_universe, current_index, current_timeframe)
 
-    return clr
+    return sid
 
 
 if __name__ == "__main__":
