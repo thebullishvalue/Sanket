@@ -537,8 +537,17 @@ def add_siddhi_features(df: pd.DataFrame,
     valid = warm & hist.notna() & hist.shift(1).notna() & ~degenerate.to_numpy(dtype=bool)
 
     # ── The two plotted events: Pine ta.crossover / ta.crossunder against ±thr ──
-    buy_cond  = ((hist > thr) & (hist.shift(1) <= thr.shift(1))).fillna(False).to_numpy(dtype=bool) & valid
-    sell_cond = ((hist < -thr) & (hist.shift(1) >= -thr.shift(1))).fillna(False).to_numpy(dtype=bool) & valid
+    buy_cond = (
+        (hist > thr)
+        & (hist.shift(1) <= thr.shift(1))
+        & (o["osc"] < 0)
+    ).fillna(False).to_numpy(dtype=bool) & valid
+
+    sell_cond = (
+        (hist < -thr)
+        & (hist.shift(1) >= -thr.shift(1))
+        & (o["osc"] > 0)
+    ).fillna(False).to_numpy(dtype=bool) & valid
     df['buy_cond']  = buy_cond
     df['sell_cond'] = sell_cond
 
