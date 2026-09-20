@@ -102,8 +102,7 @@ def symbol_events(close: pd.Series, high: pd.Series, low: pd.Series,
                   smooth: int = eng.SID_SMOOTH, signal: int = eng.SID_SIGNAL,
                   norm: int = eng.SID_NORM, vol_n: int = eng.SID_VOL_N,
                   cap: float = eng.SID_CAP,
-                  participation: str = eng.SID_PARTICIPATION,
-                  scaling: str = eng.SID_SCALING) -> pd.DataFrame:
+                  participation: str = eng.SID_PARTICIPATION) -> pd.DataFrame:
     """Extract Siddhi crossing events for one symbol as a compact (date, side, fwd) table.
 
     Returns a frame with columns ``date``, ``side`` (+1 buy / -1 sell) and ``fwd`` (the
@@ -125,14 +124,13 @@ def symbol_events(close: pd.Series, high: pd.Series, low: pd.Series,
                           "side": pd.Series(dtype=float),
                           "fwd": pd.Series(dtype=float)})
     n = len(close)
-    warm = eng.warmup_bars(length, norm, vol_n, smooth)
+    warm = eng.warmup_bars(length, norm, vol_n, smooth, signal)
     if n < warm + int(horizon) + 3:
         return empty
 
     o = eng.siddhi_oscillator(high, low, close, volume,
                               length=length, smooth=smooth, signal=signal, norm=norm,
-                              vol_n=vol_n, cap=cap, participation=participation,
-                              scaling=scaling)
+                              vol_n=vol_n, cap=cap, participation=participation)
     hist, hist_sd = o["hist"], o["hist_sd"]
     thr = float(k) * hist_sd.fillna(0.0)
 

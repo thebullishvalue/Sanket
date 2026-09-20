@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Siddhi Conviction Oscillator · Obsidian Quant · Pragyam Family · `v7.0.0`
+### Siddhi Conviction Oscillator · Obsidian Quant · Pragyam Family · `v7.0.1`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -236,10 +236,16 @@ is the **population** standard deviation (`ddof=0`), `ta.tr(true)` includes the 
 hollow-bar volume carry is reproduced so a holiday or thin overnight print cannot kill the
 participation baseline for a whole averaging window.
 
-**Warmup is additive, not a maximum** — `norm + length + vol_n + smooth + 2`, about **245 daily
-bars** at the defaults. Taking a maximum would let the first adaptive σ be computed across
-zero-filled bars, biasing it low and inflating the scaling exactly where the series begins.
-Shorter histories are excluded with a "warming up" count in the run stats.
+**Warmup is two nested normalizations, and it is counted rather than guessed** —
+`2·norm + length + vol_n + smooth + signal`, **452 daily bars** at the defaults. `rawSd` is a
+stdev *of* `raw`, so it needs a window free of the bars where `raw` is still pinned; `histSd` is
+a stdev of the *histogram*, so it needs its own clean window on top of that. Shorter histories
+are excluded with a "warming up" count in the run stats.
+
+**Weekly runs a shorter normalization window** (`SID_NORM_WEEKLY = 60`, warmup 172 bars) and
+fetches deeper history to match. At the source's 200 a weekly symbol would need 452 *weekly*
+bars — 8.7 years each — before the screen showed anything, which no fetch this app can make will
+supply. It is flagged `ADAPTED` in the engine card rather than presented as a measured setting.
 
 `SID_K` scales an optional magnitude gate — the histogram must cross `± k·σ(hist)` rather than
 `± 0`. **It defaults to 0.0, which is exactly the zero-crossing above.** The knob exists so the
@@ -369,8 +375,9 @@ computed for display only. Neither enters the signal.
 
 **Data sources**: NSE India API (`nsepython` / `NseKit`), Yahoo Finance (`yfinance`), Wikipedia
 (index constituent lists). Siddhi is a per-symbol signal, so it fires on any instrument with
-~245 bars of clean OHLC — volume is used where it exists and relative true range where it does
-not, automatically, so index spot works without configuration. Whether it carries an *edge* on a
+~452 bars of clean OHLC on Daily (172 weekly bars on Weekly) — volume is used where it exists
+and relative true range where it does not, automatically, so index spot works without
+configuration. Whether it carries an *edge* on a
 given universe is not assumed — run the Edge Study and read the verdict.
 
 ---
@@ -411,6 +418,30 @@ bit-identical answer for a 15-year round trip. It re-measures automatically once
 
 ## What Changed
 
+**v7.0.1 — tracking `siddhi.pine` v3·VP.** The source added a volume-profile overlay, which is
+display-only on the price chart and changes nothing here. Two things it changed *do* reach the
+screen:
+
+- **Warmup is now counted, not guessed**, and it roughly doubles: `2·norm + length + vol_n +
+  smooth + signal` = **452 bars**, against the old estimate of 245. The old figure covered the
+  first of two nested normalizations and omitted `signal` entirely, so `histSd` — a stdev of the
+  histogram — was being averaged across ~200 bars where the histogram is pinned near zero. **That
+  mattered more here than on the chart**: the Pine only spends `histSd` on the impulse threshold,
+  which at `k = 0` is zero either way, while Sanket divides by it twice, for the cross-sectional
+  ranking score and the conviction basis. Both were inflated on every symbol short enough to live
+  in that region.
+- **The "Raw share" scaling option is gone.** Selecting it left the zones at ±30/±60 on a series
+  that lives inside ±15, so nothing armed and three of four signal channels went silent with
+  nothing on the pane to say why. A setting whose only effect is to break the engine is a trap,
+  not a choice. `SID_Raw` still carries the unscaled reading, which is all it was ever wanted for.
+
+**Weekly needed fixing as a consequence** — and was already quietly broken before it. Resampling
+the daily pool yields ~180 weekly bars, short of the warmup on any setting, so every symbol read
+WARMING UP forever and the screen came back empty with nothing to explain it. Weekly now runs a
+60-bar normalization window (warmup 172) *and* fetches 1900 days instead of 900; both are needed,
+neither is sufficient alone. Fetch depth is now part of the data-registry key, so a Daily run
+cannot serve its shallower pool to a Weekly one.
+
 **v7.0.0 — one screening condition: the Siddhi conviction oscillator.** The close-location
 reversal (CLR) engine was replaced wholesale. In its place, ported from
 [`siddhi.pine`](siddhi.pine): a participation-weighted oscillator measuring how much of each bar's
@@ -431,12 +462,10 @@ Three consequences worked through the rest of the system rather than bolted on:
   measured study can never drift from what the screener fires.
 
 Columns renamed `CLR_*` → `SID_*` throughout with the analysed-frame cache tag bumped to `sid1`,
-which retires every frame the old engine cached. Warmup rose from 254 to ~245 bars but is now
-*additive* across the whole chain (normalization + lookback + participation baseline + smoothing),
-because taking a maximum would let the first adaptive σ be computed across zero-filled bars. The
-regime engine and order-flow layer survive unchanged as displayed context. The trigger carries a
-visible `⚠ BARE` mark: a bare zero-crossing is the source indicator's own weakest tested
-configuration, and the app says so rather than burying it.
+which retires every frame the old engine cached. The regime engine and order-flow layer survive
+unchanged as displayed context. The trigger carries a visible `⚠ BARE` mark: a bare zero-crossing
+is the source indicator's own weakest tested configuration, and the app says so rather than
+burying it.
 
 **v6.3.0 — the study runs on every run; nothing left to configure.** The Edge Study is no longer
 opt-in behind an expander: expectancy on the universe in front of you is what tells you whether to

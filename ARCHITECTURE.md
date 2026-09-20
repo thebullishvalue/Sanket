@@ -311,11 +311,31 @@ overnight print would otherwise feed NaN into the participation EMA and kill it 
 averaging window, silently dropping the series back to range weighting — measured in the source,
 volume weighting was live on only 73% of bars before that fix, and as low as 31% on 1h futures.
 
-**Warmup is additive, not a maximum**: `norm + length + vol_n + smooth + 2`, about **245 daily
-bars** at the defaults. Taking a maximum would let the first adaptive σ be computed across
-zero-filled bars — `raw` is pinned to NaN for its first `length` bars while its SMA warms — biasing
-that σ low and so *inflating* the scaling exactly where the plot begins. Shorter histories are
-excluded from the screen with a "warming up" count surfaced in the run stats.
+**Warmup is two nested normalizations, and it is counted rather than guessed**:
+
+```
+raw     pinned until its SMA window and the participation baseline fill   length + vol_n
+rawSd   a stdev OF raw, so it needs a window free of those pinned bars    + norm
+hist    inherits that, through smooth and signal
+histSd  a stdev of the HISTOGRAM, needs its own full clean window         + norm + smooth + signal
+```
+
+which closes to `2·norm + length + vol_n + smooth + signal` — **452 daily bars** at the defaults.
+
+The previous arithmetic covered the first stage only, omitted `signal`, and declared a symbol
+ready at bar 245 while `histSd` was not clean until roughly 440. **That deflation matters more
+here than it does on the chart.** The Pine spends `histSd` only on the impulse threshold, which
+at `k = 0` is zero either way; Sanket divides by it *twice* — for `SID_Hist_Z`, the
+cross-sectional ranking score, and for `SID_Impulse`, the conviction basis — so both were
+inflated across the whole early region, on every symbol short enough to live there.
+
+**Weekly runs a shorter normalization window.** `SID_NORM_WEEKLY = 60` gives a 172-bar warmup and
+~14 months of context, the closest wall-clock analogue to what 200 daily bars gives the daily
+screen, and it stays well above the source's own minimum of 30. At 200 a weekly symbol would need
+452 *weekly* bars — 8.7 years each — before the screen showed anything. It is Sanket's number, not
+the source's, and the engine card says so (`ADAPTED`) rather than presenting it as a measured
+plateau. Weekly also fetches 1900 calendar days rather than 900; both changes are needed, neither
+is sufficient alone. Shorter histories are excluded with a "warming up" count in the run stats.
 
 `SID_Hist_Z` exists because the raw histogram is **not comparable across symbols** — dividing by
 its own σ over the normalization window is what makes one instrument's reading rankable against

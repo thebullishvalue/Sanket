@@ -83,7 +83,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v7.0.0"
+VERSION = "v7.0.1"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures. The source indicator (siddhi.pine) titles itself
@@ -92,6 +92,15 @@ VERSION = "v7.0.0"
 # name appears in exactly one place.
 ENGINE_NAME = "Siddhi Conviction Oscillator"
 ENGINE_CODE = "SIDDHI"
+
+# Bumped whenever the engine's OUTPUT changes for inputs that are otherwise identical.
+# It feeds both cache identities — the analysed-frame signature and the edge-study key —
+# because a parameter tuple is not sufficient on its own: the v3·VP warmup fix changed what
+# every Daily frame fires while leaving `params_sig` byte-identical, so anything keyed on
+# parameters alone would have gone on serving pre-fix frames and a pre-fix study.
+#   sid1  v7.0.0  initial Siddhi port
+#   sid2  v7.0.1  counted warmup (452 bars, was 245); "Raw share" scaling removed
+ENGINE_SIG = "sid2"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -106,9 +115,11 @@ def _today_ist() -> datetime.date:
 #
 # Unified OHLCV pool per session.  Instead of re-fetching the same universe
 # on every mode switch, all analysis paths share one in-memory store keyed by
-# frozenset(stock_list).  The registry is always populated with _MAX_DAYS_BACK
-# days of history so every mode (screener, intelligence, correlation) can slice
-# what it needs without an extra round-trip.
+# (frozenset(stock_list), days_back).  The registry is populated with the timeframe's
+# full depth (_max_days_back) so every mode (screener, range harvest, correlation) can
+# slice what it needs without an extra round-trip.  The depth is IN THE KEY because
+# Daily and Weekly need different amounts of history and one must not be served the
+# other's pool.
 #
 # Two-tier caching:
 #   L1 — session-state registry (per-user, sub-millisecond lookup)
@@ -117,13 +128,25 @@ def _today_ist() -> datetime.date:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _REGISTRY_KEY  = "data_registry"
-_MAX_DAYS_BACK = 900  # fetch the maximum once; all modes slice what they need.
+
+# Fetch depth, in calendar days, per timeframe. Fetched once per (universe, depth); all
+# modes then slice what they need. `fetch_batch_data` pads a further 365 calendar days on
+# top of whichever value is used.
+_MAX_DAYS_BACK        = 900    # Daily  → ~873 bars, ~421 of them signal-bearing
+_MAX_DAYS_BACK_WEEKLY = 1900   # Weekly → ~323 bars, ~151 of them signal-bearing
 # 900 calendar days ≈ ~620 trading days, and fetch_batch_data pads a further 365 calendar
-# days on top (≈ 870 trading bars). The Siddhi oscillator needs its whole chain warm before
-# it can signal — the normalization window plus the lookback, the participation baseline and
-# the final smoothing, ~245 bars at the defaults (engine.warmup_bars) — so this leaves ~625
-# signal-bearing daily dates: enough for the live cross-section and for a Historical Range
-# harvest over the same pool.
+# days on top (≈ 873 trading bars). The Siddhi oscillator needs its whole chain warm before
+# it can signal, and that costs TWO nested normalization windows — 452 bars at the daily
+# defaults (engine.warmup_bars) — so this leaves ~421 signal-bearing daily dates: enough for
+# the live cross-section and for a Historical Range harvest over the same pool.
+#
+# WEEKLY NEEDS ITS OWN DEPTH. Resampling the daily pool yields only ~180 weekly bars, which
+# is below the warmup on any setting, so every symbol would read WARMING UP forever and the
+# screen would come back empty with nothing to say why. Weekly therefore fetches deeper AND
+# runs a shorter normalization window (engine.SID_NORM_WEEKLY); both are needed, neither is
+# sufficient alone. The extra depth costs ~16 MB of raw OHLCV on a 500-symbol universe —
+# frames are 5 float columns, not the analysed panel — so it is affordable where a 10-year
+# fetch at the source's own norm would not be.
 # Bound the L1 registry so cycling through indices (or stock_list variations from
 # transient fetch failures) can't accumulate stale 500-day universe DataFrames in
 # session_state until the tab closes. Keep only the N most-recently-used universes;
@@ -141,14 +164,23 @@ def _registry_ttl_seconds() -> int:
     return 90 * 60
 
 
-def _registry_get(stock_list: list, end_date: datetime.date):
-    """Return cached data_dict if still fresh for this universe+date, else None.
+def _max_days_back(timeframe: str = "Daily") -> int:
+    """Calendar days of history to fetch for a timeframe. See the constants above."""
+    return _MAX_DAYS_BACK_WEEKLY if str(timeframe) == "Weekly" else _MAX_DAYS_BACK
+
+
+def _registry_get(stock_list: list, end_date: datetime.date, days_back: int):
+    """Return cached data_dict if still fresh for this universe+date+depth, else None.
+
+    ``days_back`` is part of the identity, not a hint: a Daily run stores a ~900-day pool
+    and a Weekly run needs ~1900, so serving one from the other would silently hand the
+    weekly screen a frame too short to warm its oscillator.
 
     On a hit, the key is moved to the most-recently-used position so the LRU
     eviction in _registry_put drops genuinely-cold universes, not just oldest-stored.
     """
     reg   = st.session_state.get(_REGISTRY_KEY, {})
-    key   = frozenset(stock_list)
+    key   = (frozenset(stock_list), int(days_back))
     entry = reg.get(key)
     if entry is None or entry["end_date"] != end_date:
         return None
@@ -160,8 +192,9 @@ def _registry_get(stock_list: list, end_date: datetime.date):
     return entry["data"]
 
 
-def _registry_put(stock_list: list, end_date: datetime.date, data_dict: dict):
-    """Store data_dict in the session-state registry under frozenset(stock_list).
+def _registry_put(stock_list: list, end_date: datetime.date, data_dict: dict,
+                  days_back: int):
+    """Store data_dict in the session-state registry under (frozenset(stock_list), depth).
 
     DataFrames are stored as copies so downstream mutation (adding indicator
     columns) never corrupts the cached source data. Bounded LRU: when the registry
@@ -171,7 +204,7 @@ def _registry_put(stock_list: list, end_date: datetime.date, data_dict: dict):
     if _REGISTRY_KEY not in st.session_state:
         st.session_state[_REGISTRY_KEY] = {}
     reg = st.session_state[_REGISTRY_KEY]
-    key = frozenset(stock_list)
+    key = (frozenset(stock_list), int(days_back))
     reg.pop(key, None)            # ensure re-insert lands at the most-recent end
     reg[key] = {
         "data":       {k: v.copy() for k, v in data_dict.items()},
@@ -209,15 +242,16 @@ def _analysis_params_sig(timeframe, reg_len, wt_n1, wt_n2, levels,
     The engine tag invalidates frames cached under a previous signal/feature engine.
     History: 'rev1'–'rev6' = the retired reversion-ranker + delta-divergence/clamp-cross
     signal sets; 'mom1'/'mom2' (v5.0/v5.1) = the 12-1 momentum rank with the Set A/Set B
-    entry screeners; 'sbv8'/'clr1' (v6.0/v6.1) = close-location reversal; 'sid1' (v7.0) =
-    the Siddhi conviction oscillator, the only screening condition.
+    entry screeners; 'sbv8'/'clr1' (v6.0/v6.1) = close-location reversal; 'sid1'/'sid2'
+    (v7.0.x) = the Siddhi conviction oscillator, the only screening condition. The live tag
+    is :data:`ENGINE_SIG`.
 
     ``sb_params`` = :attr:`SiddhiSettings.params_sig`. These are baked into the frame
     (buy_cond / sell_cond / the hold window all depend on them), so a parameter change must
-    miss the cache rather than serve stale conditions. The 'sid1' tag is what retires every
-    frame the CLR engine cached.
+    miss the cache rather than serve stale conditions. The engine tag covers the case the
+    parameters cannot: a fix that changes what identical parameters produce.
     """
-    return ("sid1", str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
+    return (ENGINE_SIG, str(timeframe), int(reg_len), int(wt_n1), int(wt_n2),
             tuple(levels), int(wt2_len), str(wt2_type), end_date,
             tuple(sb_params) if sb_params else None)
 
@@ -247,20 +281,25 @@ def _analyzed_cache_clear():
     st.session_state.pop(_ANALYZED_CACHE_KEY, None)
 
 
-def get_universe_data(stock_list: list, end_date: datetime.date = None):
+def get_universe_data(stock_list: list, end_date: datetime.date = None,
+                      timeframe: str = "Daily"):
     """Fetch OHLCV data for a universe, checking the session-state registry first.
 
-    Always fetches _MAX_DAYS_BACK days so the screener, the range harvest, and
-    correlation can all slice from the same pool without re-fetching.  Correlation callers
-    should pass only the universe symbols here, then supplement the returned dict
-    with a single-ticker fetch for the target asset if it is missing.
+    Fetches :func:`_max_days_back` days for the timeframe so the screener, the range
+    harvest and correlation can all slice from the same pool without re-fetching.
+    Correlation callers should pass only the universe symbols here, then supplement the
+    returned dict with a single-ticker fetch for the target asset if it is missing.
+
+    ``timeframe`` selects the depth, and the depth is part of the cache identity — a
+    Weekly run must not be served the Daily run's shallower pool.
 
     Returns: (data_dict, message_str) — same contract as fetch_batch_data.
     """
     if end_date is None:
         end_date = _today_ist()
+    days_back = _max_days_back(timeframe)
 
-    cached = _registry_get(stock_list, end_date)
+    cached = _registry_get(stock_list, end_date, days_back)
     if cached is not None:
         console.detail(
             f"Data registry HIT — {len(cached)} symbols available "
@@ -270,13 +309,13 @@ def get_universe_data(stock_list: list, end_date: datetime.date = None):
 
     console.detail(
         f"Data registry MISS — fetching {len(stock_list)} symbols "
-        f"from yfinance (end_date={end_date}, days_back={_MAX_DAYS_BACK})"
+        f"from yfinance (end_date={end_date}, days_back={days_back}, {timeframe})"
     )
     data_dict, msg = fetch_batch_data(
-        stock_list, end_date=end_date, days_back=_MAX_DAYS_BACK
+        stock_list, end_date=end_date, days_back=days_back
     )
     if data_dict:
-        _registry_put(stock_list, end_date, data_dict)
+        _registry_put(stock_list, end_date, data_dict, days_back)
     return data_dict, msg
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -321,7 +360,6 @@ class SiddhiSettings:
     vol_n:    int          # participation baseline length
     cap:      float        # ceiling on the participation weight
     participation: str     # Auto / Volume / True range / Off
-    scaling:  str          # Adaptive (self-normalized) / Raw share
     k:        float        # magnitude gate in σ of the histogram; 0.0 = plain zero-cross
     horizon:  int          # hold window in bars
     cost_bps: float
@@ -336,20 +374,29 @@ class SiddhiSettings:
         """
         return dict(length=self.length, smooth=self.smooth, signal=self.signal,
                     norm=self.norm, vol_n=self.vol_n, cap=self.cap,
-                    participation=self.participation, scaling=self.scaling,
-                    k=self.k, horizon=self.horizon)
+                    participation=self.participation, k=self.k, horizon=self.horizon)
 
     @property
     def params_sig(self) -> tuple:
         """The subset that changes a per-symbol analyzed frame (see _analysis_params_sig)."""
         return (int(self.length), int(self.smooth), int(self.signal), int(self.norm),
                 int(self.vol_n), float(self.cap), str(self.participation),
-                str(self.scaling), float(self.k), int(self.horizon))
+                float(self.k), int(self.horizon))
 
     @property
     def study_sig(self) -> tuple:
         """Identity of an edge study: the parameters it was measured at."""
         return self.params_sig
+
+    @property
+    def norm_is_adapted(self) -> bool:
+        """True when the normalization window is Sanket's, not the source indicator's.
+
+        Surfaced in the UI. The rest of the parameter set is the source's own default and
+        is presented as such; this one is not, and conflating them would quietly upgrade an
+        adaptation to a measured setting.
+        """
+        return int(self.norm) != eng.SID_NORM
 
     @property
     def trigger_label(self) -> str:
@@ -372,7 +419,8 @@ class SiddhiSettings:
     @property
     def min_bars(self) -> int:
         """Bars a symbol needs before the whole oscillator chain is warm enough to fire."""
-        return eng.warmup_bars(self.length, self.norm, self.vol_n, self.smooth)
+        return eng.warmup_bars(self.length, self.norm, self.vol_n, self.smooth,
+                               self.signal)
 
     def cost_ok(self, study=None) -> bool:
         """Cost gate — measured from `study` when one exists, else the pooled prior."""
@@ -386,18 +434,21 @@ def _siddhi_settings(universe, selected_index, timeframe, overrides=None) -> Sid
     """Resolve the active Siddhi settings for a (universe, timeframe) selection.
 
     ``overrides`` is an optional dict of any field above; anything absent falls back to the
-    source indicator's default.
+    source indicator's default — with ONE exception, the normalization window, which is
+    shorter on Weekly. See :data:`engine.SID_NORM_WEEKLY`: warmup costs two normalization
+    windows, so the source's 200 would demand 8.7 years of weekly history per symbol and the
+    weekly screen would never show anything. :attr:`SiddhiSettings.norm_is_adapted` reports
+    when that substitution is live so the UI can say so rather than present it as measured.
     """
     o = overrides or {}
     return SiddhiSettings(
         length   = int(o.get("length", eng.length_for(timeframe))),
         smooth   = int(o.get("smooth", eng.SID_SMOOTH)),
         signal   = int(o.get("signal", eng.SID_SIGNAL)),
-        norm     = int(o.get("norm", eng.SID_NORM)),
+        norm     = int(o.get("norm", eng.norm_for(timeframe))),
         vol_n    = int(o.get("vol_n", eng.SID_VOL_N)),
         cap      = float(o.get("cap", eng.SID_CAP)),
         participation = str(o.get("participation", eng.SID_PARTICIPATION)),
-        scaling  = str(o.get("scaling", eng.SID_SCALING)),
         k        = float(o.get("k", eng.SID_K)),
         horizon  = int(o.get("horizon", eng.SID_HORIZON)),
         cost_bps = float(o.get("cost_bps", eng.SID_COST_BPS)),
@@ -427,7 +478,7 @@ def _active_siddhi_settings() -> SiddhiSettings:
 #               volume profile (a Python double loop, the app's slowest path), no regime
 #               engine, no order flow. The study does not need them.
 #   2. STREAMING symbols are fetched and reduced in chunks; each chunk's frames are released
-#               before the next is fetched. What accumulates is event tuples at a ~9% fire
+#               before the next is fetched. What accumulates is event tuples at a ~11% fire
 #               rate — a few MB, not a panel.
 #   3. SAMPLED  large universes are sampled. This costs almost nothing statistically because
 #               the participation ratio saturates: 500 correlated NSE equities carry ~15-20
@@ -453,8 +504,13 @@ _EDGE_DISK_DIR = ".sanket_cache"    # ephemeral on Streamlit Cloud; treated as b
 
 
 def _edge_key(universe, selected_index, timeframe, sid: SiddhiSettings) -> str:
-    """Cache identity for a study: universe + timeframe + the parameters it was measured at."""
-    parts = [str(universe), str(selected_index), str(timeframe),
+    """Cache identity for a study: engine + universe + timeframe + measured-at parameters.
+
+    :data:`ENGINE_SIG` is in the key because the disk cache outlives a deploy. Without it the
+    v7.0.1 warmup fix — which leaves Daily's `study_sig` byte-identical while changing which
+    bars fire — would have kept serving a study measured against the old rule.
+    """
+    parts = [ENGINE_SIG, str(universe), str(selected_index), str(timeframe),
              "p" + _slug("_".join(str(x) for x in sid.study_sig))]
     return _slug("__".join(parts))
 
@@ -1797,7 +1853,7 @@ def to_excel(df):
             "Metric Description": [
                 "",
                 "Raw participation-weighted share of effort that became displacement: 100 x SMA(c*w, len) / SMA(|c|*w, len), where c = (C - C[1]) / TrueRange and w = capped volume (or range) relative to its own baseline. Honest about absolute conviction, but it cannot reach its own bounds — which is why it is rescaled.",
-                "The oscillator (100*tanh(raw / 3*sigma), then EMA-smoothed) and its signal-line EMA. Bounded +/-100 under adaptive scaling. Above zero, participation-weighted effort is net upward.",
+                "The oscillator (100*tanh(raw / 3*sigma), then EMA-smoothed) and its signal-line EMA. Bounded +/-100. Above zero, participation-weighted effort is net upward. The rescaling is not optional - the raw share cannot reach its own bounds, so fixed zones against it are zones that never fire. SID_Raw carries the unscaled reading.",
                 "THE SCREENING VARIABLE. SID_Osc - SID_Sig. Its CROSSING of zero is the entire condition: up = BUY, down = SELL.",
                 "The histogram in sigma of its own distribution over the normalization window — what makes one symbol's reading comparable to another's, and therefore rankable. This is the STATE (who is in control), not the event.",
                 "One-bar change in the histogram, in the same sigma units — how forcefully the gap opened. Conviction is built from this, because at a crossing the LEVEL is zero by construction.",
@@ -2757,7 +2813,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     # display-only "% Chng Since" column, which uses the few buffer days after it).
     # For the common analysis_date == today run this is identical to before.
     end_date = analysis_date if isinstance(analysis_date, datetime.date) else _today_ist()
-    data_dict, fetch_msg = get_universe_data(stock_list, end_date=end_date)
+    data_dict, fetch_msg = get_universe_data(stock_list, end_date=end_date,
+                                             timeframe=timeframe)
 
     if not data_dict:
         console.error(fetch_msg)
@@ -3116,7 +3173,8 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     console.success(f"Fetched {len(stock_list)} symbols for {selected_index}")
     console.section("Mass Historical Download")
     # Registry-first: if the same universe was fetched recently it won't hit yfinance again
-    data_dict, msg = get_universe_data(stock_list, end_date=end_date)
+    data_dict, msg = get_universe_data(stock_list, end_date=end_date,
+                                       timeframe=timeframe)
 
     if not data_dict:
         console.error("No historical data available")
@@ -3672,7 +3730,8 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         # Passing only the universe symbols so the registry key is consistent with
         # the screener and timeseries paths.  The target ticker is supplemented
         # below with a single small fetch if it is not already in the pool.
-        data_dict, fetch_msg = get_universe_data(stock_list, end_date=analysis_date)
+        data_dict, fetch_msg = get_universe_data(stock_list, end_date=analysis_date,
+                                                 timeframe=timeframe)
         if data_dict is None:
             st.error(f"Data fetch failed: {fetch_msg}")
             console.item("Data fetch error", fetch_msg)
@@ -3687,7 +3746,8 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             # session registry (15-min TTL) before yfinance and stores the result,
             # so repeated correlation runs on the same target reuse the cache instead
             # of re-hitting the network with identical requests.
-            target_raw, _ = get_universe_data([target_ticker], end_date=analysis_date)
+            target_raw, _ = get_universe_data([target_ticker], end_date=analysis_date,
+                                              timeframe=timeframe)
             if target_raw and target_ticker in target_raw:
                 # Merge into a new dict so we don't mutate the registry entry
                 data_dict = {**data_dict, target_ticker: target_raw[target_ticker]}
@@ -5530,7 +5590,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
             format="%+.2f",
         ),
         "Oscillator": st.column_config.NumberColumn(
-            help=("The conviction oscillator itself, bounded ±100 under adaptive scaling. Above "
+            help=("The conviction oscillator itself, bounded ±100. Above "
                   "zero, participation-weighted effort is net upward. Context for the signal."),
             format="%+.1f",
         ),
@@ -6191,8 +6251,10 @@ def _engine_card_html(sid, study) -> str:
 
     # The source indicator's own evidence section says a bare zero-crossing is its WEAKEST
     # tested configuration. That caveat must stay VISIBLE — burying it in a tooltip would
-    # quietly present the shipped default as the validated one.
+    # quietly present the shipped default as the validated one. Same for the weekly
+    # normalization window, which is Sanket's number rather than the source's.
     _bare = sid.k <= 0
+    _adapted = sid.norm_is_adapted
     trigger_cell = _cell("TRIGGER ⚠ BARE" if _bare else "TRIGGER",
                          ("hist × 0" if _bare else f"hist × ±{sid.k:g}σ") + f" · {sid.horizon}b",
                          "var(--amber)" if _bare else "var(--ink-secondary)",
@@ -6201,10 +6263,16 @@ def _engine_card_html(sid, study) -> str:
                          f"{sid.horizon} bars, entry the next session's open. Oscillator: "
                          f"{sid.length}-bar lookback, {sid.smooth}-bar smoothing, {sid.signal}-bar "
                          f"signal line, {sid.norm}-bar normalization, {sid.participation.lower()} "
-                         f"participation capped at {sid.cap:g}×. Every value is the source "
-                         f"indicator's own default, which is why none is adjustable — its "
-                         f"900-configuration search found fitted and out-of-sample edge "
-                         f"essentially uncorrelated."
+                         f"participation capped at {sid.cap:g}×. Warmup is two nested "
+                         f"normalizations — {sid.min_bars} bars before this symbol can signal "
+                         f"at all. Every value is the source indicator's own default, which is "
+                         f"why none is adjustable — its 900-configuration search found fitted "
+                         f"and out-of-sample edge essentially uncorrelated."
+                         + (f" ADAPTED: the normalization window is Sanket's {sid.norm}, not "
+                            f"the source's {eng.SID_NORM}. At {eng.SID_NORM} a weekly symbol "
+                            f"would need {eng.warmup_bars(sid.length, eng.SID_NORM, sid.vol_n, sid.smooth, sid.signal)} "
+                            f"weekly bars — 8.7 years each — before the screen showed anything."
+                            if _adapted else "")
                          + (" BARE CROSSING: the source measures this, its k=0 case, as the "
                             "WEAKEST setting of the magnitude gate — +0.0015R with t = 0.2 on "
                             "its held-out instruments. What applies here is the Edge Study "

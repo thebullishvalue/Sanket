@@ -14,7 +14,7 @@ gap between them.
     conviction     c = (close - close[1]) / TR                bounded -1 … +1
     participation  w = min(volume / EMA(volume, vn), cap)     range fallback where no volume
     raw            = 100 · SMA(c·w, len) / SMA(|c|·w, len)
-    scaled         = 100 · tanh( raw / 3σ(raw, norm) )        adaptive self-normalisation
+    scaled         = 100 · tanh( raw / 3σ(raw, norm) )        adaptive, and not optional
     osc            = EMA(scaled, smooth)
     sig            = EMA(osc, signal)
     hist           = osc - sig
@@ -122,6 +122,18 @@ SID_SIGNAL = 9
 # Longer is stabler and slower to acknowledge that the instrument has changed character.
 SID_NORM = 200
 
+# WEEKLY IS NOT THE SOURCE'S NUMBER — it is Sanket's, and it exists because warmup costs
+# TWO normalization windows (see `warmup_bars`). At norm = 200 a weekly symbol needs 452
+# weekly bars before it can carry a signal: 8.7 years of history per symbol, for every
+# symbol in the universe, before the screen shows anything at all. No fetch this app can
+# make on a shared container supplies that.
+#
+# 60 weeks is ~14 months of context, which is the closest wall-clock analogue to what 200
+# daily bars (~10 months) gives the daily screen, and it keeps the σ sample well above the
+# source's own minimum of 30. Warmup falls to 172 weekly bars. It is flagged in the UI as a
+# Sanket adaptation rather than a measured plateau, because that is what it is.
+SID_NORM_WEEKLY = 60
+
 # Averaging length for the volume (or true-range) participation baseline.
 SID_VOL_N = 20
 
@@ -135,11 +147,12 @@ SID_CAP = 3.0
 SID_PARTICIPATION = "Auto"
 PARTICIPATION_MODES = ("Auto", "Volume", "True range", "Off")
 
-# "Adaptive (self-normalized)" maps the raw share through 100·tanh(raw / 3σ). "Raw share"
-# plots the untransformed quantity, which is honest about absolute conviction and nearly
-# useless for thresholds.
-SID_SCALING = "Adaptive (self-normalized)"
-SCALING_MODES = ("Adaptive (self-normalized)", "Raw share")
+# NOTE: there is no scaling MODE any more. The source indicator removed its "Raw share"
+# option, and the removal is a fix rather than a simplification: selecting it left the
+# zones at ±30/±60 on a series that lives inside roughly ±15, so nothing ever armed, no
+# gated divergence passed, and the reversal trigger could not fire. A setting whose only
+# effect is to break the engine is a trap, not a choice. The raw share is still computed
+# and still exported as ``SID_Raw``, which is what it was ever wanted for.
 
 # Magnitude gate in σ of the histogram's own distribution. 0.0 == the plain zero-crossing,
 # which is the shipped screening condition. See the module docstring.
@@ -330,6 +343,15 @@ def cost_in_vol_units(cost_bps: float, sigma_h: float) -> float:
         return float("nan")
 
 
+def norm_for(timeframe: str) -> int:
+    """Normalization window for a Sanket timeframe (Daily 200 bars / Weekly 60).
+
+    See :data:`SID_NORM_WEEKLY` for why the two differ: warmup is ``2·norm``, so the
+    source's 200 would demand 8.7 years of weekly history per symbol.
+    """
+    return SID_NORM_WEEKLY if str(timeframe) == "Weekly" else SID_NORM
+
+
 def length_for(timeframe: str) -> int:
     """Oscillator lookback for a Sanket timeframe.
 
@@ -341,17 +363,34 @@ def length_for(timeframe: str) -> int:
 
 
 def warmup_bars(length: int = SID_LENGTH, norm: int = SID_NORM,
-                vol_n: int = SID_VOL_N, smooth: int = SID_SMOOTH) -> int:
+                vol_n: int = SID_VOL_N, smooth: int = SID_SMOOTH,
+                signal: int = SID_SIGNAL) -> int:
     """Bars a symbol needs before it can carry a signal (the Pine's ``ready`` gate).
 
-    The dependency is ADDITIVE, not a maximum, and that is deliberate: ``rawSd`` needs
-    ``norm`` bars of valid ``raw``, ``raw`` is itself pinned to 0 for its first ``length``
-    bars while its SMA warms, the participation baseline needs ``vol_n``, and the final EMA
-    needs ``smooth``. Taking a maximum would let the first σ be computed across zero-filled
-    bars, biasing it low and so inflating the adaptive scaling exactly where the series
-    begins.
+    WARM-UP IS TWO NESTED NORMALIZATIONS, and it is counted rather than guessed::
+
+        raw     pinned until its SMA window and the participation baseline fill
+                                                        →  length + vol_n
+        rawSd   a stdev OF raw, so it needs a window free of those pinned bars
+                                                        →  + norm
+        hist    inherits that, through smooth and signal
+        histSd  a stdev of the HISTOGRAM, so it needs its own full clean window
+                                                        →  + norm + smooth + signal
+
+    which closes to ``2·norm + length + vol_n + smooth + signal`` — **452 bars** on the
+    shipped defaults.
+
+    The previous arithmetic (``norm + length + vol_n + smooth + 2``) covered the first
+    stage only and declared a symbol ready at bar 245, while ``histSd`` was not clean until
+    roughly 440. For those ~200 bars ``histSd`` was averaged across a region where the
+    histogram is pinned near zero — and a deflated sigma matters more here than it does on
+    the chart. The Pine only uses it for the impulse threshold, which at ``k = 0`` is zero
+    either way; Sanket divides by it **twice**, for ``SID_Hist_Z`` (the cross-sectional
+    ranking score) and ``SID_Impulse`` (the conviction basis). Both were inflated across
+    the whole early region, on every symbol short enough to live there. ``signal`` was
+    missing from the old sum as well.
     """
-    return int(norm) + int(length) + int(vol_n) + int(smooth) + 2
+    return 2 * int(norm) + int(length) + int(vol_n) + int(smooth) + int(signal)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
@@ -379,8 +418,7 @@ def siddhi_oscillator(high: pd.Series, low: pd.Series, close: pd.Series,
                       norm: int = SID_NORM,
                       vol_n: int = SID_VOL_N,
                       cap: float = SID_CAP,
-                      participation: str = SID_PARTICIPATION,
-                      scaling: str = SID_SCALING) -> dict[str, pd.Series]:
+                      participation: str = SID_PARTICIPATION) -> dict[str, pd.Series]:
     """The Siddhi conviction oscillator, its signal line and their histogram.
 
     Returns a dict of aligned Series: ``raw``, ``osc``, ``sig``, ``hist``, ``hist_sd``,
@@ -436,18 +474,15 @@ def siddhi_oscillator(high: pd.Series, low: pd.Series, close: pd.Series,
     raw = (100.0 * num / den.where(den > 1e-12))
 
     raw_sd = raw.rolling(norm).std(ddof=0)
-    if str(scaling) == "Raw share":
-        scaled = raw
-    else:
-        ok = raw_sd.notna() & (raw_sd >= SID_MIN_RAW_SIGMA)
-        # tanh is clamped at ±10 in the Pine to keep exp() finite; np.tanh saturates
-        # gracefully on its own, so the clamp is only kept for exact parity of intent.
-        scaled = pd.Series(
-            np.where(ok, 100.0 * np.tanh(np.clip(raw / (3.0 * raw_sd), -10.0, 10.0)), np.nan),
-            index=close.index, dtype=float)
-        # Bars whose raw is warm but whose σ is not yet available stay NaN rather than
-        # collapsing to 0 — a fabricated zero would fire a crossing that never happened.
-        scaled = scaled.where(raw.notna())
+    ok = raw_sd.notna() & (raw_sd >= SID_MIN_RAW_SIGMA)
+    # tanh is clamped at ±10 in the Pine to keep exp() finite; np.tanh saturates
+    # gracefully on its own, so the clamp is only kept for exact parity of intent.
+    scaled = pd.Series(
+        np.where(ok, 100.0 * np.tanh(np.clip(raw / (3.0 * raw_sd), -10.0, 10.0)), np.nan),
+        index=close.index, dtype=float)
+    # Bars whose raw is warm but whose σ is not yet available stay NaN rather than
+    # collapsing to 0 — a fabricated zero would fire a crossing that never happened.
+    scaled = scaled.where(raw.notna())
 
     osc = _ema(scaled, smooth) if int(smooth) > 1 else scaled
     # `_ema` propagates the leading NaNs of `scaled` rather than seeding on them, so the
@@ -471,13 +506,15 @@ def add_siddhi_features(df: pd.DataFrame,
                         vol_n: int = SID_VOL_N,
                         cap: float = SID_CAP,
                         participation: str = SID_PARTICIPATION,
-                        scaling: str = SID_SCALING,
                         k: float = SID_K,
                         horizon: int = SID_HORIZON) -> pd.DataFrame:
     """Attach the Siddhi conviction signal to one symbol's OHLCV frame.
 
     Columns written:
-      ``SID_Raw``       raw participation-weighted share of effort, 100·Σcw/Σ|c|w
+      ``SID_Raw``       raw participation-weighted share of effort, 100·Σcw/Σ|c|w. Exported
+                        because it is honest about ABSOLUTE conviction, which the rescaled
+                        oscillator deliberately is not — worth a glance when a reading looks
+                        dramatic and the chart does not
       ``SID_Osc``       the scaled, smoothed oscillator (adaptive: bounded ±100)
       ``SID_Sig``       its signal-line EMA
       ``SID_Hist``      ``SID_Osc - SID_Sig`` — the histogram. THIS is the screening variable.
@@ -497,8 +534,10 @@ def add_siddhi_features(df: pd.DataFrame,
 
     A crossing is ``ta.crossover(hist, thr)`` — ``hist > thr and hist[1] <= thr[1]`` — so at
     the default ``k = 0`` it is precisely "the histogram crossed zero". Nothing fires before
-    :func:`warmup_bars`; a frame shorter than that produces no events at all rather than
-    events computed from a half-warm oscillator.
+    :func:`warmup_bars` (452 bars at the defaults); a frame shorter than that produces no
+    events at all rather than events computed from a half-warm oscillator — and, just as
+    importantly, no ``SID_Hist_Z`` or ``SID_Impulse`` computed against a σ that has not yet
+    seen a clean window.
     """
     df = df.copy()
     high, low, close = df['High'], df['Low'], df['Close']
@@ -506,7 +545,7 @@ def add_siddhi_features(df: pd.DataFrame,
 
     o = siddhi_oscillator(high, low, close, vol,
                           length=length, smooth=smooth, signal=signal, norm=norm,
-                          vol_n=vol_n, cap=cap, participation=participation, scaling=scaling)
+                          vol_n=vol_n, cap=cap, participation=participation)
 
     hist, hist_sd = o['hist'], o['hist_sd']
     thr = float(k) * hist_sd.fillna(0.0)
@@ -529,7 +568,7 @@ def add_siddhi_features(df: pd.DataFrame,
     # ── Warmup and degeneracy ──
     n = len(df)
     pos = np.arange(n)
-    warm = pos >= warmup_bars(length, norm, vol_n, smooth)
+    warm = pos >= warmup_bars(length, norm, vol_n, smooth, signal)
     # A collapsed histogram σ means the two lines have stopped separating at all; the
     # z-score and the impulse are then divisions by ~0 and describe arithmetic, not the
     # market. Those bars must not fire and must not rank.
@@ -537,17 +576,8 @@ def add_siddhi_features(df: pd.DataFrame,
     valid = warm & hist.notna() & hist.shift(1).notna() & ~degenerate.to_numpy(dtype=bool)
 
     # ── The two plotted events: Pine ta.crossover / ta.crossunder against ±thr ──
-    buy_cond = (
-        (hist > thr)
-        & (hist.shift(1) <= thr.shift(1))
-        & (o["osc"] < 0)
-    ).fillna(False).to_numpy(dtype=bool) & valid
-
-    sell_cond = (
-        (hist < -thr)
-        & (hist.shift(1) >= -thr.shift(1))
-        & (o["osc"] > 0)
-    ).fillna(False).to_numpy(dtype=bool) & valid
+    buy_cond  = ((hist > thr) & (hist.shift(1) <= thr.shift(1))).fillna(False).to_numpy(dtype=bool) & valid
+    sell_cond = ((hist < -thr) & (hist.shift(1) >= -thr.shift(1))).fillna(False).to_numpy(dtype=bool) & valid
     df['buy_cond']  = buy_cond
     df['sell_cond'] = sell_cond
 
