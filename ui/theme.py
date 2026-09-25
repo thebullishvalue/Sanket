@@ -1,63 +1,341 @@
 """
-Sanket — Shared CSS, chart theming, and color constants for the UI layer.
+Sanket — Shared CSS, chart theming, and colour constants for the UI layer.
+संकेत (Sanketa) — "Signal · Indicator · Forewarning"
 
-UI — "Obsidian Quant" Institutional Research Terminal design language.
+UI — Institutional research terminal design language, adopted wholesale from
+Tattva. These two are the same product family; a reader moving between them
+should not have to relearn what a panel, a chip or a number looks like.
 
-Aesthetic: "Obsidian Quant" — Institutional Research Terminal
-Precision-instrument design language for quantitative finance.
-- Display/UI:  Syne (geometric, authoritative, distinctive)
-- Body/Data:   JetBrains Mono (refined monospace, tabular precision)
-- Palette:     Obsidian (#0A0E17 -> #050810), Amber Gold (#D4A853)
-- Surfaces:    Frameless glass panels with thin border strokes.
+Aesthetic: "Graphite" — near-achromatic ground, semantic colour only
+--------------------------------------------------------------------
+- Display/UI:  Inter (prose, headings, labels)
+- Body/Data:   JetBrains Mono (tabular numerals — every figure in the app)
+- Ground:      Graphite (#0A0C10 -> #1C212A), deliberately neutral. The
+               previous ramp was a saturated navy under an amber-gold accent,
+               which tinted every panel and forced the semantic hues to shout
+               over an already-coloured field.
+- Semantic:    Cobalt #4C7DF0 (interactive), Green #2CA36B (long),
+               Red #DD5A5A (short), Amber #D79A3C (caution ONLY),
+               Steel #4E9FC4 (info). Muted, not the stock Tailwind-500 ramp;
+               each clears WCAG AA on every surface it is used on.
+- Surfaces:    Flat, told apart by a hairline border and one step of tone.
+               No blur, no stacked shadows — a shadow is spent on overlays.
+- Themes:      Slate (dark) and Paper (light, for reading and print). The
+               light theme is a token swap, not a second stylesheet — see
+               LIGHT_TOKENS below.
+
+AMBER IS NO LONGER THE BRAND. Sanket's previous system made amber-gold the
+product accent and also its caution colour, so "this is Sanket" and "be
+careful" were the same signal. Amber now means caution and nothing else;
+cobalt carries interaction.
 """
 
 from __future__ import annotations
 
 import html
-import time
 from pathlib import Path
 
 import streamlit as st
 
-# NOTE: the single source of truth for the version string is sanket.VERSION —
-# the duplicates that used to live here had zero importers and could silently
-# drift from the real version.
-
 # Path to external CSS file
 CSS_PATH = Path(__file__).parent / "theme.css"
 
-# ── Shared Plotly layout config ─────────────────────────────────────────────
-# Eliminates massive duplication across all tab files.
 
-PLOTLY_FONT = dict(family="JetBrains Mono, monospace", color="#94A3B8", size=10)
-PLOTLY_HOVERLABEL = dict(
-    bgcolor="rgba(10, 14, 23, 0.95)",
-    font=dict(family="JetBrains Mono, monospace", size=11, color="#F1F5F9"),
-    bordercolor="rgba(255,255,255,0.08)",
-    align="left",
-)
+# ── The chart palette, dark ground ──────────────────────────────────────────
+# Never read these by value at module scope in a tab/page file — see
+# `chart_color`. They are the DARK ramp; the light one is `_PALETTE_LIGHT`.
+_PALETTE_RGB: dict[str, tuple[int, int, int]] = {
+    "emerald": (44, 163, 107),   # #2CA36B  long / bullish
+    "rose":    (221, 90, 90),    # #DD5A5A  short / bearish
+    "accent":  (76, 125, 240),   # #4C7DF0  primary / interactive
+    "cyan":    (78, 159, 196),   # #4E9FC4  info (informational tone only)
+    "amber":   (215, 154, 60),   # #D79A3C  caution ONLY, never brand
+    "violet":  (155, 143, 212),  # #9B8FD4  secondary / attribution
+    "slate":   (126, 135, 151),  # #7E8797  neutral / muted
+}
+
+
+def _palette_hex(name: str) -> str:
+    r, g, b = _PALETTE_RGB[name]
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+#: Dark-ground constants, for the handful of places that need a literal before
+#: a session exists (page-config favicon, docstrings). Anything drawn INTO a
+#: chart or a component must use `chart_color`/`chart_rgba` instead, which
+#: resolve per render and therefore follow the appearance toggle.
+COLOR_GREEN  = _palette_hex("emerald")
+COLOR_RED    = _palette_hex("rose")
+COLOR_ACCENT = _palette_hex("accent")
+COLOR_CYAN   = _palette_hex("cyan")
+COLOR_AMBER  = _palette_hex("amber")
+COLOR_PURPLE = _palette_hex("violet")
+COLOR_SLATE  = _palette_hex("slate")
+
+
+# ── Light theme — token overrides only ──────────────────────────────────────
+# theme.css defines the canonical dark :root token block; every component
+# rule in it reads var(--token) with nothing hardcoded outside that block.
+# Light mode is therefore just a second, smaller :root that redefines the
+# same custom properties — injected AFTER the base stylesheet so it wins on
+# source order, no runtime DOM attribute toggling required. Hues are
+# deepened versions of the dark palette (not the same RGB) so text clears
+# WCAG AA on a near-white surface.
+LIGHT_TOKENS = """
+:root {
+    /* Counterpart to the dark block's declaration — see the note there. This
+       is what keeps Paper light on a device whose system theme is dark; the
+       two together mean the OS preference is never consulted in either
+       direction. */
+    color-scheme: light;
+
+    /* Paper — the reporting/print theme. Not "dark inverted": a near-white
+       ground reflects far more light than a graphite one, so the semantic
+       hues are DEEPENED rather than reused (a #2CA36B that clears 5.9:1 on
+       graphite manages 2.6:1 on white and would be illegible). Every value
+       below clears WCAG AA on both --surface-1 and --surface-2. */
+    --bg:            #F4F6F8;
+    --surface-1:     #FFFFFF;
+    --surface-2:     #EEF1F5;
+    --surface-3:     #E2E7EE;
+
+    --ink:           #141920;   /* 17.7:1 on white */
+    --ink-secondary: #3D4756;   /*  9.4:1 */
+    --ink-tertiary:  #5E6979;   /*  5.6:1 */
+    --ink-quaternary:#6B7482;   /*  4.6:1 */
+    --spike: rgba(90, 100, 114, 0.45);
+
+    --accent:        #2B5FD9;   /* 5.6:1 */
+    --long:          #0F7A54;   /* 5.3:1 */
+    --short:         #C0392F;   /* 5.4:1 */
+    --caution:       #96660F;   /* 5.0:1 */
+    --system:        #15708C;   /* 5.6:1 */
+    --neutral:       #5A6472;   /* 6.0:1 */
+
+    --accent-fill:   rgba(43, 95, 217, 0.07);
+    --long-fill:     rgba(15, 122, 84, 0.08);
+    --short-fill:    rgba(192, 57, 47, 0.07);
+    --caution-fill:  rgba(150, 102, 15, 0.08);
+    --system-fill:   rgba(21, 112, 140, 0.07);
+    --accent-edge:   rgba(43, 95, 217, 0.32);
+    --long-edge:     rgba(15, 122, 84, 0.32);
+    --short-edge:    rgba(192, 57, 47, 0.30);
+    --caution-edge:  rgba(150, 102, 15, 0.30);
+    --system-edge:   rgba(21, 112, 140, 0.28);
+
+    --line:          rgba(15, 23, 42, 0.10);
+    --line-strong:   rgba(15, 23, 42, 0.18);
+    --line-faint:    rgba(15, 23, 42, 0.05);
+
+    --violet:        #6A4BC0;   /* 6.2:1 */
+    --violet-fill:   rgba(106, 75, 192, 0.07);
+    --violet-edge:   rgba(106, 75, 192, 0.30);
+
+    --shadow-sm:     0 1px 2px rgba(15, 23, 42, 0.06);
+    --shadow-pop:    0 10px 24px rgba(15, 23, 42, 0.12);
+}
+/* Two rules cannot be expressed as a token swap. On paper the primary
+   button's hover needs a DARKER accent (the dark theme's is lighter), and
+   the sidebar rail reads better as the tinted surface with the content
+   area white — the reverse of the dark theme's arrangement. */
+[data-testid="stBaseButton-primary"]:hover { background: #244EB4 !important; border-color: #244EB4 !important; }
+[data-testid="stSidebar"] { background: var(--surface-2); }
+
+/* ── Reclaiming Streamlit's own natives ──────────────────────────────────
+   THIS is why Paper mode looks half-broken without it. `.streamlit/config.toml`
+   is a STATIC config — it cannot follow a runtime theme switch. So on Paper a
+   token swap repaints every surface white while Streamlit keeps colouring its
+   own internals for whichever base it resolved: navigation labels, button
+   faces, input text and placeholders render near-white on near-white, while
+   anything drawn through the app's own classes stays correct. That split is
+   what makes the failure look arbitrary rather than total. */
+[data-testid="stSidebarNav"] a span,
+[data-testid="stSidebarNav"] a p,
+[data-testid="stWidgetLabel"] label p,
+[data-testid="stMarkdownContainer"] p,
+.stSelectbox div[data-baseweb="select"] > div,
+.stMultiSelect div[data-baseweb="select"] > div,
+[data-testid="stBaseButton-secondary"],
+[data-testid="stBaseButton-secondaryFormSubmit"],
+[data-testid="stDateInput"] input,
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input { color: var(--ink) !important; }
+
+[data-testid="stDateInput"] input::placeholder,
+[data-testid="stTextInput"] input::placeholder { color: var(--ink-quaternary) !important; }
+
+[data-baseweb="popover"] li,
+[data-baseweb="popover"] div { color: var(--ink) !important; }
+[data-baseweb="popover"] ul { background: var(--surface-1) !important; }
+
+/* The collapse chevrons are drawn in app ink: at Streamlit's own near-white
+   they were effectively invisible against Paper (now 4.9:1). */
+[data-testid="stSidebarCollapseButton"] svg,
+[data-testid="stExpandSidebarButton"] svg { color: var(--ink-secondary) !important; }
+"""
+
+
+# ── Theme resolution ────────────────────────────────────────────────────────
+def _active_theme() -> str:
+    """The active theme name — dark unless the appearance control has set light.
+
+    Reads the DERIVED key, which `main()` writes once at the top of the run from
+    the durable appearance choice. Everything in the script therefore agrees on
+    one value for the whole render — the fix for a page that used to draw its
+    chrome in one theme and its charts in the other.
+    """
+    return st.session_state.get("theme", "dark")
+
+
+_CHART_THEME = {
+    "dark": dict(
+        font_color="#8B95A6",                 # --ink-tertiary
+        hover_bg="rgba(21, 25, 32, 0.96)",    # --surface-2
+        hover_border="rgba(255,255,255,0.13)",
+        hover_text="#E6EAF1",
+        grid="rgba(255,255,255,0.05)",
+        grid_zero="rgba(255,255,255,0.11)",
+        axis_line="rgba(255,255,255,0.09)",
+        tick="#737D8E",
+        spike="rgba(139,149,166,0.45)",
+    ),
+    "light": dict(
+        font_color="#5E6979",
+        hover_bg="rgba(255,255,255,0.97)",
+        hover_border="rgba(15,23,42,0.18)",
+        hover_text="#141920",
+        grid="rgba(15,23,42,0.07)",
+        grid_zero="rgba(15,23,42,0.16)",
+        axis_line="rgba(15,23,42,0.12)",
+        tick="#5E6979",
+        spike="rgba(90,100,114,0.45)",
+    ),
+}
+
+
+def _chart_theme() -> dict:
+    return _CHART_THEME.get(_active_theme(), _CHART_THEME["dark"])
+
+
+# ── Theme-aware CHART palette ───────────────────────────────────────────────
+# The light values below are the SAME hexes LIGHT_TOKENS gives the chrome, so a
+# green line equals the green value beside it in either theme, and each clears
+# WCAG AA on its own ground.
+_PALETTE_LIGHT: dict[str, tuple[int, int, int]] = {
+    "emerald": (15, 122, 84),    # #0F7A54  5.3:1 on white
+    "rose":    (192, 57, 47),    # #C0392F  5.4:1
+    "accent":  (43, 95, 217),    # #2B5FD9  5.6:1
+    "cyan":    (21, 112, 140),   # #15708C  5.6:1
+    "amber":   (150, 102, 15),   # #96660F  5.0:1
+    "violet":  (106, 75, 192),   # #6A4BC0  6.2:1
+    "slate":   (90, 100, 114),   # #5A6472  6.0:1
+}
+
+
+def _palette() -> dict:
+    return _PALETTE_LIGHT if _active_theme() == "light" else _PALETTE_RGB
+
+
+def chart_color(name: str) -> str:
+    """A semantic chart colour for the ACTIVE theme, as ``#RRGGBB``.
+
+    The one way a call site names a colour. Use it in place of module-level
+    constants, which bind at import time — when there is no session to read a
+    theme from — and therefore cannot flip with the appearance toggle.
+    """
+    r, g, b = _palette()[name]
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def chart_rgba(name: str, alpha) -> str:
+    """A semantic chart colour for the active theme, as ``rgba(...)``."""
+    r, g, b = _palette()[name]
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def panel_bg() -> str:
+    """The panel surface a chart is drawn on, as a solid hex.
+
+    Also used for marker outlines, whose job is to separate overlapping points
+    by painting a sliver of the BACKGROUND between them — a hardcoded dark
+    value there draws a near-black halo around every marker on a white panel.
+    """
+    return "#FFFFFF" if _active_theme() == "light" else "#0F1217"
+
+
+def grid_rgba(alpha: float = 1.0) -> str:
+    """A hairline colour that works on BOTH grounds.
+
+    In-plot rules drawn as literal ``rgba(255,255,255,…)`` are white on white
+    in Paper mode, i.e. invisible. This returns white-alpha on the dark ground
+    and slate-alpha on the light one.
+    """
+    if _active_theme() == "light":
+        return f"rgba(15,23,42,{min(0.9, alpha * 1.6):.3f})"
+    return f"rgba(255,255,255,{alpha:.3f})"
+
+
+def signed_color(value: float, *, pos: str = "emerald", neg: str = "rose") -> str:
+    """Theme-aware green/red for a signed number. Replaces hardcoded hex pairs."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return chart_color("slate")
+    return chart_color(pos) if v >= 0 else chart_color(neg)
+
+
+# ── Shared Plotly layout config ─────────────────────────────────────────────
+
+#: Legend. Two things were wrong with the stock arrangement.
+#: (1) Anchored top-right — exactly where Plotly puts the modebar, so the
+#:     toolbar sat on top of the series names on every hover.
+#: (2) Its font dict named a size and family but NO colour, which makes Plotly
+#:     fall back to its own default ink rather than inheriting the layout font
+#:     — invisible on Paper. The colour is supplied per theme in chart_layout().
+#: It now sits BELOW the plot, right-aligned: clear of the toolbar, clear of
+#: the y-axis, and reading as a caption to the chart rather than a header.
 PLOTLY_LEGEND = dict(
     orientation="h",
-    yanchor="bottom",
-    y=1.02,
+    yanchor="top",
+    y=-0.16,
     xanchor="right",
     x=1,
     font=dict(size=10, family="JetBrains Mono, monospace"),
     bgcolor="rgba(0,0,0,0)",
+    itemsizing="constant",
 )
-PLOTLY_MARGIN = dict(t=20, l=50, r=20, b=40)
-PLOTLY_GRID = "rgba(255,255,255,0.035)"
-PLOTLY_GRID_ZERO = "rgba(255,255,255,0.06)"
 
-# Interactive chart config — click + zoom + pan
-PLOTLY_MODEBAR = dict(
-    modeBarButtonsToRemove=["lasso2d", "select2d"],
-    modeBarButtonsToAdd=[
-        "drawline",
-        "eraseshape",
-    ],
+#: Plot margins. `t`/`b` are set per-figure by ``chart_layout`` — a legend needs
+#: room to sit in, and a single fixed margin either clips every legended chart
+#: or wastes the same space on every chart without one.
+PLOTLY_MARGIN = dict(t=28, l=52, r=16, b=38)
+
+# ── The one Plotly config, passed to EVERY st.plotly_chart in the app ────────
+# Without this every chart renders Plotly's stock toolbar — including the Plotly
+# logo, a link out to plotly.com, and buttons for lasso/box-select that do
+# nothing in a read-only research view. It is the one element in the app that
+# visibly belongs to another product.
+#
+# What survives is what a research reader actually uses: zoom, pan, reset, and
+# a PNG export named after the app. `displayModeBar="hover"` keeps the toolbar
+# out of the composition until the pointer is inside the panel.
+PLOTLY_CONFIG = dict(
     displaylogo=False,
+    displayModeBar="hover",
+    modeBarButtonsToRemove=[
+        "lasso2d", "select2d", "autoScale2d", "toggleSpikelines",
+        "hoverClosestCartesian", "hoverCompareCartesian", "zoom3d", "pan3d",
+        "orbitRotation", "tableRotation", "resetCameraDefault3d",
+        "resetCameraLastSave3d", "hoverClosest3d",
+    ],
+    toImageButtonOptions=dict(format="png", scale=2, filename="sanket-chart"),
+    scrollZoom=False,
+    doubleClick="reset",
+    responsive=True,
 )
+
+#: Back-compat alias for anything still importing the old name.
+PLOTLY_MODEBAR = PLOTLY_CONFIG
 
 
 def chart_layout(
@@ -66,144 +344,275 @@ def chart_layout(
     margin: dict | None = None,
     responsive: bool = False,
 ) -> dict:
-    """Return a base Plotly layout dict for the Obsidian Quant theme.
-
-    Args:
-        height: Fixed pixel height for the chart.
-        show_legend: Whether to show the legend.
-        margin: Custom margin dict.
-        responsive: If True, adds CSS-based responsive sizing via autosize.
-    """
+    """Return a base Plotly layout dict for the active theme."""
+    ct = _chart_theme()
+    _margin = dict(PLOTLY_MARGIN)
+    if show_legend:
+        _margin["b"] = 58        # the legend sits under the x-axis
+    else:
+        _margin["t"] = 12
     base = dict(
         height=height,
         showlegend=show_legend,
-        legend=PLOTLY_LEGEND if show_legend else None,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=PLOTLY_FONT,
+        legend=({**PLOTLY_LEGEND,
+                 "font": {**PLOTLY_LEGEND["font"], "color": ct["font_color"]}}
+                if show_legend else None),
+        # PAINT THE CANVAS, never leave it transparent.
+        #
+        # A transparent Plotly canvas renders nothing of its own and shows
+        # whatever sits behind it, so the chart ground would never actually be
+        # chosen by this app — it would be inherited. On a device whose SYSTEM
+        # theme is light, any light bleed from the browser or from a Streamlit
+        # surface that has not been overridden lands inside the plot area, and
+        # Slate renders with pale patches behind dark-theme ink.
+        #
+        # `panel_bg()` makes the ground explicit AND keeps it appearance-aware,
+        # which is the part a blanket "force dark" would get wrong: Paper stays
+        # light on a dark-mode device by exactly the mechanism that keeps Slate
+        # dark on a light-mode one.
+        paper_bgcolor=panel_bg(),
+        plot_bgcolor=panel_bg(),
+        font=dict(family="JetBrains Mono, monospace", color=ct["font_color"], size=10),
         hovermode="x unified",
-        hoverlabel=PLOTLY_HOVERLABEL,
-        margin=margin or PLOTLY_MARGIN,
+        hoverlabel=dict(
+            bgcolor=ct["hover_bg"],
+            font=dict(family="JetBrains Mono, monospace", size=11, color=ct["hover_text"]),
+            bordercolor=ct["hover_border"],
+            align="left",
+        ),
+        margin=margin or _margin,
         spikedistance=-1,
+        # Colourway: any trace that does not name a colour draws from the app's
+        # own semantic ramp instead of Plotly's default D3 category-10 (the
+        # orange/purple/brown sequence that reads as a different product).
+        # Resolved per render, so an unnamed trace follows the theme too.
+        colorway=[chart_color(n) for n in
+                  ("accent", "cyan", "emerald", "amber", "rose", "violet")],
     )
     if responsive:
         base["autosize"] = True
     return base
 
 
+#: Axis type. One family, one size, one colour across every plot — the same
+#: mono the tables and cards use, at the app's 9px tick / 10px title tiers, so
+#: a chart's axis labels are visibly the same kind of text as a table's column
+#: headers rather than Plotly's default 12px sans.
+_AXIS_TICK_FONT = dict(size=9, family="JetBrains Mono, monospace")
+_AXIS_TITLE_FONT = dict(size=10, family="JetBrains Mono, monospace")
+
+
 def style_axes(fig, y_title: str = "", x_title: str = "", y_range=None, row=None, col=None) -> None:
-    """Apply consistent axis styling to a Plotly figure."""
+    """Apply the app's one axis grammar to a Plotly figure."""
     kw = {}
     if row is not None:
         kw["row"] = row
     if col is not None:
         kw["col"] = col
 
+    ct = _chart_theme()
     fig.update_xaxes(
         showgrid=True,
-        gridcolor=PLOTLY_GRID,
+        gridcolor=ct["grid"],
         gridwidth=0.5,
         zeroline=False,
-        linecolor="rgba(255,255,255,0.04)",
+        linecolor=ct["axis_line"],
         title_text=x_title,
-        tickfont=dict(size=9, family="JetBrains Mono, monospace", color="#64748B"),
-        # Vertical crosshair — dashed dim grey
+        title_font=dict(**_AXIS_TITLE_FONT, color=ct["tick"]),
+        tickfont=dict(**_AXIS_TICK_FONT, color=ct["tick"]),
+        # Crosshair. Plotly's default renders as a hard white rule across the
+        # plot, which is the loudest mark on the panel and belongs to no part of
+        # the design system. A crosshair is a pointer, not a series: hairline,
+        # dashed, at the theme's own low-alpha spike colour.
         showspikes=True,
         spikemode="across",
         spikesnap="cursor",
-        spikethickness=0.5,
+        spikethickness=1,
         spikedash="dash",
-        spikecolor="rgba(148,163,184,0.18)",
+        spikecolor=ct["spike"],
         **kw,
     )
     fig.update_yaxes(
         showgrid=True,
-        gridcolor=PLOTLY_GRID,
+        gridcolor=ct["grid"],
         gridwidth=0.5,
         zeroline=True,
-        zerolinecolor=PLOTLY_GRID_ZERO,
-        zerolinewidth=0.5,
-        linecolor="rgba(255,255,255,0.04)",
+        zerolinecolor=ct["grid_zero"],
+        zerolinewidth=1,
+        linecolor=ct["axis_line"],
         title_text=y_title,
+        title_font=dict(**_AXIS_TITLE_FONT, color=ct["tick"]),
         range=y_range,
-        tickfont=dict(size=9, family="JetBrains Mono, monospace", color="#64748B"),
+        tickfont=dict(**_AXIS_TICK_FONT, color=ct["tick"]),
         hoverformat=".2f",
+        # NO horizontal spike. A second crosshair arm doubles the ink for a
+        # reading the gridlines already give, and in `x unified` hover mode
+        # Plotly draws it as a hard opaque rule regardless of the alpha asked
+        # for. One dashed vertical crosshair is the whole crosshair.
+        showspikes=False,
+        # A FIXED standoff between the axis title and its tick labels. Plotly
+        # otherwise sets it from each subplot's widest tick label, so a stacked
+        # figure whose rows carry different magnitudes ("0.5" vs "-100") puts
+        # each row's y-title at a different x.
+        title_standoff=14,
         **kw,
     )
+    # ── Crosshair, enforced on EVERY x-axis ──────────────────────────────
+    # The spike settings above are applied with `row=`/`col=`, which addresses
+    # one subplot's axis. On a stacked figure with `shared_xaxes=True` the
+    # visible spike is drawn from a DIFFERENT axis object than the ones being
+    # updated, so it keeps Plotly's default — an opaque white rule — no matter
+    # what the per-row call said. A row-less update writes every x-axis.
+    fig.update_xaxes(
+        showspikes=True, spikemode="across", spikesnap="cursor",
+        spikethickness=1, spikedash="dot", spikecolor=ct["spike"],
+    )
+    fig.update_yaxes(showspikes=False)
+
+    apply_default_hover(fig)
 
 
-@st.cache_resource
-def _load_theme_css() -> str:
-    """Read theme.css once per process; cached so reruns skip the file read."""
-    if CSS_PATH.exists():
-        return CSS_PATH.read_text()
-    return "/* theme.css not found */"
+def apply_default_hover(fig, precision: int = 2) -> None:
+    """Give every visible trace a 2-decimal hover, robustly.
 
-
-def inject_css() -> None:
-    """Inject the Obsidian Quant Terminal CSS into the Streamlit app.
-
-    CSS is read once per process (cached) and deduped by Streamlit, so
-    repeated reruns pay zero I/O and zero DOM patching cost.
-
-    NOTE: do NOT guard this behind a "once per session" flag. Streamlit rebuilds
-    the element tree every rerun; an st.markdown <style> block only persists if it
-    is re-emitted each run. Skipping re-injection removes the style and unstyles
-    the app on the next interaction. The cost here is already minimal — _load_theme_css
-    is @st.cache_resource (zero re-read) and Streamlit dedups the identical element.
+    We do NOT rely on a d3 number format inside the hovertemplate
+    (``%{y:.2f}``): under ``hovermode="x unified"`` Plotly leaves that format
+    UNAPPLIED and the hover leaks full float precision. Instead the values are
+    pre-formatted to strings in Python and stashed in ``customdata``, then the
+    template just inserts the finished string — no client-side number
+    formatting involved, so it cannot be ignored.
     """
-    st.markdown(f"<style>{_load_theme_css()}</style>", unsafe_allow_html=True)
+    for tr in fig.data:
+        if getattr(tr, "hoverinfo", None) == "skip":
+            continue
+        # Preserve two kinds of intentional template: "%{x…}" (traces that show
+        # the X value on hover, in closest mode where d3 formats fine) and
+        # "%{customdata…}" (already pre-formatted — keeps this idempotent
+        # across the multiple style_axes calls a subplot figure makes).
+        _ht = getattr(tr, "hovertemplate", None)
+        if _ht and ("%{x" in _ht or "%{customdata" in _ht):
+            continue
+        y = getattr(tr, "y", None)
+        if y is None:
+            continue
+        cd = []
+        for v in y:
+            try:
+                if v is None or (isinstance(v, float) and v != v):
+                    cd.append("—")
+                else:
+                    cd.append(f"{float(v):.{precision}f}")
+            except (TypeError, ValueError):
+                cd.append("—")           # non-numeric (category/text) → dash
+        try:
+            tr.customdata = [[s] for s in cd]
+        except (ValueError, TypeError):
+            continue
+        has_text = getattr(tr, "text", None) is not None
+        name = getattr(tr, "name", None)
+        if has_text:
+            tr.hovertemplate = "%{customdata[0]} · %{text}<extra></extra>"
+        elif name:
+            tr.hovertemplate = "%{fullData.name}: %{customdata[0]}<extra></extra>"
+        else:
+            tr.hovertemplate = "%{customdata[0]}<extra></extra>"
 
 
-_PROGRESS_THROTTLE: dict = {}   # id(slot) -> (last_pct, last_time)
-_PROGRESS_MIN_INTERVAL = 0.25   # seconds between re-renders of the same slot
+def inject_css(theme: str = "dark") -> None:
+    """Inject the design system into the Streamlit app.
+
+    theme.css defines the canonical DARK token block; when ``theme == "light"``
+    a second, small ``:root`` override (``LIGHT_TOKENS``) is appended after it —
+    later source wins on identical specificity, so this repaints every component
+    without touching a single component rule or the DOM. No runtime
+    ``document.documentElement`` attribute toggling involved.
+
+    Injects on every render — Streamlit deduplicates identical <style> blocks.
+    """
+    if CSS_PATH.exists():
+        # Explicit UTF-8: theme.css embeds Devanagari in comments. read_text()
+        # with no encoding= falls back to the OS locale encoding, which on many
+        # Windows machines is cp1252 — that raises UnicodeDecodeError on the
+        # non-ASCII bytes and crashes the app on startup before anything renders.
+        css = CSS_PATH.read_text(encoding="utf-8")
+    else:
+        css = "/* theme.css not found */"
+
+    if theme == "light":
+        css += LIGHT_TOKENS
+
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+
+
+# ── The run's phases, and which labels belong to each ────────────────────────
+# One table, read by the progress bar so the card can say "Phase 2 of 4 ·
+# Data Acquisition" instead of a bare percentage with a free-text label.
+#
+# Sanket derives the phase from the LABEL, not the percentage. Tattva keys its
+# bands on percent because it has one fixed pipeline; Sanket's bar is SHARED —
+# the edge study owns 0-35% when it measures and nothing at all when it serves
+# a cached one, so the same percentage means different work on different runs.
+# The label is the only thing that is accurate in both cases, and every call
+# site already passes one.
+RUN_PHASES = (
+    (1, "Edge Study",       ("measuring edge", "edge measured")),
+    (2, "Data Acquisition", ("initializing engine", "initializing correlation engine",
+                             "fetching market data", "fetching ohlcv data",
+                             "fetching historical depth", "building price matrix")),
+    (3, "Signal Screen",    ("analyzing instruments", "ranking cross-section",
+                             "harvesting signals", "computing returns",
+                             "computing rolling correlation",
+                             "building results dataframe")),
+    (4, "Final Assembly",   ("analysis complete",)),
+)
+_N_PHASES = len(RUN_PHASES)
+
+
+def _phase_of(label: str, pct: int) -> "tuple[int, int, str]":
+    """Which phase a progress label belongs to, as ``(n, total, name)``.
+
+    Falls back to the percentage only for a label the table does not know, so a
+    new call site degrades to a plausible phase rather than an exception.
+    """
+    key = str(label).strip().lower()
+    for n, name, labels in RUN_PHASES:
+        if key in labels:
+            return n, _N_PHASES, name
+    if pct >= 98:
+        return _N_PHASES, _N_PHASES, RUN_PHASES[-1][1]
+    idx = min(int(pct) // (100 // _N_PHASES), _N_PHASES - 1)
+    return RUN_PHASES[idx][0], _N_PHASES, RUN_PHASES[idx][1]
 
 
 def progress_bar(slot, pct: int, label: str, sub: str = "") -> None:
-    """Render a themed progress card into an ``st.empty()`` slot.
+    """Render the pipeline's progress card into an ``st.empty()`` slot.
 
-    Throttled: inside a tight per-stock loop the bar can be asked to redraw
-    hundreds of times a second, and each redraw is a websocket round-trip. Skip a
-    redraw when the integer pct hasn't advanced AND <0.25s has elapsed for this
-    slot. Completion (pct>=100) and the first draw always render, so the user
-    never sees a stalled or unfinished bar — only the redundant intermediate
-    frames that would look identical are dropped.
+    The fill is an ``<i>`` the stylesheet can actually reach, state is carried
+    by a class rather than an inlined colour, and width is the only inline
+    value — it is the datum. Notably absent: the ``box-shadow`` glow this
+    element used to carry, on the one thing every user watches for a full
+    minute, in a design system whose stated rule is that nothing glows.
     """
-    pct = int(pct)
-    _now = time.monotonic()
-    _key = id(slot)
-    _last = _PROGRESS_THROTTLE.get(_key)
-    if _last is not None and pct < 100:
-        _last_pct, _last_t = _last
-        # Suppress only a same-pct redraw within the interval. A pct that moved
-        # (up = progress, or down = a new/reused slot starting over) always renders.
-        if pct == _last_pct and (_now - _last_t) < _PROGRESS_MIN_INTERVAL:
-            return
-    _PROGRESS_THROTTLE[_key] = (pct, _now)
-    if pct >= 100:
-        _PROGRESS_THROTTLE.pop(_key, None)   # reset so a reused slot starts clean
-
+    pct = max(0, min(100, int(pct)))
     is_complete = pct >= 100
-    bar_color = "#34D399" if is_complete else "#D4A853" if pct > 50 else "#22D3EE"
-    dot_class = "pulse-dot complete" if is_complete else "pulse-dot"
+    state = " complete" if is_complete else ""
+    n, total, phase = _phase_of(label, pct)
     slot.markdown(
-        f"""
-    <div class="progress-card">
-        <div class="progress-label">
-            <span class="{dot_class}"></span>{html.escape(label)}
-        </div>
-        {f'<div class="progress-sub">{html.escape(sub)}</div>' if sub else ''}
-        <div class="progress-track">
-            <div class="progress-fill" style="width:{pct}%;background:{bar_color};box-shadow:0 0 10px {bar_color};"></div>
-        </div>
-        <div class="progress-pct">{pct}%</div>
-    </div>
-    """,
+        f'<div class="progress-card{state}">'
+        f'<div class="progress-phase">Phase {n} of {total}'
+        f'<span class="pp-name">{html.escape(phase)}</span></div>'
+        f'<div class="progress-label">'
+        f'<span class="pulse-dot"></span>{html.escape(str(label))}'
+        f'<span class="progress-pct">{pct}%</span>'
+        f'</div>'
+        + (f'<div class="progress-sub">{html.escape(str(sub))}</div>' if sub else "")
+        + f'<div class="progress-track"><i style="width:{pct}%"></i></div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
 
 def apply_chart_theme(fig) -> None:
-    """Apply the Obsidian Quant Terminal theme to a Plotly figure (mutates in place)."""
+    """Apply the app's theme to a Plotly figure (mutates in place)."""
     fig.update_layout(**chart_layout())
     style_axes(fig)
