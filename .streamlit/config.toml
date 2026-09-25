@@ -1,1 +1,61 @@
+# Sanket — base Streamlit theme.
+#
+# ui/theme.css (via ui.theme.inject_css) is the source of truth for everything
+# visual. This file is the fallback underneath it, and it is deliberately thin.
+#
+# WHAT IT IS NOT FOR, in this app. Tattva's copy of this file exists for the
+# handful of native controls that read Streamlit's own theme system rather than
+# plain CSS — radio/checkbox dots, toggle switches, links, code blocks — which
+# otherwise fall back to Streamlit's stock red (#FF4B4B). Sanket renders NONE
+# of those five. It renders six native widget types (selectbox, date input,
+# button, download button, segmented control, tabs) and every one of them is
+# painted from our own tokens in theme.css, with !important, including the
+# date picker's calendar popover.
+#
+# THAT IS THE RESIDUAL LIMITATION RESOLVED, not merely restated. A static file
+# cannot follow the in-app Slate/Paper toggle, which lives in session state and
+# swaps CSS tokens at render time — so anything Streamlit themes natively would
+# track Streamlit's resolution and not the app's choice, giving a Paper reader
+# dark fields on a white page. The durable fix Tattva prescribes is to override
+# those controls in theme.css so this file stops mattering; for the six
+# controls this app actually renders, that is now done. `check_ui.py` asserts
+# it, and fails if a new widget type appears that theme.css does not claim.
+#
+# SO WHY KEEP IT. Two things it still decides, neither reachable from CSS:
+#   1. FIRST PAINT. The browser applies this before it has parsed theme.css, so
+#      a mismatch here is a visible flash of the wrong theme on every cold load.
+#   2. Streamlit's own chrome — the hamburger menu, the "Running…" indicator,
+#      toasts — which is not part of the app's DOM and which we do not style.
+#
+# BASE IS DARK because Slate is the default appearance (see APPEARANCES in
+# sanket.py — first-in-tuple is the first-run default). These two MUST agree:
+# this file is what paints the first frame, before any choice exists, so a
+# mismatch means the first load every new reader sees renders one theme's text
+# on the other theme's ground. (Tattva pins this light for exactly the same
+# reason; Paper leads there. The rule is "match the default", not "pick dark".)
+#
+# Both variants are declared below. [theme.light] and [theme.dark] mirror the
+# two token ramps in ui/theme.css and ui/theme.py exactly, so whichever one
+# Streamlit resolves is one of OUR two appearances rather than stock Streamlit
+# — a mismatch then means "wrong one of ours", never "unstyled".
+[theme]
+base = "dark"
+primaryColor = "#4C7DF0"
+backgroundColor = "#0A0C10"
+secondaryBackgroundColor = "#0F1217"
+textColor = "#E6EAF1"
+
+# Paper — mirrors the LIGHT_TOKENS ramp in ui/theme.py.
+[theme.light]
+primaryColor = "#2B5FD9"
+backgroundColor = "#F4F6F8"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#141920"
+
+# Slate — mirrors the canonical dark :root ramp in ui/theme.css.
+[theme.dark]
+primaryColor = "#4C7DF0"
+backgroundColor = "#0A0C10"
+secondaryBackgroundColor = "#0F1217"
+textColor = "#E6EAF1"
 
