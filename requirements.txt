@@ -2,7 +2,31 @@
 # @thebullishvalue Product
 
 # ── Core Framework ────────────────────────────────────────────
-streamlit>=1.30.0
+# STREAMLIT IS PINNED EXACTLY, AND THAT IS DELIBERATE. This package is a UI
+# contract, not a dependency with a floor: the design system in ui/theme.css
+# repairs Streamlit's own DOM (collapsing markdown wrappers, button test-ids,
+# sidebar nav internals), and those repairs land somewhere different on every
+# minor. 1.52 inserts an anonymous flex row between `stMarkdown` and
+# `stMarkdownContainer` that earlier versions do not — enough on its own to
+# render stacked panels side by side and overlap the rail's group labels.
+#
+# Not a range, either. Streamlit 1.53 began moving off Tornado to
+# Starlette/uvicorn and did not cap its Starlette dependency until 1.61.1,
+# while Starlette 1.4.0 made `thread_minimum_size` a required keyword-only
+# argument of `GZipResponder.__init__` that Streamlit's subclass does not
+# pass — every HTTP request dies in the gzip middleware before reaching the
+# app, health checks included. Nothing in Sanket is involved in that failure
+# and nothing in Sanket can work around it.
+#
+# Develop on this exact version too. `pip install -r requirements.txt` gives
+# it to you; a local interpreter on a different Streamlit is how a UI bug
+# reaches production without anyone seeing it locally.
+streamlit==1.52.2
+# Belt and braces, inert under the pin above: on Tornado, Streamlit never
+# imports Starlette, so this only installs ~1MB of unused package. It earns its
+# place the day someone raises that pin — it caps Starlette below 1.4.0 and
+# stops the crash reappearing on a Streamlit that still ships the unfixed call.
+starlette>=0.46.0,<1.0.0
 pandas>=2.1.0
 numpy>=1.24.0
 plotly>=5.18.0

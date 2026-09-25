@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Siddhi Conviction Oscillator · Obsidian Quant · Pragyam Family · `v7.0.1`
+### Siddhi Conviction Oscillator · Graphite · Pragyam Family · `v7.1.5`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -382,20 +382,87 @@ given universe is not assumed — run the Edge Study and read the verdict.
 
 ---
 
-## UI System — Obsidian Quant
+## UI System — Graphite
 
-A fully custom Streamlit design layer — a precision-instrument aesthetic optimized for
-quantitative data density. Signal colours now match the indicator's own markers so the app and a
-TradingView chart read the same.
+The design system is **Tattva's, adopted wholesale**. These two are the same product family,
+and a reader moving between them should not have to relearn what a panel, a chip or a number
+looks like. Everything below arrived with a reason attached, and the stylesheet keeps those
+reasons as comments — they name the bug each rule fixes, which is what stops the next author
+reverting one.
 
 | Element | Specification |
 |:---|:---|
-| Background | `#1a1a1a` — dark obsidian |
-| Accent — ▲ BUY (histogram crossed up) | `#00E676` |
-| Accent — ◆ SELL (histogram crossed down) | `#FFA726` |
-| Accent — neutral / no crossing | `#787B86` |
-| Accent — amber (chrome) | `#D4A853` |
-| Display / mono fonts | Syne · Space Grotesk / JetBrains Mono · IBM Plex Mono |
+| Ground | Graphite `#0A0C10` → `#1C212A` — near-achromatic, deliberately |
+| Interactive | Cobalt `#4C7DF0` (Slate) / `#2B5FD9` (Paper) |
+| Long / Short | `#2CA36B` / `#DD5A5A` (Slate) · `#0F7A54` / `#C0392F` (Paper) |
+| Caution | Amber `#D79A3C` — **caution only, never brand** |
+| Appearances | **Slate** (dark, default) and **Paper** (light, for reading and print) |
+| Display / data fonts | Inter (prose) · JetBrains Mono (every figure, tabular numerals) |
+
+**Amber is no longer the brand.** The previous system made amber-gold both the product accent
+and its caution colour, so "this is Sanket" and "be careful" were the same signal. Amber now
+means caution and nothing else; cobalt carries interaction.
+
+**Paper is a token swap, not a second stylesheet.** `theme.css` defines the canonical dark
+`:root`; every component rule reads `var(--token)` with nothing hardcoded outside that block, so
+light mode is a second, smaller `:root` appended after it. The choice lives in a plain session
+key (never a widget key — Streamlit garbage-collects widget state on any run that does not reach
+the control) and the theme is resolved at the top of the script, so chrome and charts can never
+disagree about which appearance is active.
+
+**Streamlit is pinned exactly at 1.52.2.** It is a UI contract, not a dependency with a floor —
+see the note in `requirements.txt`.
+
+### The type contract
+
+Two families, one job each. **Inter** carries prose and headings; **JetBrains Mono** carries
+every figure, with tabular numerals on — a column of prices that shimmers as digits change
+width is a column the eye cannot hold a baseline in. You should be able to tell data from
+commentary with the page out of focus.
+
+Nine tiers, and nothing may invent a tenth:
+
+| tier | px | what it is for |
+|:---|---:|:---|
+| `--fs-3xs` | 9 | micro labels, eyebrows — **the floor**, nothing is smaller |
+| `--fs-2xs` | 10 | table headers, chips, cells one tier below body |
+| `--fs-xs` | 11 | dense metadata, table body |
+| `--fs-sm` | 12 | secondary body, compact card values |
+| `--fs-md` | 13 | **body** |
+| `--fs-lg` | 15 | section titles, compact card headline |
+| `--fs-xl` | 19 | card values |
+| `--fs-2xl` | 24 | hero secondary |
+| `--fs-3xl` | 32 | hero signal |
+
+The ramp steps ~1.08–1.15 through the reading tiers and ~1.26–1.33 through display: it
+tightens where sizes must be *told apart* at a glance and opens where they must not be
+*confused*. Component tiers descend monotonically with importance — 24 → 19 → 15 → 13 → 12
+→ 10 → 9 across masthead, card value, section title, body, description, context, label.
+
+**Uppercase is for terse labels, not for small text.** Chips, card labels, rail group labels
+and panel context are one or two words at 9–10px, where uppercase plus positive tracking
+(0.08–0.18em) aids scanning. The 10px control-hint/note tier is *not* uppercase, because it
+carries sentences and uppercase sentences read slower. The wordmark is the one exemption in
+the other direction: a mark is allowed to be uppercase at display size because it is a mark.
+
+**Two statements of the ramp, never three.** `theme.css` declares `--fs-*` for the app DOM;
+`ui.components.FS` mirrors the same nine values for markup that renders into a
+`components.v1.html` iframe, which cannot see a CSS variable. Using `var(--fs-*)` inside a
+table cell applies *no size at all* — it fails silently and the cell falls back to the body
+tier. `ui.components.MONO_STACK` exists for the same reason: an iframe that declares a face
+it has not imported falls through to the system default, which is how tables end up as the
+one surface rendering in a typeface the rest of the UI does not use.
+
+### One anatomy for every framed thing
+
+Charts, tables and embedded iframes all go through the same panel: header (title / context ·
+meta · chip) · body · footer. There is no bare `st.dataframe`, `st.error`, `st.warning`,
+`st.info` or `st.caption` anywhere in the app — each brings its own typeface, radius and ink
+that the stylesheet cannot reach, and three of them on a page read as three different products.
+Sanket's screener tables stay bespoke, because per-cell glyphs (▲ BUY / ◆ SELL), conviction
+readouts and hold counters are not expressible as a DataFrame — but they draw their typeface,
+row height, header and tokens from `ui.components.table_shell_css`, so the only thing that
+differs from a generic table is the content of a cell.
 
 ---
 
@@ -417,6 +484,205 @@ bit-identical answer for a 15-year round trip. It re-measures automatically once
 ---
 
 ## What Changed
+
+**v7.1.5 — the rail stops repeating the command bar, and the tab boundary stops doubling.**
+
+**The session readout is gone from the sidebar.** Version, Universe, Timeframe, Mode, Class —
+five rows restating what the page already says. The command bar carries universe, timeframe and
+as-of across the top of every loaded page; the mode is the control the reader set three inches
+above it; the instrument class is a display label nothing computes from; and the version is in
+the footer. A rail that repeats the command bar is not a readout, it is a second caption for the
+same facts. The Engine readout stays, and is now the only one in the rail.
+
+**The doubled rule under a tab bar is gone.** The tab list closes with a 1px rule — and that one
+is load-bearing, since the 2px active-tab highlight runs along it — and then the first section
+header inside the panel drew its *own* `border-top` about 24px below. Two horizontal rules with
+nothing between them but whitespace read as one thick, badly-drawn boundary. A section rule
+exists to separate a section from what came before it; first inside a tab panel there is nothing
+before it, because the tab bar already made that boundary and made it more strongly.
+
+The selector is scoped to the panel's own top-level block rather than to any first-child inside
+it. That distinction is not pedantry: the correlation view opens two COLUMNS with section
+headers, and those are `:first-child` too — a looser selector strips their rules as well.
+Verified in a real browser against Streamlit's actual tab DOM: page-level header keeps its rule,
+first-in-tab loses it, both column headers keep theirs, second-in-tab keeps its, and the tab
+list keeps the rule its highlight runs along.
+
+**v7.1.4 — the last of the retired palette, and the last of the dividers.**
+
+**Colour.** An exhaustive comparison against Tattva across all six places colour lives —
+`theme.css :root` (84 tokens), `LIGHT_TOKENS` (33), both chart palettes, `_CHART_THEME`, both
+`config.toml` ramps, and the iframe table tokens — found the schema identical except for two
+real divergences, now fixed:
+
+- **23 `rgba()` literals survived the v7.1.0 hex sweep**, because `rgba(212,168,83,…)` is the
+  same retired amber-gold brand as `#D4A853` spelled differently. Five of them were painting a
+  header that still read "SIDDHI ENGINE". Beyond being the wrong colour, every one was fixed to
+  the dark ground: a 0.12-alpha neon green over graphite is not that colour over Paper, and
+  `rgba(255,255,255,0.015)` is nothing at all there. Plotly fills now go through
+  `chart_rgba(name, alpha)`; tinted surfaces use the `--*-fill` / `--*-edge` pairs the system
+  declares for exactly this.
+- **One invented token.** I had written `#B4BCC9` for the dark table `ink_secondary`; the
+  stylesheet says `#AEB8C7`. A currency cell was a slightly different grey from the same tier
+  everywhere else.
+
+**Three hand-rolled blocks went with them**, each the same mistake: a container invented at the
+call site, tinted with a retired literal, separated from what follows by a rule the layout
+already provides. The "How to Read" box (also a *plain* string carrying `{…}` placeholders, so
+its colours rendered as literal braces and never applied at all) → `render_info_box`. The Signal
+Reference cards, with a white tint and a 3px coloured left bar — the one container shape Tattva
+deleted outright — → `panel`. The engine header → `render_sub_header` plus the note tier.
+
+**Vertical hierarchy.** Every rule in the stylesheet is now a hairline (18 rules, one weight).
+The one exception was a **2px** rule on the signal table's age-group row — the heaviest
+horizontal line in the app, under its quietest content, and it was overriding the `.sect` class
+that already styled that row with hairlines. Call sites emit no dividers at all: no `<hr>`, no
+`section-divider`, no raw border values, nothing heavier than a hairline. The section rhythm is
+stated once, in CSS.
+
+`check_ui.py` grew two contracts — COLOUR (no raw literal outside the two mirror files; the
+iframe tokens must equal the stylesheet) and VERTICAL (no call-site divider, no raw border, no
+rule above 1px). Verified to fire: reintroducing a retired `rgba`, adding a 2px rule, and
+drifting a table token each fail it.
+
+**v7.1.3 — the Engine box stops arguing, and `config.toml`'s base stops mattering.**
+
+The box lost its caveat note. Four readout rows, nothing else: Verdict, Edge, Trigger, Cost.
+A rail states what the engine is doing; it is not where a reader goes to be argued with. The
+two disclosures moved rather than vanished — the bare-crossing warning was already stated
+twice in the body (the Signal Reference card and the SELL tab's own description), and the
+adapted weekly normalization window, the one fact with nowhere else to live, is now a line in
+the **notice rail**, which is the component for "something about THIS run you should know"
+and which only appears on Weekly because that is the only timeframe it is true of.
+
+**The residual limitation in `.streamlit/config.toml` is resolved, not merely restated.** That
+file is static, so it cannot follow the in-app Slate/Paper toggle — anything Streamlit themes
+natively tracks Streamlit's resolution instead, which on the wrong appearance means dark input
+fields on a white page. Tattva documents this and prescribes the fix (override those controls
+in `theme.css` so the file stops mattering); Sanket now does it.
+
+Sanket renders six native widget types. Five were already painted from our tokens, including
+the segmented control — which matters most, since it *is* the appearance switch, and a switch
+that looks wrong in one of the two modes it offers is the worst thing on the page. The sixth,
+`st.date_input`, appeared nowhere in the stylesheet at all: Tattva has no date inputs and
+Sanket has four. The field now joins the existing input rule, and the BaseWeb calendar popover
+— a separate element in a separate stacking context that inherits nothing — is painted from
+our surfaces, ink and accent.
+
+Worth noting for anyone comparing the two files: none of the five controls Tattva's config
+comment names as its justification (radio/checkbox dots, toggle switches, links, code blocks)
+are rendered by Sanket at all. The file still earns its place for two things CSS cannot reach —
+the first paint, before the browser has parsed `theme.css`, and Streamlit's own chrome (the
+hamburger menu, the "Running…" indicator, toasts) — and `base` must therefore still agree with
+`APPEARANCES[0]`. The comment now says that instead of inheriting Tattva's reasoning.
+
+**New: `check_ui.py`**, a runnable contract covering all of it — the type ramp, the family
+split, the tier map, uppercase discipline, every native being claimed from our tokens, and
+`base` agreeing with the default appearance. It exits non-zero on breach. Verified to actually
+fire: flipping `base` to `light` and adding an unclaimed `st.radio` each fail it.
+
+**v7.1.2 — the Engine box is a status line again.** It had become a report: a bespoke
+`.metric-card` with five inline overrides wrapping an eight-cell grid of inline-styled divs,
+in a rail otherwise made of widgets and one readout component. Every value was clipped to
+~12 characters with `text-overflow: ellipsis`, and all eight cells carried their meaning in a
+`title=` tooltip — the one thing this codebase has repeatedly decided not to do.
+
+Six of the eight cells were edge-study internals (hit rate, minimum detectable effect,
+sample, participation ratio, and the two per-side edge numbers) that **System Data ▸ Edge
+Study** already reports in full, per era, with a glossary. A 145px column showing `≥0.048`
+was not reporting the MDE, it was hinting at it.
+
+It is now four rows in `.rail-readout` — the rail's own key/value grammar, the same component
+the session readout below it uses — each carrying one fact: **Verdict** (for this universe,
+or an honest "not measured"), **Edge** (the number behind that verdict, when there is one),
+**Trigger**, and **Cost**, the only thing that gates conviction. Tone comes from the verdict
+kind through one mapping rather than a conditional per cell.
+
+The two caveats that must never be buried — a bare zero-crossing being the source's weakest
+tested configuration, and the weekly normalization window being Sanket's number rather than
+the source's — moved **out of tooltips and onto the page** as a visible note, which is the
+entire reason they exist. The note also names where the full study lives.
+
+Also fixed: the trigger read `hist × 0`, which parses as *histogram multiplied by zero* — the
+one arithmetic statement this engine never makes. It now reads `crosses 0 · 10b`, from a named
+`trigger_short` property rather than a string replacement at the call site. And the
+"not measured" state told the reader to *"tick Measure edge in the sidebar"*, a control that
+has not existed since v6.3.0, when the study became unconditional.
+
+Zero bespoke HTML remains in the box. A test renders it unmeasured, measured, in both
+appearances and on Weekly, asserting at most four rows, no card, no tooltip, no inline type,
+no ellipsis, the bare-crossing caveat always present and the adapted caveat present only when
+the window actually is adapted.
+
+**v7.1.1 — the type system is a hierarchy, and it is now enforced.** An audit of every
+size, family, weight and tracking value the app emits found the ramp was being declared and
+then ignored: **47 font-size literals in `sanket.py`, only 3 of them on the nine-tier scale**
+(0.52 / 0.62 / 0.65 / 0.66 / 0.68 / 0.7 / 0.72 / 0.78 / 0.8 / 1rem against a ramp containing
+none of them). The 0.52rem one was 8.3px — below the system's own 9px floor, and the smallest
+type in the app. All 47 now resolve from the ramp: `var(--fs-*)` in the app DOM,
+`ui.components.FS` in iframe markup.
+
+- **13 cells declared `IBM Plex Mono` inside iframes that import JetBrains only**, so the face
+  never loaded and those cells fell through to the system default — the exact "tables are the
+  one surface in a typeface the rest of the UI does not use" bug Tattva documents. The empty
+  and section rows now carry `.empty` / `.sect`, which the shared shell already styles; the
+  rest inherit from `body`.
+- **Fixed a colour regression from v7.1.0**: the sweep that replaced hardcoded hexes with
+  `_sid_buy()` did so inside *plain* string literals in `_side_cell`, `_hold_cell`,
+  `_hist_cell` and `_conv_cell`, so the braces rendered literally and the browser dropped the
+  declaration. Every em-dash cell, both Side cells and the expired-hold cell had been drawing
+  with inherited ink. Found by walking the AST for non-f-string literals carrying a `{...}`
+  placeholder, then confirmed against rendered output.
+- **Three cells used `var(--fs-*)` inside an iframe**, which resolves to nothing — they were
+  sized by fallback. Caught only by checking the *rendered* markup; the source looked correct.
+- Off-system values removed: `1.25rem` in a responsive override (the only size in the
+  stylesheet belonging to no tier, now `--fs-xl`), and `0.09em` tracking on a 9px card label
+  (now 0.14em, matching every other 9px card label).
+- `--ink-muted` was referenced but never defined, so disabled menu rows inherited the same
+  ink as enabled ones — now `--ink-quaternary`.
+
+Two audits now run against the files rather than by eye: one reads the stylesheet and asserts
+the tier map descends monotonically with families and case assigned by role, the other renders
+every bespoke table and cell and asserts the output carries only ramp sizes, the right face,
+no uninterpolated placeholders, and colours that actually flip between Slate and Paper.
+
+**v7.1.0 — the UI is Tattva's, adopted wholesale.** The "Obsidian Quant" layer (saturated navy
+ground, amber-gold brand, `IBM Plex Mono` tables) is replaced by the Graphite design system from
+Tattva, with the same component vocabulary: section headers, the panel anatomy, chips, metric
+cards, KPI strips, empty states, the notice rail and one table primitive. Amber stops being the
+brand and becomes caution only; cobalt carries interaction.
+
+- **Two appearances.** Slate (dark, default) and Paper (light). Paper is a token swap over the
+  canonical dark `:root`, and it reclaims Streamlit's own natives, which a static
+  `.streamlit/config.toml` cannot follow at runtime. The choice lives in a plain session key —
+  a widget key is garbage-collected on any run that does not reach the control, which is what
+  makes a theme survive idle reruns and die on exactly the actions a user takes.
+- **The page shell.** Cold start is masthead → lede → coverage KPIs → system panels → outcomes.
+  A loaded page is command bar → notice rail → content: the thing being analysed is always the
+  first element, and data-quality notices hang below what they qualify instead of pushing it
+  below the fold.
+- **Nothing Streamlit-native renders content any more.** 5 `st.dataframe`, 17 `st.error`,
+  3 `st.warning`, 5 `st.info` and 2 `st.caption` are gone. The per-column help text the grids
+  carried in hover tooltips was not dropped — it moved into panel footers as glossaries, which
+  survive a screenshot.
+- **Every colour resolves per render.** 67 hardcoded hex literals are gone from `sanket.py`;
+  charts go through `chart_color()`, iframe cells through `table_tokens()`. A literal binds at
+  import, when there is no session to read an appearance from, which is precisely how a UI ends
+  up with its chrome in one theme and its cells in the other.
+- **Every chart passes `PLOTLY_CONFIG`** and sits in panel chrome. Without it each one ships
+  Plotly's stock toolbar, its logo and a link out to plotly.com.
+- **18 `section-divider` spacers removed.** Streamlit wraps each in an element container that
+  takes a full slot in the page column's flex gap, so the rule's own margin landed on top of a
+  gap that already existed and identical-looking boundaries measured differently. Vertical
+  rhythm is stated once, in CSS.
+- **Streamlit pinned exactly at 1.52.2** (was `>=1.30.0`), with `starlette<1.0.0` as belt and
+  braces. See `requirements.txt` for why a range is not safe here.
+
+Two defects were found and fixed rather than copied: `--ink-muted` was referenced but never
+defined, so disabled menu rows rendered in the same ink as enabled ones; and the correlation
+lists were drawing on `.corr-row`/`.corr-bar-*` classes that no longer exist in any stylesheet,
+with a bar whose length depended on its container rather than on the correlation. They now use
+the system's own `.lookback-row` and `.conviction-bar`.
 
 **v7.0.1 — tracking `siddhi.pine` v3·VP.** The source added a volume-profile overlay, which is
 display-only on the price chart and changes nothing here. Two things it changed *do* reach the

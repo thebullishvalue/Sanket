@@ -46,7 +46,8 @@ from nsepython import nse_get_advances_declines
 from logger import console
 
 # UI — Obsidian Quant Terminal System
-from ui.theme import inject_css, apply_chart_theme, progress_bar
+from ui.theme import (inject_css, apply_chart_theme, progress_bar, chart_color,
+                      chart_rgba, grid_rgba, panel_bg)
 import ui.components as ui
 
 # ── SVG ICON SYSTEM ────────────────────────────────────────────────────────
@@ -78,12 +79,12 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 st.set_page_config(
     page_title="SANKET | Market Signal Screener",
-    page_icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0Q0QTg1MyIgc3Ryb2tlLXdpZHRoPSIyIi8+PHBhdGggZD0iTTggMTRsMy01IDIgMyAzLTQiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0Q0QTg1MyIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L3N2Zz4=",
+    page_icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRDN0RGMCIgc3Ryb2tlLXdpZHRoPSIyIi8+PHBhdGggZD0iTTggMTRsMy01IDIgMyAzLTQiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRDN0RGMCIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L3N2Zz4=",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v7.0.1"
+VERSION = "v7.1.5"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures. The source indicator (siddhi.pine) titles itself
@@ -400,8 +401,18 @@ class SiddhiSettings:
 
     @property
     def trigger_label(self) -> str:
-        """How the screening condition reads on screen — the one place it is worded."""
+        """How the screening condition reads in prose — the one place it is worded."""
         return "histogram crosses zero" if self.k <= 0 else f"histogram crosses ±{self.k:g}σ"
+
+    @property
+    def trigger_short(self) -> str:
+        """The same condition for a narrow column, where prose will not fit.
+
+        Spelled "crosses", not "×": the rail's old form was `hist × 0`, which
+        reads as histogram MULTIPLIED BY zero — the one arithmetic statement
+        this engine never makes.
+        """
+        return ("crosses 0" if self.k <= 0 else f"crosses ±{self.k:g}σ") + f" · {self.horizon}b"
 
     # ── The SOURCE INDICATOR's published numbers for the nearest class. Reference only. ──
     @property
@@ -594,7 +605,7 @@ def _study_state(study, side: str = "buy") -> tuple:
     if study is None:
         return ("NOT MEASURED", "neutral",
                 "expectancy has not been measured on this universe yet — "
-                "tick “Measure edge” in the sidebar")
+                "it is measured on every run, so this resolves as soon as one completes")
     return study.verdict(side)
 
 
@@ -645,7 +656,7 @@ def _render_edge_study_panel(sid: SiddhiSettings, study) -> None:
                 "Significant": "yes" if r.significant else ("ANTI" if r.anti else "no"),
             })
     if not rows:
-        st.info("The study ran but no events fired in the measured history.")
+        ui_info("The study ran but no events fired in the measured history.")
         return
 
     v_buy, v_sell = study.verdict("buy"), study.verdict("sell")
@@ -659,39 +670,29 @@ def _render_edge_study_panel(sid: SiddhiSettings, study) -> None:
     with m4: ui.render_metric_card("Fire Rate", f"{study.fire_rate*100:.2f}%",
                                    "of bars · source measured ~11%", "info")
 
-    st.dataframe(
-        pd.DataFrame(rows), width='stretch', hide_index=True,
-        column_config={
-            "Edge (vol)": st.column_config.NumberColumn(
-                help="Mean drift-free, vol-normalised return following an event. GROSS.",
-                format="%+.4f"),
-            "CI low": st.column_config.NumberColumn(
-                help="Block-bootstrap 95% lower bound. An edge is claimed only when this is > 0.",
-                format="%+.4f"),
-            "CI high": st.column_config.NumberColumn(format="%+.4f"),
-            "Net": st.column_config.NumberColumn(
-                help=f"Edge minus the cost charge at {sid.cost_bps:.1f} bp, converted into the "
-                     "same vol units using each instrument's own h-bar sigma.",
-                format="%+.4f"),
-            "Hit %": st.column_config.NumberColumn(
-                help="Share of events where the signal beat that symbol's own drift.",
-                format="%.1f"),
-            "n_eff": st.column_config.NumberColumn(
-                help="Independent observations = (dates / horizon) × participation ratio. "
-                     "Not the event count — overlapping returns and a correlated cross-section "
-                     "both reduce it.",
-                format="%.0f"),
-            "Resolves ≥": st.column_config.NumberColumn(
-                help="Minimum detectable effect at this power (1.96·σ/√n_eff). A 'no edge' "
-                     "verdict only means anything when this is smaller than the effect you "
-                     "would care about.",
-                format="%.4f"),
-        },
+    ui.render_table_panel(
+        pd.DataFrame(rows), key="edge-results",
+        context=f"{study.n_symbols_studied} symbols · {study.start} to {study.end}",
+        show_index=False, label_col="Side", max_height=420,
+        col_precision={"Edge (vol)": 4, "CI low": 4, "CI high": 4, "Net": 4,
+                       "Hit %": 1, "n_eff": 0, "Resolves \u2265": 4},
+        footer=_glossary({
+            "Edge (vol)": "Mean drift-free, vol-normalised return following an event. GROSS.",
+            "CI low / high": "Block-bootstrap 95% bounds. An edge is claimed only when the low is > 0.",
+            "Net": f"Edge minus the cost charge at {sid.cost_bps:.1f} bp, in the same vol units "
+                   f"via each instrument's own h-bar sigma.",
+            "Hit %": "Share of events where the signal beat that symbol's own drift. 50% is the no-edge line.",
+            "n_eff": "Independent observations = (dates / horizon) × participation ratio. Not the "
+                     "event count — overlapping returns and a correlated cross-section both reduce it.",
+            "Resolves \u2265": "Minimum detectable effect at this power (1.96·\u03c3/\u221an_eff). A "
+                          "'no edge' verdict only means anything when this is smaller than the "
+                          "effect you would care about.",
+        }),
     )
 
     _pe, _ph, _pest = study.prior()
     st.markdown(
-        f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
+        f'<div style="font-family:var(--data); font-size:var(--fs-xs); color:var(--ink-tertiary); '
         f'padding:0.7rem 0 0.1rem 0; line-height:1.6;">'
         f'<b style="color:var(--ink-secondary);">Method.</b> Event study at the pre-declared '
         f'parameters (histogram crossing {"zero" if study.k <= 0 else f"±{study.k:g}σ"}, '
@@ -922,14 +923,87 @@ def run_edge_study(universe, selected_index, timeframe, sid: SiddhiSettings,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# INITIALIZE UI
+# APPEARANCE
 # ══════════════════════════════════════════════════════════════════════════════
-inject_css()
-# (The old theme-toggle component was removed: it rendered inside a 0-height
-# component iframe — invisible, unstyled, and its JS set data-theme on the
-# IFRAME's document, not the app's, so it never actually switched themes.
-# The app is dark-theme-only; theme.css's [data-theme="light"] rules are
-# retained but currently unreachable.)
+#: The DURABLE record of the appearance choice — a plain session key, never a
+#: widget key.
+#:
+#: This distinction is the whole fix for a theme that flips back on its own.
+#: Streamlit garbage-collects the state of any widget that was NOT instantiated
+#: during a run. The appearance control lives at the foot of the rail, so every
+#: run that returns or reruns before reaching it — clicking RUN (which executes
+#: the analysis inline and re-renders), switching mode, a failed fetch — would
+#: discard a widget key entirely, and the next run would fall back to the
+#: default. That is the failure mode where a theme survives idle reruns but
+#: dies on exactly the actions a user takes, which reads as "entirely buggy"
+#: rather than simply broken.
+#:
+#: A plain key is never collected, so it survives every one of those paths.
+_THEME_CHOICE = "theme_choice"
+
+#: The two appearances. Both are reading surfaces — Slate is the dark one you
+#: work on, Paper the light one you read a result on and print from.
+#:
+#: SLATE LEADS, and the order is the default: `theme_choice()` falls back to
+#: APPEARANCES[0] for any unset or unrecognised value, so first-in-tuple IS
+#: first-run. Kept as one fact rather than a separate DEFAULT_ constant, so the
+#: toggle's left-to-right order and the default can never disagree.
+#:
+#: Slate leads here where Paper leads in Tattva, and .streamlit/config.toml is
+#: set to match: a screener is a working surface, and the run console beside it
+#: is dark. `base` in that file must agree with whatever leads here, or the
+#: FIRST load — before any choice exists — renders Streamlit's own natives for
+#: one theme on the other theme's ground.
+APPEARANCES = ("Slate", "Paper")
+
+
+def theme_choice() -> str:
+    """The appearance the user last chose, always one of ``APPEARANCES``.
+
+    A value that is not in the list is treated as unset. That matters across a
+    rename: a session opened before this list changed still holds the old
+    string in the durable key, and handing an unknown option to the segmented
+    control as its default is an error rather than a fallback.
+    """
+    choice = st.session_state.get(_THEME_CHOICE)
+    return choice if choice in APPEARANCES else APPEARANCES[0]
+
+
+# ─── Resolve the theme BEFORE anything is styled ──────────────────────────
+# This runs at module scope, which in Streamlit IS the top of the script, and
+# therefore before render_sidebar() emits the control that sets it.
+#
+# The bug it prevents: if `theme` were written by the appearance control down
+# in the rail, then on the rerun following a click inject_css() would still see
+# the PREVIOUS theme while every chart — which resolves its palette at render
+# time, further down the script — already saw the new one. The page renders as
+# a mix of both: chrome in one theme, plots in the other, which is exactly
+# "some elements show up, some do not". Reading the DURABLE choice here, first,
+# makes the whole script agree on one value for the whole run.
+st.session_state["theme"] = "light" if theme_choice() == "Paper" else "dark"
+inject_css(theme=st.session_state["theme"])
+
+
+def _render_appearance_control() -> None:
+    """The theme switch — LAST control in the rail, deliberately.
+
+    Anywhere higher gives the least consequential switch in the application the
+    most valuable position in it.
+    """
+    with st.container(key="appearance"):
+        st.markdown('<div class="sidebar-title">Appearance</div>', unsafe_allow_html=True)
+        _mode = st.segmented_control(
+            "Appearance", list(APPEARANCES), key="theme_mode",
+            default=theme_choice(), label_visibility="collapsed",
+            help="Slate — dark, for working. Paper — light, for reading and print.",
+        )
+        # Mirror the widget into the DURABLE key, and rerun so the stylesheet at
+        # the top of the script is re-injected with the new value. Without the
+        # rerun the change would land half-way down the page and the run would
+        # render as a mix of both themes.
+        if _mode is not None and _mode != theme_choice():
+            st.session_state[_THEME_CHOICE] = _mode
+            st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS & UNIVERSE DEFINITIONS
@@ -2444,6 +2518,75 @@ def _classify_signal_type(row) -> str:
 # UI HELPER FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Column glossaries ─────────────────────────────────────────────────────
+# Streamlit's grid puts per-column explanations in a hover tooltip, which is
+# the only place it HAS to put them. Moving off that grid would have thrown the
+# text away, so it lands here instead: a definition list under the table, in
+# the same key/value grammar the rail readout and the landing specs use. More
+# discoverable than a tooltip nobody hovers, and it survives a screenshot.
+
+def _glossary(defs: "dict[str, str]") -> str:
+    """Render ``{column: explanation}`` as the panel-footer definition list."""
+    if not defs:
+        return ""
+    return ('<div class="panel-specs">' + "".join(
+        f'<div class="lookback-row"><span class="lbl">{html.escape(str(k))}</span>'
+        f'<span class="val">{html.escape(str(v))}</span></div>'
+        for k, v in defs.items()) + "</div>")
+
+
+# ── The context line every chart panel carries ────────────────────────────
+# A panel header does not restate the section header above it — that would be
+# the same title four pixels lower. What the section header cannot say is which
+# universe and timeframe the plot is actually drawn on, so that is what the
+# panel carries. Built from the same session keys the command bar reads, which
+# is both less plumbing than threading it through every call site and strictly
+# more correct: a context built from those keys cannot disagree with the bar.
+
+def _chart_ctx(units: str = "") -> str:
+    """``UNIVERSE · Timeframe [· units]`` for a chart panel header."""
+    parts = [
+        str(st.session_state.get("active_universe", "") or "").upper(),
+        str(st.session_state.get("active_timeframe", "") or ""),
+    ]
+    if units:
+        parts.append(units)
+    return " · ".join(x for x in parts if x)
+
+
+# ── Notices, in the app's own vocabulary ──────────────────────────────────
+# Streamlit's st.error / st.warning / st.info each bring their own typeface,
+# icon, radius and ink, none of which the stylesheet reaches — three of them on
+# a page read as three different products' alert systems. These are drop-in
+# replacements taking the same single string, so a call site does not have to
+# know which component it lands in.
+#
+# The split is by SEVERITY, not by colour: an error is something that failed, a
+# warning is something the reader must not miss, an info is context. Amber
+# appears only in the warning tier, because amber is caution in this system and
+# nothing else.
+
+def ui_error(msg, *_a, **_kw) -> None:
+    """Something failed. Rendered as the app's warning box, titled."""
+    ui.render_warning_box("Error", str(msg))
+
+
+def ui_warning(msg, *_a, **_kw) -> None:
+    """Something the reader must not miss, but the page still works."""
+    ui.render_warning_box("Warning", str(msg))
+
+
+def ui_info(msg, *_a, **_kw) -> None:
+    """Context — the empty/degraded state, not an alert.
+
+    ``render_empty_state`` rather than an info box because almost every
+    ``st.info`` in this app was a "nothing to show, and here is why" message,
+    which is what an empty state IS. An info box around that copy reads as an
+    interruption of content that is not there.
+    """
+    ui.render_empty_state("Nothing to show", str(msg))
+
+
 def render_footer():
     """Render app footer with copyright and version info."""
     ist = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
@@ -2456,76 +2599,131 @@ def render_footer():
     """, unsafe_allow_html=True)
 
 
+#: The three parts of the system, as the cold-start screen describes them.
+#: Data, not markup — the landing page renders them through one template, so
+#: the three panels cannot drift apart in structure the way three hand-written
+#: HTML blocks did.
+_SYSTEM_PANELS = (
+    ("engine", "Siddhi Conviction Oscillator", "The screening condition",
+     "How much of the market's effort actually became price displacement, weighted by "
+     "how much of the market showed up for each bar, measured against its own signal "
+     "line. Effort without result is the thing being detected.",
+     (("Measure", "100 · Σ(c·w) / Σ(|c|·w)"),
+      ("Conviction", "c = ΔC / TrueRange"),
+      ("Participation", "w = capped RVOL, range fallback"),
+      ("Scaling", "100·tanh(raw / 3σ)"))),
+    ("events", "Two Events", "A state change, not a level",
+     "The histogram crossing ABOVE zero is the buy; crossing BELOW is the sell. "
+     "Symmetric, and nothing fires while it merely sits on one side. Two lines that hug "
+     "zero touch constantly — the crossing is the event, never the level.",
+     (("Entry", "Next session's open"),
+      ("Hold", "10 bars"),
+      ("Ranking", "Crossings, then holds, then level"),
+      ("Conviction", "Force of the crossing × cost gate"))),
+    ("measured", "Measured, Not Inherited", "Expectancy on your symbols",
+     "Whether the rule carries an edge is a question about YOUR universe, so the Edge "
+     "Study measures it there. Nothing about expectancy is hardcoded; until you measure, "
+     "the app says \u201cnot measured\u201d rather than quoting a class average.",
+     (("Method", "Event study, ~15y"),
+      ("Drift", "Removed within era"),
+      ("Intervals", "Block bootstrap over dates"),
+      ("Power", "n_eff and MDE stated"))),
+)
+
+
 def render_landing_page():
-    """Render landing page with system overview."""
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    """Cold start — a description of the product, built from the product's own parts.
 
-    col1, col2, col3 = st.columns(3)
+    Every block here uses the components the analysis pages use: a section
+    header for each division, ``render_kpi_strip`` for the coverage numbers,
+    and ``panel()`` for each part. The previous version was built from
+    compositions that existed nowhere else in the app — a bespoke
+    ``.system-card`` with a coloured top bar where every other container is a
+    hairline panel, and a ``.landing-prompt`` with its own heading scale — so
+    the landing page was the only page not on the section-rhythm contract. It
+    read as a different product's marketing page bolted to the front of this
+    one.
 
-    with col1:
-        st.markdown("""
-        <div class='system-card portfolio'>
-            <h3>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                SIDDHI CONVICTION OSCILLATOR
-            </h3>
-            <p>One screening condition: how much of the market's <strong>effort</strong> actually became price <strong>displacement</strong>, weighted by who showed up for each bar — measured against its own signal line. Effort without result is the thing being detected.</p>
-            <div class='spec'>
-                <span>Measure:</span> 100 · Σ(c·w) / Σ(|c|·w), c = ΔC / TR, w = capped RVOL<br>
-                <span>Scaling:</span> 100·tanh(raw / 3σ) — the raw share cannot reach its bounds<br>
-                <span>Fallback:</span> volume-less symbols weight on relative true range<br>
-                <span>Sorting:</span> fired crossings first, then open holds, then level
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    The claim leads, because a reader who has not run anything needs to know
+    what the thing IS before they are shown what it covers.
+    """
+    # ── The proposition ───────────────────────────────────────────────────
+    st.markdown(
+        """<div class="lede">
+  <div class="lede-claim">One screening condition, measured across a universe:
+    where conviction turns, and whether that turn has ever been worth
+    anything on the symbols you are actually looking at.</div>
+  <div class="lede-cta">Pick a universe and a mode in the rail, then
+    <strong>Run</strong>.</div>
+</div>""",
+        unsafe_allow_html=True,
+    )
 
-    with col2:
-        st.markdown("""
-        <div class='system-card regime'>
-            <h3>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
-                TWO EVENTS
-            </h3>
-            <p><span style="color:#00E676;">▲ BUY</span> when the conviction histogram crosses <strong>above zero</strong>. <span style="color:#FFA726;">◆ SELL</span> when it crosses <strong>below</strong>. Symmetric, and a state change rather than a level — nothing fires while the histogram merely sits on one side.</p>
-            <div class='spec'>
-                <span>Horizon:</span> 10 bars · the lookback is the horizon · no intraday claim<br>
-                <span>Entry:</span> next session's open after the signal bar<br>
-                <span>Why events:</span> two lines near zero touch constantly; the crossing is the event<br>
-                <span>Conviction:</span> force of the crossing (Δhist in σ) × cost gate
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    # ── Coverage — the app's own KPI grammar, not a bespoke number row ─────
+    ui.render_section_header("Coverage", icon="layers")
+    ui.render_kpi_strip(
+        [
+            {"label": "Universe Groups", "value": str(len(UNIVERSE_OPTIONS)),
+             "subtext": "India and US indices, global benchmarks, NSE ETFs, "
+                        "commodities, FX, crypto and macro"},
+            {"label": "Analysis Modes", "value": "4",
+             "subtext": "Single Date · Pulse Narrative · Historical Range · "
+                        "Correlation"},
+            {"label": "History Per Run", "value": "~3.5y",
+             "subtext": "Daily; Weekly fetches deeper. Every reading is causal — "
+                        "a bar depends only on bars before it"},
+        ],
+        max_cols=3,
+        key="landing-coverage",
+    )
 
-    with col3:
-        st.markdown("""
-        <div class='system-card strategies'>
-            <h3>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
-                MEASURED, NOT INHERITED
-            </h3>
-            <p>Whether the rule carries an edge is a question about <strong>your symbols</strong>, so the Edge Study measures it on them — nothing about expectancy is hardcoded. Until you measure, the app says "not measured" rather than quoting a class average.</p>
-            <div class='spec'>
-                <span>Method:</span> event study · drift removed within era · vol-normalised<br>
-                <span>Intervals:</span> block bootstrap over dates (overlap + correlation)<br>
-                <span>Power:</span> effective sample size + minimum detectable effect stated<br>
-                <span>Reported, not applied:</span> a "no edge" verdict filters nothing
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    # ── The three parts, as panels ────────────────────────────────────────
+    ui.render_section_header("System", icon="cpu")
+    cols = st.columns(3, gap="small")
+    for col, (cls, name, kicker, body, specs) in zip(cols, _SYSTEM_PANELS):
+        with col:
+            with ui.panel(f"landing-{cls}", name, context=kicker):
+                st.markdown(
+                    f'<div class="panel-copy">{body}</div>'
+                    '<div class="panel-specs">'
+                    + "".join(
+                        f'<div class="lookback-row"><span class="lbl">{html.escape(k)}</span>'
+                        f'<span class="val">{html.escape(v)}</span></div>'
+                        for k, v in specs
+                    )
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
 
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class='landing-prompt'>
-        <h4>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
-            AWAITING ANALYSIS PARAMETERS
-        </h4>
-        <p>Configure via the <strong>Sidebar</strong>: select <strong>Universe</strong>, <strong>Timeframe</strong>, <strong>Analysis Mode</strong>, and any mode-specific settings.<br>
-           Click the <strong>RUN</strong> button — its label adapts to the active mode (Screener · Pulse · Harvest · Correlation).<br>
-           <span style="color:var(--ink-secondary); font-size:0.85em; margin-top:0.5rem; display:inline-block;">System will build each symbol's conviction oscillator · fire BUY / SELL where its histogram crosses zero · rank the cross-section by that histogram · and report what the edge measures on your universe</span></p>
-    </div>
-    """, unsafe_allow_html=True)
+    # ── What a run returns ────────────────────────────────────────────────
+    ui.render_section_header("What a run returns", icon="target")
+    _out = (
+        ("The fired crossings", "Every symbol whose conviction histogram crossed zero, "
+                                "bucketed by how long ago, with the force of each crossing."),
+        ("The whole cross-section", "The universe ranked — crossings first, then open hold "
+                                    "windows, then who is merely in control."),
+        ("A measured edge", "An event study on your own symbols: drift removed within era, "
+                            "vol-normalised, with the interval and the power stated."),
+        ("The evidence", "Every computed column, with a legend that says which are signal "
+                         "and which are context. Exportable."),
+    )
+    # ONE markdown block, not four panels. These four cards are static text, so
+    # they gain nothing from a Streamlit container and lose something real to
+    # it: on 1.52 the anonymous row Streamlit wraps markdown in sizes to 31px
+    # around 47px of copy and will not grow, so each panel comes out ~15px
+    # short and clips its own last line at `overflow: hidden` — by a different
+    # amount per card, which is what makes such a grid ragged. A single grid of
+    # plain divs has no wrapper to collapse.
+    st.markdown(
+        '<div class="outcome-grid">'
+        + "".join(
+            f'<div class="outcome"><div class="o-t">{html.escape(t)}</div>'
+            f'<div class="o-d">{html.escape(d)}</div></div>'
+            for t, d in _out
+        )
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2561,20 +2759,16 @@ class SidebarState:
 
 def render_sidebar() -> SidebarState:
     with st.sidebar:
-        # Centered Masthead
-        st.markdown("""
-        <div style="text-align:center; padding:0.75rem 0 1.5rem 0;">
-            <div style="font-family:var(--display); font-size:1.5rem; font-weight:800; color:var(--amber); letter-spacing:-0.02em;">SANKET</div>
-            <div style="font-family:var(--data); color:var(--ink-tertiary); font-size:0.65rem; margin-top:0.2rem; letter-spacing:0.08em; text-transform:uppercase;">संकेत | Signal Screener</div>
-        </div>
-        """, unsafe_allow_html=True)
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        # The mark, left-aligned and split so the second half carries the
+        # accent. It was centred over a left-aligned column — the single most
+        # common tell of a template — and drawn in the retired amber, which now
+        # means caution and nothing else.
+        ui.render_nav_brand("SANKET", "संकेत · Conviction Screener")
 
         # Analysis Depth
         st.markdown('<div class="sidebar-title">Analysis Depth</div>', unsafe_allow_html=True)
         timeframe = st.selectbox("Timeframe", TIMEFRAME_OPTIONS, key="sb_timeframe", label_visibility="collapsed")
 
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
         # Universe Selection
         st.markdown('<div class="sidebar-title">Universe Selection</div>', unsafe_allow_html=True)
@@ -2598,7 +2792,6 @@ def render_sidebar() -> SidebarState:
         elif universe == "Global Macro":
             selected_index = "Global Macro Bonds"
 
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
         # Analysis Mode
         st.markdown('<div class="sidebar-title">Analysis Mode</div>', unsafe_allow_html=True)
@@ -2632,7 +2825,6 @@ def render_sidebar() -> SidebarState:
         else:  # Correlation Analysis mode
             st.markdown('<div class="sidebar-title">Analysis Date</div>', unsafe_allow_html=True)
             analysis_date = st.date_input("Analysis Date", _today_ist(), max_value=_today_ist(), key="sb_corr_date", label_visibility="collapsed")
-            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             start_date_hist, end_date_hist = None, None
 
             # Target Asset Panel
@@ -2675,13 +2867,11 @@ def render_sidebar() -> SidebarState:
             if start_date_hist and end_date_hist and start_date_hist >= end_date_hist:
                 date_range_valid = False
                 st.markdown(
-                    '<div style="font-family:var(--data); font-size:0.65rem; '
+                    '<div style="font-family:var(--data); font-size:var(--fs-2xs); '
                     'color:var(--rose); padding:0.4rem 0 0.2rem 0; line-height:1.4;">'
                     '⚠ End date must be after start date.</div>',
                     unsafe_allow_html=True,
                 )
-
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
         # Mode-specific RUN button label so users know what they're triggering.
         _RUN_LABELS = {
@@ -2696,47 +2886,21 @@ def render_sidebar() -> SidebarState:
             disabled=not date_range_valid,
         )
 
-        # Engine Status panel — rendered in every mode. Surfaces the Siddhi engine, the
-        # instrument class derived from the universe above, that class's measured
-        # out-of-sample expectancy, and the four Pine parameters. Returns the resolved
-        # SiddhiSettings for this run.
+        # Engine panel — rendered in every mode: the measured verdict for this
+        # universe, the number behind it, what fires and what it costs. Returns
+        # the resolved SiddhiSettings for this run.
+        #
+        # It is the LAST readout in the rail. A session readout used to follow it
+        # — version, universe, timeframe, mode, class — and every one of those is
+        # already on the page: the command bar carries universe, timeframe and
+        # as-of across the top of every loaded page, the mode is the control the
+        # reader set three inches above, the class is a display label nothing
+        # computes from, and the version is in the footer. A rail that repeats
+        # the command bar is a second caption for the same facts.
         sid = _render_engine_status_sidebar(universe, selected_index, timeframe)
 
-        # System Spec Card — always rendered as the LAST block in the sidebar.
-        try:
-            if universe == "India Indexes" and selected_index:
-                universe_display = selected_index
-            elif universe == "Global Indexes":
-                universe_display = "Global Benchmark Indexes"
-            elif universe == "US Indexes" and selected_index:
-                universe_display = selected_index
-            elif universe == "Commodities" and selected_index:
-                universe_display = selected_index
-            elif universe == "Currency" and selected_index:
-                universe_display = selected_index
-            elif universe == "ETF Index":
-                universe_display = "NSE ETFs"
-            elif universe == "Global Macro":
-                universe_display = "Global Macro Bonds"
-            else:
-                universe_display = universe
-        except Exception:
-            universe_display = universe
-
-        spec_html = f"""
-        <div class="system-spec">
-            <div class="spec-row"><span class="spec-label">Version</span><span class="spec-value">{VERSION}</span></div>
-            <div class="spec-row"><span class="spec-label">Universe</span><span class="spec-value" style="font-size:0.7rem;">{universe_display}</span></div>
-            <div class="spec-row"><span class="spec-label">Timeframe</span><span class="spec-value">{timeframe}</span></div>
-            <div class="spec-row"><span class="spec-label">Mode</span><span class="spec-value" style="font-size:0.7rem;">{analysis_mode}</span></div>
-            <div class="spec-row"><span class="spec-label">Asset Class</span><span class="spec-value" style="font-size:0.7rem;">{sid.iclass}</span></div>
-        """
-        if analysis_mode == "Correlation Analysis":
-            spec_html += f'<div class="spec-row"><span class="spec-label">Target</span><span class="spec-value" style="font-size:0.7rem;">{target_selected}</span></div>'
-        spec_html += "</div>"
-
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-        st.markdown(spec_html, unsafe_allow_html=True)
+        # Appearance is the LAST control in the rail. See _render_appearance_control.
+        _render_appearance_control()
 
         return SidebarState(
             universe=universe,
@@ -2800,7 +2964,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     if not stock_list:
         console.error(msg)
-        st.error(msg)
+        ui_error(msg)
         return None
 
     console.success(f"Fetched {len(stock_list)} symbols for {selected_index}")
@@ -2818,7 +2982,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     if not data_dict:
         console.error(fetch_msg)
-        st.error(fetch_msg)
+        ui_error(fetch_msg)
         return None
 
     console.success(f"Successfully downloaded data for {len(data_dict)} stocks")
@@ -3084,13 +3248,13 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         _n_fetched = len(data_dict)
         _n_total   = len(stock_list)
         if _n_fetched == 0:
-            st.warning(
+            ui_warning(
                 f"**No market data retrieved** for {selected_index} as of {analysis_date}. "
                 "The exchange may have been closed, or yfinance may be rate-limiting. "
                 "Try refreshing or selecting a recent trading day."
             )
         elif _warmup_skipped >= _n_fetched:
-            st.warning(
+            ui_warning(
                 f"**Every symbol is still warming up.** The oscillator needs {sid.min_bars} "
                 f"{'weekly' if timeframe == 'Weekly' else 'daily'} bars before its normalization "
                 f"window, lookback, participation baseline and smoothing are all warm, and none "
@@ -3099,7 +3263,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 "instruments."
             )
         else:
-            st.info(
+            ui_info(
                 f"**Nothing to show** — {_n_fetched} of {_n_total} symbols had data for {analysis_date}, "
                 "but none produced a usable conviction reading. "
                 "Try an adjacent trading date, or check that the selected date is a market session."
@@ -3167,7 +3331,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
     if not stock_list:
         console.error("Failed to retrieve stock list")
-        st.error("Failed to retrieve stock list")
+        ui_error("Failed to retrieve stock list")
         return
 
     console.success(f"Fetched {len(stock_list)} symbols for {selected_index}")
@@ -3178,7 +3342,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
     if not data_dict:
         console.error("No historical data available")
-        st.error("No historical data available for selected range.")
+        ui_error("No historical data available for selected range.")
         return
 
     console.success(f"Downloaded depth for {len(data_dict)} entities")
@@ -3283,7 +3447,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
     if not all_results:
         if _own_slot:
             progress_slot.empty()
-        st.error("No results generated for the selected timeframe.")
+        ui_error("No results generated for the selected timeframe.")
         return
 
     ts_df = pd.DataFrame(all_results)
@@ -3465,7 +3629,6 @@ def render_timeseries_dashboard():
     with c6:
         ui.render_metric_card("Trading Days", str(len(daily_agg)), "Analyzed", "neutral")
 
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "Signal Dashboard",
@@ -3482,19 +3645,19 @@ def render_timeseries_dashboard():
         fig_breadth = go.Figure()
         fig_breadth.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Buy_Breadth_Pct'],
                                          mode='lines', name='Buy % (crossed up)',
-                                         fill='tozeroy', fillcolor='rgba(0,230,118,0.12)',
-                                         line=dict(color='#00E676', width=2)))
+                                         fill='tozeroy', fillcolor=chart_rgba('emerald', 0.12),
+                                         line=dict(color=chart_color('emerald'), width=2)))
         fig_breadth.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Sell_Breadth_Pct'],
                                          mode='lines', name='Sell % (crossed down)',
-                                         fill='tozeroy', fillcolor='rgba(255,167,38,0.12)',
-                                         line=dict(color='#FFA726', width=2)))
+                                         fill='tozeroy', fillcolor=chart_rgba('amber', 0.12),
+                                         line=dict(color=chart_color('amber'), width=2)))
         _pct_raw = max(daily_agg['Buy_Breadth_Pct'].max(), daily_agg['Sell_Breadth_Pct'].max())
         _pct_raw = float(_pct_raw) if pd.notna(_pct_raw) and np.isfinite(_pct_raw) else 0.0
         ymax = max(_pct_raw * 1.15, 5.0)   # floor at 5 so axis always renders sensibly
         fig_breadth.update_layout(title='', height=350, hovermode='x unified',
                                   yaxis=dict(range=[0, ymax], title='% of Universe'))
         apply_chart_theme(fig_breadth)
-        st.plotly_chart(fig_breadth, width='stretch', key='chart_breadth')
+        ui.render_chart_panel(fig_breadth, key='breadth', context=_chart_ctx())
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("Signal Count by Date", "BUY vs SELL fires per session",
@@ -3502,13 +3665,13 @@ def render_timeseries_dashboard():
         fig_counts = go.Figure()
         fig_counts.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['BuySignal'],
                                     name='Buy Signals',
-                                    marker=dict(color='#00E676', line=dict(color='#00E676', width=1))))
+                                    marker=dict(color=chart_color('emerald'), line=dict(color=chart_color('emerald'), width=1))))
         fig_counts.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['SellSignal'],
                                     name='Sell Signals',
-                                    marker=dict(color='#FFA726', line=dict(color='#FFA726', width=1))))
+                                    marker=dict(color=chart_color('amber'), line=dict(color=chart_color('amber'), width=1))))
         fig_counts.update_layout(title='', height=300, hovermode='x unified', barmode='group')
         apply_chart_theme(fig_counts)
-        st.plotly_chart(fig_counts, width='stretch', key='chart_signal_counts')
+        ui.render_chart_panel(fig_counts, key='signal_counts', context=_chart_ctx())
 
     # ── TAB 2 · Transaction Dynamics ───────────────────────────────────────
     with tab2:
@@ -3518,15 +3681,15 @@ def render_timeseries_dashboard():
         fig_signals = go.Figure()
         fig_signals.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['BuySignal'],
                                          mode='lines+markers', name='Buy Signals',
-                                         line=dict(color='#00E676', width=2),
-                                         marker=dict(size=6, color='#00E676')))
+                                         line=dict(color=chart_color('emerald'), width=2),
+                                         marker=dict(size=6, color=chart_color('emerald'))))
         fig_signals.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['SellSignal'],
                                          mode='lines+markers', name='Sell Signals',
-                                         line=dict(color='#FFA726', width=2),
-                                         marker=dict(size=6, color='#FFA726')))
+                                         line=dict(color=chart_color('amber'), width=2),
+                                         marker=dict(size=6, color=chart_color('amber'))))
         fig_signals.update_layout(title='', height=300, hovermode='x unified')
         apply_chart_theme(fig_signals)
-        st.plotly_chart(fig_signals, width='stretch', key='chart_signals_overtime')
+        ui.render_chart_panel(fig_signals, key='signals_overtime', context=_chart_ctx())
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("Flow-Zone Breadth",
@@ -3535,13 +3698,13 @@ def render_timeseries_dashboard():
         fig_div = go.Figure()
         fig_div.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['Overbought_Pct'],
                                  name='Accumulation %',
-                                 marker=dict(color='#D4A853', line=dict(color='#D4A853', width=1))))
+                                 marker=dict(color=chart_color('amber'), line=dict(color=chart_color('amber'), width=1))))
         fig_div.add_trace(go.Bar(x=daily_agg.index, y=-daily_agg['Oversold_Pct'],
                                  name='Distribution %',
-                                 marker=dict(color='#06B6D4', line=dict(color='#06B6D4', width=1))))
+                                 marker=dict(color=chart_color('cyan'), line=dict(color=chart_color('cyan'), width=1))))
         fig_div.update_layout(title='', height=300, hovermode='x unified', barmode='relative')
         apply_chart_theme(fig_div)
-        st.plotly_chart(fig_div, width='stretch', key='chart_divergence')
+        ui.render_chart_panel(fig_div, key='divergence', context=_chart_ctx())
 
     # ── TAB 3 · Regime Analysis ────────────────────────────────────────────
     with tab3:
@@ -3553,29 +3716,29 @@ def render_timeseries_dashboard():
         # sit at ±0.25 (~3σ of that mean) rather than anywhere near a per-name reading.
         # Green (positive) = most of the universe has its oscillator above its signal line.
         _sig_band = 0.25
-        colors = ['#00E676' if v > _sig_band else '#FFA726' if v < -_sig_band else '#64748B'
+        colors = [chart_color('emerald') if v > _sig_band else chart_color('amber') if v < -_sig_band else chart_color('slate')
                   for v in daily_agg['Signal']]
         fig_avg = go.Figure()
         fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Signal'].clip(lower=0),
-                                     fill='tozeroy', fillcolor='rgba(0,230,118,0.05)',
+                                     fill='tozeroy', fillcolor=chart_rgba('emerald', 0.05),
                                      line=dict(width=0), showlegend=False, hoverinfo='skip'))
         fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Signal'].clip(upper=0),
-                                     fill='tozeroy', fillcolor='rgba(255,167,38,0.05)',
+                                     fill='tozeroy', fillcolor=chart_rgba('amber', 0.05),
                                      line=dict(width=0), showlegend=False, hoverinfo='skip'))
         fig_avg.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Signal'],
                                      mode='lines+markers', name='Avg histogram (σ)',
-                                     line=dict(color='#D4A853', width=2),
+                                     line=dict(color=chart_color('amber'), width=2),
                                      marker=dict(size=6, color=colors)))
-        fig_avg.add_hline(y=_sig_band,  line=dict(color='rgba(0,230,118,0.5)', width=1, dash='dash'))
-        fig_avg.add_hline(y=-_sig_band, line=dict(color='rgba(255,167,38,0.5)', width=1, dash='dash'))
-        fig_avg.add_hline(y=0,   line=dict(color='rgba(255,255,255,0.3)', width=1))
+        fig_avg.add_hline(y=_sig_band,  line=dict(color=chart_rgba('emerald', 0.5), width=1, dash='dash'))
+        fig_avg.add_hline(y=-_sig_band, line=dict(color=chart_rgba('amber', 0.5), width=1, dash='dash'))
+        fig_avg.add_hline(y=0,   line=dict(color=grid_rgba(0.30), width=1))
         _sig_span = float(np.nanmax(np.abs(daily_agg['Signal']))) if len(daily_agg) else 0.0
         _sig_span = _sig_span if np.isfinite(_sig_span) else 0.0
         _sig_lim = max(_sig_span * 1.2, _sig_band * 1.6)
         fig_avg.update_layout(title='', height=300, hovermode='x unified',
                               yaxis=dict(range=[-_sig_lim, _sig_lim]))
         apply_chart_theme(fig_avg)
-        st.plotly_chart(fig_avg, width='stretch', key='chart_avg_signal')
+        ui.render_chart_panel(fig_avg, key='avg_signal', context=_chart_ctx())
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("HMM Regime Distribution Over Time",
@@ -3584,16 +3747,16 @@ def render_timeseries_dashboard():
         fig_regime = go.Figure()
         fig_regime.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Regime_Bull_Pct'],
                                         mode='lines', name='Bull Regime %',
-                                        fill='tozeroy', fillcolor='rgba(52,211,153,0.12)',
-                                        line=dict(color='#2DD4A8', width=2)))
+                                        fill='tozeroy', fillcolor=chart_rgba('emerald', 0.12),
+                                        line=dict(color=chart_color('emerald'), width=2)))
         fig_regime.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Regime_Bear_Pct'],
                                         mode='lines', name='Bear Regime %',
-                                        fill='tozeroy', fillcolor='rgba(232,85,90,0.12)',
-                                        line=dict(color='#E8555A', width=2)))
+                                        fill='tozeroy', fillcolor=chart_rgba('rose', 0.12),
+                                        line=dict(color=chart_color('rose'), width=2)))
         fig_regime.update_layout(title='', height=300, hovermode='x unified',
                                  yaxis=dict(range=[0, 100], title='% of Universe'))
         apply_chart_theme(fig_regime)
-        st.plotly_chart(fig_regime, width='stretch', key='chart_regime')
+        ui.render_chart_panel(fig_regime, key='regime', context=_chart_ctx())
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("Volatility Dynamics",
@@ -3608,18 +3771,18 @@ def render_timeseries_dashboard():
         fig_vol.add_trace(go.Scatter(x=daily_agg.index, y=vol_high.fillna(0),
                                      mode='lines+markers', name='High Vol %',
                                      yaxis='y2',
-                                     line=dict(color='#D4A853', width=2),
+                                     line=dict(color=chart_color('amber'), width=2),
                                      marker=dict(size=5)))
         fig_vol.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['Change_Point'],
                                  name='Symbols with Regime Change',
-                                 marker=dict(color='#A855F7', opacity=0.7)))
+                                 marker=dict(color=chart_color('violet'), opacity=0.7)))
         fig_vol.update_layout(
             title='', height=250, hovermode='x unified',
             yaxis=dict(title='# Symbols'),
             yaxis2=dict(title='High-Vol %', overlaying='y', side='right'),
         )
         apply_chart_theme(fig_vol)
-        st.plotly_chart(fig_vol, width='stretch', key='chart_volatility')
+        ui.render_chart_panel(fig_vol, key='volatility', context=_chart_ctx())
 
         st.markdown("<br>", unsafe_allow_html=True)
         col_r1, col_r2 = st.columns(2)
@@ -3633,7 +3796,8 @@ def render_timeseries_dashboard():
                           f"{summary['total_change_points']}",
                           f"{vol_high.mean():.1f}%"],
             }
-            st.dataframe(pd.DataFrame(regime_stats), width='stretch', hide_index=True)
+            ui.render_data_table(pd.DataFrame(regime_stats), show_index=False,
+                                 label_col="Metric", max_height=260)
         with col_r2:
             ui.render_section_header("Conviction-Histogram Distribution",
                                      "Universe-mean conviction histogram (σ) statistics",
@@ -3646,7 +3810,8 @@ def render_timeseries_dashboard():
                           f"{daily_agg['Signal'].max():+.3f}",
                           f"{daily_agg['Signal'].std():.3f}"],
             }
-            st.dataframe(pd.DataFrame(signal_stats), width='stretch', hide_index=True)
+            ui.render_data_table(pd.DataFrame(signal_stats), show_index=False,
+                                 label_col="Metric", max_height=260)
 
     # ── TAB 4 · Data Terminal ──────────────────────────────────────────────
     with tab4:
@@ -3664,23 +3829,29 @@ def render_timeseries_dashboard():
         display_ts.columns = ['Date', 'Buy Sig', 'Sell Sig', 'Avg Hist', 'Avg Force',
                               'Buy Breadth %', 'Sell Breadth %',
                               'Bull Regime %', 'Bear Regime %', 'Change Pts']
-        st.dataframe(
-            display_ts, width='stretch', hide_index=True,
-            column_config={
-                'Date':          st.column_config.TextColumn(help="Trading day (YYYY-MM-DD)."),
-                'Buy Sig':       st.column_config.NumberColumn(help="Symbols firing the BUY (green triangle) — the conviction histogram crossed ABOVE zero on this bar."),
-                'Sell Sig':      st.column_config.NumberColumn(help="Symbols firing the SELL (yellow diamond) — the conviction histogram crossed BELOW zero on this bar."),
-                'Avg Hist':      st.column_config.NumberColumn(help="Cross-sectional mean conviction histogram (in σ) on this day — how one-sided the tape's conviction is. The daily mean concentrates near 0; ±0.25 is already strongly one-sided.", format="%.3f"),
-                'Avg Force':     st.column_config.NumberColumn(help="Mean crossing force of the symbols that actually fired — the one-bar change in the histogram, in σ, on the fired bars. Blank on days with no fires. The histogram's LEVEL cannot be averaged here: a crossing sits at zero by construction.", format="%.2f"),
-                'Buy Breadth %': st.column_config.NumberColumn(help="Percent of the universe firing BUY on this day.", format="%.1f"),
-                'Sell Breadth %':st.column_config.NumberColumn(help="Percent of the universe firing SELL on this day.", format="%.1f"),
-                'Bull Regime %': st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BULL' (risk context, not a signal input)."),
-                'Bear Regime %': st.column_config.NumberColumn(help="Percent of universe with HMM regime label containing 'BEAR' (risk context, not a signal input)."),
-                'Change Pts':    st.column_config.NumberColumn(help="Sum of Change_Point flags — count of symbols with a regime-state transition on this day."),
-            },
+        ui.render_table_panel(
+            display_ts, key="range-terminal",
+            context=f"{len(daily_agg)} periods",
+            show_index=False, label_col="Date", max_height=560,
+            col_precision={"Avg Hist": 3, "Avg Force": 2,
+                           "Buy Breadth %": 1, "Sell Breadth %": 1},
+            footer=_glossary({
+                "Buy / Sell Sig": "Symbols whose conviction histogram crossed zero on this bar "
+                                  "— above for BUY, below for SELL.",
+                "Avg Hist": "Cross-sectional mean conviction histogram (in \u03c3) on this day — how "
+                            "one-sided the tape's conviction is. The daily mean concentrates near "
+                            "0; \u00b10.25 is already strongly one-sided.",
+                "Avg Force": "Mean crossing force of the symbols that actually fired — the "
+                             "one-bar change in the histogram, in \u03c3, on the fired bars. Blank on "
+                             "days with no fires. The LEVEL cannot be averaged here: a crossing "
+                             "sits at zero by construction.",
+                "Breadth %": "Percent of the universe firing each side on this day.",
+                "Bull / Bear Regime %": "Percent of universe with an HMM label containing BULL or "
+                                        "BEAR. Risk context, never a signal input.",
+                "Change Pts": "Count of symbols with a regime-state transition on this day.",
+            }),
         )
 
-        st.markdown("<br>", unsafe_allow_html=True)
         st.download_button(
             label="↓ Download Full Report (Excel)",
             data=to_excel(ts_df),
@@ -3694,7 +3865,6 @@ def render_timeseries_dashboard():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3719,7 +3889,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         stock_list, msg = resolve_universe(universe, selected_index)
 
         if not stock_list:
-            st.error(f"Failed to fetch universe symbols: {msg}")
+            ui_error(f"Failed to fetch universe symbols: {msg}")
             return None
 
         console.item("Symbols fetched", len(stock_list))
@@ -3733,7 +3903,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         data_dict, fetch_msg = get_universe_data(stock_list, end_date=analysis_date,
                                                  timeframe=timeframe)
         if data_dict is None:
-            st.error(f"Data fetch failed: {fetch_msg}")
+            ui_error(f"Data fetch failed: {fetch_msg}")
             console.item("Data fetch error", fetch_msg)
             return None
 
@@ -3753,7 +3923,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                 data_dict = {**data_dict, target_ticker: target_raw[target_ticker]}
                 console.detail(f"Target ticker '{target_ticker}' merged into data pool")
             else:
-                st.error(f"Could not fetch target asset '{target_ticker}'")
+                ui_error(f"Could not fetch target asset '{target_ticker}'")
                 return None
         else:
             console.detail(f"Target ticker '{target_ticker}' already in registry pool")
@@ -3776,7 +3946,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                         console.item(f"Skipping {ticker}", "No Close column found")
 
         if not close_dict:
-            st.error("No valid price data found for universe")
+            ui_error("No valid price data found for universe")
             console.item("Error", "No Close prices extracted")
             return None
 
@@ -3788,7 +3958,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         console.item("Close DataFrame shape", f"{close_df.shape}")
 
         if len(close_df) < lookback + 10:
-            st.error(f"Insufficient historical data for correlation analysis (only {len(close_df)} rows, need {lookback + 10})")
+            ui_error(f"Insufficient historical data for correlation analysis (only {len(close_df)} rows, need {lookback + 10})")
             console.item("Error", f"Only {len(close_df)} rows, need {lookback + 10}")
             return None
 
@@ -3802,7 +3972,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         returns_df = np.log(close_df / close_df.shift(1)).dropna(how='all')
 
         if target_ticker not in returns_df.columns:
-            st.error(f"Target asset '{target_ticker}' not in data")
+            ui_error(f"Target asset '{target_ticker}' not in data")
             console.item("Error", f"Target {target_ticker} not in returns columns")
             return None
 
@@ -3812,7 +3982,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         # Filter to common dates with target
         common_idx = returns_df.index.intersection(target_returns.index)
         if len(common_idx) < lookback + 10:
-            st.error(f"Insufficient overlapping data (only {len(common_idx)} days). Try a shorter lookback period.")
+            ui_error(f"Insufficient overlapping data (only {len(common_idx)} days). Try a shorter lookback period.")
             console.item("Error", f"Only {len(common_idx)} common dates, need {lookback + 10}")
             return None
 
@@ -3842,17 +4012,17 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
             console.item("Rolling corr dict entries", rolling_corr_df.shape[1])
 
             if rolling_corr_df.shape[1] == 0:
-                st.error("Could not compute rolling correlations for any column")
+                ui_error("Could not compute rolling correlations for any column")
                 return None
 
             console.item("Rolling corr DataFrame shape", rolling_corr_df.shape)
         except Exception as e:
-            st.error(f"Error in rolling correlation: {str(e)}")
+            ui_error(f"Error in rolling correlation: {str(e)}")
             console.item("Rolling corr computation error", str(e)[:100])
             return None
 
         if rolling_corr_df.empty or len(rolling_corr_df) == 0:
-            st.error("Could not compute rolling correlations. Check data availability.")
+            ui_error("Could not compute rolling correlations. Check data availability.")
             console.item("Error", "Rolling correlation DataFrame is empty")
             return None
 
@@ -4001,7 +4171,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         corr_df = pd.DataFrame(corr_data_list)
         if len(corr_df) == 0:
-            st.error("No correlation data could be computed")
+            ui_error("No correlation data could be computed")
             console.item("Error", "Empty correlation DataFrame")
             return None
 
@@ -4072,7 +4242,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         }
 
     except Exception as e:
-        st.error(f"Correlation analysis error: {str(e)}")
+        ui_error(f"Correlation analysis error: {str(e)}")
         console.item("Exception", str(e))
         import traceback
         console.item("Traceback", traceback.format_exc()[:2000])
@@ -4087,15 +4257,39 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 # Used by _build_confluence_table_html, _build_signal_table_html,
 # _build_narrative_table_html, _build_signal_strength_table_html. Keep these
 # in sync — changing one color here propagates to every signal table.
-_GREEN  = "#34D399"
-_RED    = "#FB7185"
 
 # The indicator's own marker colours, so the app and the TradingView chart read the
-# same: green triangle = BUY, yellow/amber diamond = SELL. (siddhi.pine C_BULL /
-# colorWarn / colorNeut.)
-_SID_BUY  = "#00E676"
-_SID_SELL = "#FFA726"
-_SID_NEUT = "#787B86"
+# same: green triangle = BUY, amber diamond = SELL. (siddhi.pine C_BULL /
+# C_BEAR / C_NEUT.)
+#
+# THESE ARE FUNCTIONS, NOT CONSTANTS, and that is the whole point. A
+# module-level `_SID_BUY = "#..."` binds once at import, when there is no
+# session to read an appearance from — which is precisely how a UI ends up
+# with its chrome in one theme and its cells in the other. Every one of these
+# resolves from ui.table_tokens() at render time instead, so a cell follows the
+# Slate/Paper toggle like everything else. They are literals inside the iframe
+# because an iframe cannot see the app's CSS variables; they are not literals
+# in this module.
+
+
+def _sid_buy() -> str:
+    """Long / bullish — the green triangle."""
+    return ui.table_tokens()["emerald"]
+
+
+def _sid_sell() -> str:
+    """Short / bearish — the amber diamond."""
+    return ui.table_tokens()["amber"]
+
+
+def _sid_neut() -> str:
+    """No claim. The muted ink, not a colour."""
+    return ui.table_tokens()["ink_tertiary"]
+
+
+def _dim() -> str:
+    """The 'nothing here' ink for an em-dash cell."""
+    return ui.table_tokens()["ink_quaternary"]
 
 # 'buy'/'sell' are the canonical side keys. 'long'/'short' are accepted so any
 # lingering caller keeps working rather than silently getting the sell palette.
@@ -4112,26 +4306,37 @@ def _priority_pct_col(side: str) -> str:
 
 
 def _side_palette(side: str) -> dict:
-    """Side-keyed accent colors — BUY green triangle / SELL amber diamond."""
+    """Side-keyed accents — BUY green triangle / SELL amber diamond.
+
+    Resolved per call, so the age-group section rows inside the signal table
+    follow the appearance toggle along with everything else.
+    """
+    t = ui.table_tokens()
     if _is_buy_side(side):
         return {
-            "accent_light": _SID_BUY,
-            "border_color": "rgba(0, 230, 118, 0.3)",
-            "header_bg":    "rgba(0, 230, 118, 0.13)",
+            "accent_light": t["emerald"],
+            "border_color": t["border"],
+            "header_bg":    t["header_a"],
             "mark":         "▲",
             "label":        "BUY",
         }
     return {
-        "accent_light": _SID_SELL,
-        "border_color": "rgba(255, 167, 38, 0.3)",
-        "header_bg":    "rgba(255, 167, 38, 0.13)",
+        "accent_light": t["amber"],
+        "border_color": t["border"],
+        "header_bg":    t["header_a"],
         "mark":         "◆",
         "label":        "SELL",
     }
 
-def _signed_color(value: float, pos: str = _GREEN, neg: str = _RED) -> str:
-    """Green for non-negative, red for negative (or supplied overrides)."""
-    return pos if value >= 0 else neg
+def _signed_color(value: float, pos: str = "", neg: str = "") -> str:
+    """Green for non-negative, red for negative (or supplied overrides).
+
+    Defaults resolve from the active theme rather than from import-time
+    constants, so a signed number in a table agrees with the same number in a
+    chart in either appearance.
+    """
+    t = ui.table_tokens()
+    return (pos or t["emerald"]) if value >= 0 else (neg or t["rose"])
 
 def _delta_arrow(value: float) -> str:
     """Up arrow for non-negative deltas, down arrow for negative."""
@@ -4168,18 +4373,12 @@ def _build_confluence_table_html(df: pd.DataFrame, k: float = None) -> str:
     Returns: Complete HTML document string ready for st.components.v1.html().
     """
     k = eng.SID_K if k is None else float(k)
+    _MAXH = 560
     table_rows = []
     if df.empty:
-        table_rows.append(f"""
+        table_rows.append("""
         <tr>
-            <td colspan="11" style="
-                text-align: center;
-                color: #374151;
-                font-family: 'IBM Plex Mono', monospace;
-                font-size: 0.72rem;
-                letter-spacing: 0.06em;
-                padding: 2.25rem 1rem;
-            ">— no setups —</td>
+            <td class="empty" colspan="11">— no setups —</td>
         </tr>
         """)
     else:
@@ -4197,22 +4396,23 @@ def _build_confluence_table_html(df: pd.DataFrame, k: float = None) -> str:
             conv_cell = _conv_cell(row.get('Conviction'))
 
             # Note: confluence uses strict > 0 (not >=), so zero is "red" here.
-            corr_color = _GREEN if corr > 0 else _RED
-            div_color  = _GREEN if divergence > 0 else _RED
-            conf_color = "#A78BFA"
+            _t = ui.table_tokens()
+            corr_color = _t["emerald"] if corr > 0 else _t["rose"]
+            div_color  = _t["emerald"] if divergence > 0 else _t["rose"]
+            conf_color = ui.table_tokens()["violet"]
 
             rank_str = f"{idx:02d}"
 
             table_rows.append(f"""
             <tr>
-                <td class="numeric" style="color: #D4A853; font-weight: 700;">{rank_str}</td>
+                <td class="numeric" style="color: {ui.table_tokens()["amber"]}; font-weight: 700;">{rank_str}</td>
                 <td class="symbol">{symbol}</td>
                 <td class="numeric" style="color: {corr_color}; font-weight: 600;">{corr:+.3f}</td>
                 {z_cell}
                 {side_cell}
-                <td class="numeric" style="color: #94A3B8; font-size:0.65rem;">{zone}</td>
-                <td class="numeric" style="color: #94A3B8;">{actual:+.2f}%</td>
-                <td class="numeric" style="color: #94A3B8;">{expected:+.2f}%</td>
+                <td class="numeric" style="color: {_sid_neut()}; font-size:{ui.FS["2xs"]};">{zone}</td>
+                <td class="numeric" style="color: {_sid_neut()};">{actual:+.2f}%</td>
+                <td class="numeric" style="color: {_sid_neut()};">{expected:+.2f}%</td>
                 <td class="numeric" style="color: {div_color}; font-weight: 600;">{divergence:+.2f}%</td>
                 {conv_cell}
                 <td class="numeric" style="color:{conf_color}; font-weight:600;">{confluence:.2f}</td>
@@ -4224,51 +4424,10 @@ def _build_confluence_table_html(df: pd.DataFrame, k: float = None) -> str:
     <!DOCTYPE html>
     <html>
     <head>
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{
-            font-family: 'IBM Plex Mono', monospace;
-            background: transparent;
-            color: #F1F5F9;
-            padding: 0;
-        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-        }}
-        thead th {{
-            background: transparent;
-            color: #4B5563;
-            font-size: 0.62rem !important;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            padding: 0.5rem 0.5rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            text-align: left;
-        }}
-        thead th.numeric {{ text-align: right; }}
-        tbody tr {{
-            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-        }}
-        tbody tr:hover {{ background: rgba(139, 92, 246, 0.05); }}
-        tbody td {{
-            padding: 0.5rem 0.5rem;
-            color: #F1F5F9;
-            font-size: 0.72rem !important;
-        }}
-        tbody td.symbol {{
-            font-weight: 700;
-            font-size: 0.75rem;
-            letter-spacing: 0.02em;
-        }}
-        tbody td.numeric {{
-            text-align: right;
-            font-variant-numeric: tabular-nums;
-        }}
-    </style>
+    <style>{ui.table_shell_css(max_height=_MAXH)}</style>
     </head>
     <body>
+    <div class="tt-scroll">
     <table>
         <thead>
             <tr>
@@ -4289,6 +4448,7 @@ def _build_confluence_table_html(df: pd.DataFrame, k: float = None) -> str:
             {"".join(table_rows)}
         </tbody>
     </table>
+    </div>
     </body>
     </html>
     """
@@ -4350,57 +4510,49 @@ def render_correlation_results(corr_data: dict) -> None:
         st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
 
         # Ranked lists
+        def _corr_rows(frame, tone: str) -> str:
+            """One correlation list as panel rows, in the app's own grammar."""
+            out = []
+            for _, r in frame.iterrows():
+                cv = float(r['Corr_Current'])
+                trend = ("\u2191" if r['Corr_Trend'] > 0.05
+                         else "\u2193" if r['Corr_Trend'] < -0.05 else "\u2192")
+                # Fill is a PERCENTAGE of the track. It used to be `|corr|*50`
+                # px against a track with no declared width, so how long a bar
+                # looked depended on the column it landed in rather than on the
+                # correlation it was drawing.
+                pct = min(abs(cv), 1.0) * 100.0
+                out.append(
+                    f'<div class="lookback-row">'
+                    f'<span class="lbl">{html.escape(str(r["SimpleName"]))}'
+                    f'<span class="sub"> {r["PctChange"]:+.2f}% · exp '
+                    f'{r["Expected_Change"]:+.2f}%</span></span>'
+                    f'<span class="val {tone}">'
+                    f'<span class="conviction-bar" style="display:inline-block;'
+                    f'width:54px;vertical-align:middle;margin-right:8px;">'
+                    f'<span class="conviction-bar-fill fill-{"buy" if tone == "long" else "caution"}" '
+                    f'style="display:block;width:{pct:.0f}%;"></span></span>'
+                    f'{cv:+.3f} {trend}</span></div>'
+                )
+            return "".join(out)
+
         col_pos, col_neg = st.columns(2)
 
         with col_pos:
             ui.render_section_header("Top Positively Correlated", icon="trending", accent="emerald")
             pos_corr = corr_df[corr_df['Corr_Current'] > 0].head(7)
-            for _, row in pos_corr.iterrows():
-                trend_arrow = "↑" if row['Corr_Trend'] > 0.05 else "↓" if row['Corr_Trend'] < -0.05 else "→"
-                corr_val = row['Corr_Current']
-                tier_class = row['Corr_Tier'].lower().replace("+", "-pos").replace("-", "-neg")
-
-                st.markdown(f"""
-                <div class="corr-row">
-                    <div>
-                        <div class="name">{row['SimpleName']}</div>
-                        <div class="sub">{row['PctChange']:+.2f}% | Expected: {row['Expected_Change']:+.2f}%</div>
-                    </div>
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <span class="corr-tier {tier_class}">{corr_val:.3f}</span>
-                        <div class="corr-bar-track">
-                            <div class="corr-bar-center"></div>
-                            <div class="corr-bar-fill pos" style="width:{abs(corr_val)*50}px;"></div>
-                        </div>
-                        <span style="font-size:0.75rem; color:var(--ink-secondary);">{trend_arrow}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+            with ui.panel("corr-pos", context=f"{len(pos_corr)} of "
+                          f"{int((corr_df['Corr_Current'] > 0).sum())} positive"):
+                st.markdown(f'<div class="panel-specs">{_corr_rows(pos_corr, "long")}</div>',
+                            unsafe_allow_html=True)
 
         with col_neg:
             ui.render_section_header("Top Inversely Correlated", icon="trending", accent="rose")
             neg_corr = corr_df[corr_df['Corr_Current'] < 0].head(7)
-            for _, row in neg_corr.iterrows():
-                trend_arrow = "↑" if row['Corr_Trend'] > 0.05 else "↓" if row['Corr_Trend'] < -0.05 else "→"
-                corr_val = row['Corr_Current']
-                tier_class = row['Corr_Tier'].lower().replace("+", "-pos").replace("-", "-neg")
-
-                st.markdown(f"""
-                <div class="corr-row">
-                    <div>
-                        <div class="name">{row['SimpleName']}</div>
-                        <div class="sub">{row['PctChange']:+.2f}% | Expected: {row['Expected_Change']:+.2f}%</div>
-                    </div>
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <span class="corr-tier {tier_class}">{corr_val:.3f}</span>
-                        <div class="corr-bar-track">
-                            <div class="corr-bar-center"></div>
-                            <div class="corr-bar-fill neg" style="width:{abs(corr_val)*50}px;"></div>
-                        </div>
-                        <span style="font-size:0.75rem; color:var(--ink-secondary);">{trend_arrow}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+            with ui.panel("corr-neg", context=f"{len(neg_corr)} of "
+                          f"{int((corr_df['Corr_Current'] < 0).sum())} inverse"):
+                st.markdown(f'<div class="panel-specs">{_corr_rows(neg_corr, "short")}</div>',
+                            unsafe_allow_html=True)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 2: TRADE INTELLIGENCE
@@ -4413,37 +4565,19 @@ def render_correlation_results(corr_data: dict) -> None:
             accent="cyan"
         )
 
-        # How to read this tab - styled as interpretation card
-        st.markdown("""
-        <div style="background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.2);
-                    border-radius:8px; padding:1rem; margin:1.5rem 0; font-family:var(--data); font-size:0.75rem;">
-            <div style="color:#38BDF8; font-weight:700; text-transform:uppercase; margin-bottom:0.75rem; letter-spacing:0.06em;">
-                How to Read
-            </div>
-            <div style="color:#F1F5F9; line-height:1.6;">
-                Each setup type is ranked by <span style="color:#38BDF8; font-weight:600;">Confluence Score</span> (0-1)
-                = |Correlation| × normalised signal strength. Highest rank = strongest
-                overlap between the correlation relationship and a live Siddhi reading. Look for:
-                <span style="font-weight:600;">(1) Score &gt;0.7</span>,
-                <span style="font-weight:600;">(2) |Div %| &gt;3%</span>,
-                <span style="font-weight:600;">(3) a fired Side (▲ / ◆), not a blank one</span>
-            </div>
-            <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:0.5rem; margin-top:0.75rem;">
-                <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
-                    <span style="color:#38BDF8; font-weight:600;">Corr</span> — Correlation strength
-                </div>
-                <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
-                    <span style="color:#38BDF8; font-weight:600;">Hist σ</span> — the conviction histogram, in its own σ
-                </div>
-                <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
-                    <span style="color:#38BDF8; font-weight:600;">Side</span> — ▲ BUY / ◆ SELL / — no fire
-                </div>
-                <div style="font-family:var(--data); font-size:0.65rem; color:var(--ink-secondary);">
-                    <span style="color:#38BDF8; font-weight:600;">Div %</span> — Actual vs Expected
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # How to read this tab. Was a hand-built box tinted in the retired
+        # cyan — and a PLAIN string carrying {…} placeholders, so those colours
+        # rendered as literal braces and never applied. The component does not
+        # have that failure mode because it takes text, not markup.
+        ui.render_info_box(
+            "How to read",
+            "Each setup type is ranked by Confluence Score (0-1) = |Correlation| \u00d7 "
+            "normalised signal strength. Highest rank = strongest overlap between the "
+            "correlation relationship and a live Siddhi reading. Look for a score above "
+            "0.7, a divergence past \u00b13%, and a fired Side (\u25b2 / \u25c6) rather "
+            "than a blank one.",
+            color="cyan",
+        )
 
         # Trade setup classification.
         # Thresholds: corr ±0.4 = meaningful directional relationship;
@@ -4499,7 +4633,6 @@ def render_correlation_results(corr_data: dict) -> None:
             with cols[i]:
                 ui.render_metric_card(m["label"], m["value"], color_class=m["kind"])
 
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
         # Render each setup type as a section
         setup_configs = [
@@ -4507,33 +4640,33 @@ def render_correlation_results(corr_data: dict) -> None:
                 "name": "LAGGARD",
                 "title": "Laggard Setups",
                 "description": "High corr + oversold + underperforming — expect catch-up rally",
-                "color": "#34D399",
-                "bg_color": "rgba(45, 212, 168, 0.1)",
-                "border_color": "rgba(45, 212, 168, 0.25)"
+                "color": _sid_buy(),
+                "bg_color": "var(--long-fill)",
+                "border_color": "var(--long-edge)"
             },
             {
                 "name": "RUNAWAY",
                 "title": "Runaway Setups",
                 "description": "High corr + overbought + overextended — expect pullback",
-                "color": "#FB7185",
-                "bg_color": "rgba(232, 85, 90, 0.1)",
-                "border_color": "rgba(232, 85, 90, 0.25)"
+                "color": ui.table_tokens()["rose"],
+                "bg_color": "var(--short-fill)",
+                "border_color": "var(--short-edge)"
             },
             {
                 "name": "CONVERGING",
                 "title": "Converging Setups",
                 "description": "Low corr or normalizing — expect tightening after divergence",
-                "color": "#D4A853",
-                "bg_color": "rgba(212, 168, 83, 0.1)",
-                "border_color": "rgba(212, 168, 83, 0.25)"
+                "color": ui.table_tokens()["amber"],
+                "bg_color": "var(--caution-fill)",
+                "border_color": "var(--caution-edge)"
             },
             {
                 "name": "CONTRA",
                 "title": "Contra Setups",
                 "description": "Strong negative corr + overbought — expect rally vs target decline",
-                "color": "#A78BFA",
-                "bg_color": "rgba(139, 92, 246, 0.1)",
-                "border_color": "rgba(139, 92, 246, 0.25)"
+                "color": ui.table_tokens()["violet"],
+                "bg_color": "var(--violet-fill)",
+                "border_color": "var(--violet-edge)"
             }
         ]
 
@@ -4572,16 +4705,16 @@ def render_correlation_results(corr_data: dict) -> None:
                 st.markdown(f"""
                 <div style="display:flex; align-items:baseline; gap:0.65rem; margin:1.75rem 0 0.9rem 0;
                              padding-bottom:0.6rem; border-bottom:1px solid {config['border_color']};">
-                    <span style="font-family:var(--display); font-size:0.62rem; font-weight:700;
+                    <span style="font-family:var(--display); font-size:var(--fs-2xs); font-weight:700;
                                  letter-spacing:0.12em; text-transform:uppercase; color:{config['color']};
                                  padding:0.18rem 0.5rem; background:{config['bg_color']};
                                  border:1px solid {config['border_color']}; border-radius:4px;">
                         {config['name']}</span>
-                    <span style="font-family:var(--display); font-size:1rem; font-weight:700;
-                                 color:#F1F5F9; letter-spacing:0.04em;">{config['title']}</span>
-                    <span style="font-family:'IBM Plex Mono',monospace; font-size:0.75rem; color:#6B7280;">
+                    <span style="font-family:var(--display); font-size:var(--fs-lg); font-weight:700;
+                                 color:{ui.table_tokens()["ink_primary"]}; letter-spacing:0.04em;">{config['title']}</span>
+                    <span style="font-family:var(--data); font-size:var(--fs-sm); color:{_dim()};">
                         {config['description']}</span>
-                    <span style="margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
+                    <span style="margin-left:auto; font-family:var(--data); font-size:var(--fs-sm);
                                  color:{config['color']};">→ {len(setup_data)}</span>
                 </div>
                 """, unsafe_allow_html=True)
@@ -4590,16 +4723,16 @@ def render_correlation_results(corr_data: dict) -> None:
                 interp = setup_interpretation[config['name']]
                 st.markdown(f"""
                 <div style="background:{config['bg_color']}; border:1px solid {config['border_color']};
-                            border-radius:8px; padding:0.75rem 1rem; margin-bottom:1rem; font-family:var(--data); font-size:0.75rem;">
-                    <div style="display:grid; grid-template-columns:auto 1fr; gap:0.5rem 1rem; color:#F1F5F9;">
+                            border-radius:8px; padding:0.75rem 1rem; margin-bottom:1rem; font-family:var(--data); font-size:var(--fs-sm);">
+                    <div style="display:grid; grid-template-columns:auto 1fr; gap:0.5rem 1rem; color:{ui.table_tokens()["ink_primary"]};">
                         <span style="color:{config['color']}; font-weight:700; text-transform:uppercase;">Action</span>
                         <span>{interp['action']}</span>
                         <span style="color:{config['color']}; font-weight:700; text-transform:uppercase;">Rationale</span>
                         <span>{interp['rationale']}</span>
                         <span style="color:{config['color']}; font-weight:700; text-transform:uppercase;">Validate</span>
                         <span>{interp['validate']}</span>
-                        <span style="color:#FB7185; font-weight:700; text-transform:uppercase;">⚠ Risk</span>
-                        <span style="color:#FB7185;">{interp['risk']}</span>
+                        <span style="color:{ui.table_tokens()["rose"]}; font-weight:700; text-transform:uppercase;">⚠ Risk</span>
+                        <span style="color:{ui.table_tokens()["rose"]};">{interp['risk']}</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -4607,23 +4740,31 @@ def render_correlation_results(corr_data: dict) -> None:
                 # Display as two-column table
                 col_left, col_right = st.columns(2)
                 with col_left:
-                    st.markdown(f"""<p style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600;
+                    st.markdown(f"""<p style="font-family:var(--data); font-size:var(--fs-2xs); font-weight:600;
                                    text-transform:uppercase; letter-spacing:0.1em; color:{config['color']};
                                    margin:0 0 0.4rem 0; display:flex; align-items:center; gap:0.35rem;">
                         Top Confluence</p>""", unsafe_allow_html=True)
                     top_half = setup_data.head(5)
                     if len(top_half) > 0:
-                        st.components.v1.html(_build_confluence_table_html(top_half, k=k), height=100 + len(top_half) * 48)
+                        with ui.html_panel(f"conf-{config['name'].lower()}-a",
+                                           context=f"{config['name']} · top half"):
+                            st.components.v1.html(
+                                _build_confluence_table_html(top_half, k=k),
+                                height=ui.table_iframe_height(len(top_half), max_height=560))
                 with col_right:
-                    st.markdown(f"""<p style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600;
+                    st.markdown(f"""<p style="font-family:var(--data); font-size:var(--fs-2xs); font-weight:600;
                                    text-transform:uppercase; letter-spacing:0.1em; color:{config['color']};
                                    margin:0 0 0.4rem 0; display:flex; align-items:center; gap:0.35rem;">
                         Also Considered</p>""", unsafe_allow_html=True)
                     bottom_half = setup_data.iloc[5:10]
                     if len(bottom_half) > 0:
-                        st.components.v1.html(_build_confluence_table_html(bottom_half, k=k), height=100 + len(bottom_half) * 48)
+                        with ui.html_panel(f"conf-{config['name'].lower()}-b",
+                                           context=f"{config['name']} · bottom half"):
+                            st.components.v1.html(
+                                _build_confluence_table_html(bottom_half, k=k),
+                                height=ui.table_iframe_height(len(bottom_half), max_height=560))
                     else:
-                        st.info("No additional setups")
+                        ui_info("No additional setups")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 3: HEATMAP MATRIX
@@ -4646,20 +4787,20 @@ def render_correlation_results(corr_data: dict) -> None:
                 z=heatmap_rows['Corr_Current'].values.reshape(-1, 1),
                 x=["Correlation"],
                 y=heatmap_rows['SimpleName'].values,
-                colorscale=[[0, "#E8555A"], [0.5, "#1a2133"], [1, "#2DD4A8"]],
+                colorscale=[[0, chart_color('rose')], [0.5, panel_bg()], [1, chart_color('emerald')]],
                 zmid=0,
                 zmin=-1,
                 zmax=1,
                 text=heatmap_rows['Corr_Current'].values.reshape(-1, 1),
                 texttemplate='%{text:.2f}',
-                textfont={"size": 8, "color": "#94A3B8"},
+                textfont={"size": 8, "color": chart_color("slate")},
                 colorbar=dict(title="Corr", thickness=15, len=0.7)
             ))
             apply_chart_theme(fig)
             fig.update_layout(height=600, margin=dict(l=150, r=50, t=50, b=50))
-            st.plotly_chart(fig, width='stretch', key='chart_corr_0')
+            ui.render_chart_panel(fig, key='corr_0', context=_chart_ctx())
         else:
-            st.info("No correlation data available for heatmap")
+            ui_info("No correlation data available for heatmap")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4688,13 +4829,13 @@ def _hist_cell(z, k: float = None) -> str:
     except (TypeError, ValueError):
         f = float('nan')
     if not np.isfinite(f):
-        return '<td class="numeric" style="color:#4B5563;">—</td>'
+        return f'<td class="numeric" style="color:{_dim()};">—</td>'
     if f > 0:
-        col, note = '#00E676', 'above zero — conviction leads its signal line (bullish state)'
+        col, note = _sid_buy(), 'above zero — conviction leads its signal line (bullish state)'
     elif f < 0:
-        col, note = '#FFA726', 'below zero — conviction trails its signal line (bearish state)'
+        col, note = _sid_sell(), 'below zero — conviction trails its signal line (bearish state)'
     else:
-        col, note = '#787B86', 'exactly at zero'
+        col, note = _sid_neut(), 'exactly at zero'
     gate = 'zero' if k <= 0 else f'±{k:g}σ'
     title = (f'conviction histogram {f:+.2f}σ · {note}. '
              f'This is the STATE, not the signal — the signal is the bar on which it crosses '
@@ -4714,11 +4855,11 @@ def _conv_cell(conv) -> str:
     except (TypeError, ValueError):
         c = float('nan')
     if not np.isfinite(c):
-        return '<td class="numeric" style="color:#4B5563;">—</td>'
-    if   c >= 0.70: col = '#2DD4A8'
-    elif c >= 0.55: col = '#A3E635'
-    elif c >= 0.40: col = '#D4A853'
-    else:           col = '#FB923C'
+        return f'<td class="numeric" style="color:{_dim()};">—</td>'
+    if   c >= 0.70: col = _sid_buy()
+    elif c >= 0.55: col = _sid_buy()
+    elif c >= 0.40: col = ui.table_tokens()["amber"]
+    else:           col = ui.table_tokens()["amber"]
     title = (f'Conviction {c*100:.0f}% — how forcefully the histogram opened on the crossing '
              f'bar: the one-bar change in the histogram, in sigma of its own distribution, '
              f'passed through tanh, x the cost gate. The LEVEL cannot be used here — a crossing '
@@ -4733,14 +4874,16 @@ def _side_cell(side) -> str:
     """Render the Side cell with the indicator's own marks (▲ buy / ◆ sell)."""
     s = str(side or '—')
     if s == 'Buy':
-        return ('<td class="numeric" style="color:#00E676; font-weight:700; font-size:0.68rem;" '
+        return (f'<td class="numeric" style="color:{_sid_buy()}; font-weight:700; '
+                f'''font-size:{ui.FS["xs"]};" '''
                 'title="green triangle — the conviction histogram crossed ABOVE zero on this '
                 'bar: the oscillator has pulled above its own signal line.">▲ BUY</td>')
     if s == 'Sell':
-        return ('<td class="numeric" style="color:#FFA726; font-weight:700; font-size:0.68rem;" '
+        return (f'<td class="numeric" style="color:{_sid_sell()}; font-weight:700; '
+                f'''font-size:{ui.FS["xs"]};" '''
                 'title="yellow diamond — the conviction histogram crossed BELOW zero on this '
                 'bar: the oscillator has dropped under its own signal line.">◆ SELL</td>')
-    return '<td class="numeric" style="color:#4B5563; font-size:0.68rem;">—</td>'
+    return f'''<td class="numeric" style="color:{_dim()}; font-size:{ui.FS["xs"]};">—</td>'''
 
 
 def _hold_cell(age, horizon, direction) -> str:
@@ -4749,19 +4892,20 @@ def _hold_cell(age, horizon, direction) -> str:
         a = float(age)
         h = int(horizon)
     except (TypeError, ValueError):
-        return '<td class="numeric" style="color:#4B5563;">—</td>'
+        return f'<td class="numeric" style="color:{_dim()};">—</td>'
     if not np.isfinite(a) or h <= 0:
-        return '<td class="numeric" style="color:#4B5563;">—</td>'
+        return f'<td class="numeric" style="color:{_dim()};">—</td>'
     n = int(a)
     d = int(direction or 0)
-    col = '#00E676' if d > 0 else '#FFA726' if d < 0 else '#787B86'
+    col = _sid_buy() if d > 0 else _sid_sell() if d < 0 else _sid_neut()
     if n > h:
-        return ('<td class="numeric" style="color:#787B86; font-size:0.65rem;" '
+        return (f'<td class="numeric" style="color:{_sid_neut()}; '
+                f'''font-size:{ui.FS["2xs"]};" '''
                 f'title="window expired — the measured edge does not extend past {h} bars">expired</td>')
     frac = 1.0 - (n / max(h, 1))
     title = (f'day {n} of {h} in the hold window · {frac*100:.0f}% of the measured horizon left. '
              f'Entry was the open after the signal bar.')
-    return (f'<td class="numeric" style="color:{col}; font-weight:600; font-size:0.65rem;" '
+    return (f'<td class="numeric" style="color:{col}; font-weight:600; font-size:{ui.FS["2xs"]};" '
             f'title="{html.escape(title)}">{n}/{h}</td>')
 
 
@@ -4778,13 +4922,13 @@ def _entry_status(row, offset: int, side: str = 'buy'):
     which already knows the bucket it is filling — has to say.
     """
     if offset == 0:
-        return ('Now', '#94a3b8', 'fresh — fired on the snapshot bar')
+        return ('Now', _sid_neut(), 'fresh — fired on the snapshot bar')
     closes = row.get('Close_Hist')
     if not isinstance(closes, (list, tuple)) or offset >= len(closes):
-        return ('—', '#4B5563', '')
+        return ('—', _dim(), '')
     fire_close, now_close = closes[offset], closes[0]
     if not (pd.notna(fire_close) and pd.notna(now_close) and float(fire_close) > 0):
-        return ('—', '#4B5563', '')
+        return ('—', _dim(), '')
     # Direction of the trade the signal implied: a cross UP is the long.
     side_sign = 1.0 if _is_buy_side(side) else -1.0
     dm = (float(now_close) - float(fire_close)) / float(fire_close) * side_sign
@@ -4793,23 +4937,23 @@ def _entry_status(row, offset: int, side: str = 'buy'):
     if scale and scale > 0:
         sig = dm / scale
         title = f'{dm*100:+.1f}% since the fire bar, in the signal\'s direction ({sig:+.1f} sigma)'
-        if sig <= -1.0: return ('Adverse', '#E8555A', title)
-        if sig >= 1.5:  return ('Extended', '#FB923C', title)
-        if sig >= 0.5:  return ('Running', '#5EBFA8', title)
-        return ('Open', '#2DD4A8', title)
+        if sig <= -1.0: return ('Adverse', ui.table_tokens()["rose"], title)
+        if sig >= 1.5:  return ('Extended', ui.table_tokens()["amber"], title)
+        if sig >= 0.5:  return ('Running', _sid_buy(), title)
+        return ('Open', _sid_buy(), title)
     title = f'{dm*100:+.1f}% since the fire bar, in the signal\'s direction'
-    if dm <= -0.03: return ('Adverse', '#E8555A', title)
-    if dm >= 0.06:  return ('Extended', '#FB923C', title)
-    if dm >= 0.02:  return ('Running', '#5EBFA8', title)
-    return ('Open', '#2DD4A8', title)
+    if dm <= -0.03: return ('Adverse', ui.table_tokens()["rose"], title)
+    if dm >= 0.06:  return ('Extended', ui.table_tokens()["amber"], title)
+    if dm >= 0.02:  return ('Running', _sid_buy(), title)
+    return ('Open', _sid_buy(), title)
 
 
 def _status_cell(status) -> str:
     """Render a (label, color, title) status tuple as a small table cell."""
     label, color, title = (status if isinstance(status, (tuple, list)) and len(status) == 3
-                           else ('—', '#4B5563', ''))
+                           else ('—', _dim(), ''))
     _t = html.escape(str(title)) if title else ''
-    return (f'<td class="numeric" style="color:{color}; font-weight:700; font-size:0.62rem;" '
+    return (f'<td class="numeric" style="color:{color}; font-weight:700; font-size:{ui.FS["2xs"]};" '
             f'title="{_t}">{html.escape(str(label))}</td>')
 
 
@@ -4909,13 +5053,13 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timefram
     _TREND_EPS = 0.10
     if newest_avg > older_avg + _TREND_EPS:
         trend = f"{SVGS['UP']} Strengthening"
-        trend_color = "#2DD4A8"
+        trend_color = _sid_buy()
     elif newest_avg < older_avg - _TREND_EPS:
         trend = f"{SVGS['DOWN']} Weakening"
-        trend_color = "#E8555A"
+        trend_color = ui.table_tokens()["rose"]
     else:
         trend = "— Stable"
-        trend_color = "#D4A853"
+        trend_color = ui.table_tokens()["amber"]
 
     return buckets, stats, trend, trend_color
 
@@ -4925,10 +5069,9 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
     """Build the age-grouped HTML table of fired signals, with section headers."""
     _pal = _side_palette(side)
     accent_light = _pal["accent_light"]
-    border_color = _pal["border_color"]
-    header_bg    = _pal["header_bg"]
     _mark, _label = _pal["mark"], _pal["label"]
     k = eng.SID_K if k is None else float(k)
+    _MAXH = 760
     _NCOLS = 11
 
     table_rows = []
@@ -4945,9 +5088,14 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
         avg_abs_z = stats[age].get('avg_abs_z', 0)
         avg_pct   = stats[age].get('avg_pct_change', 0)
         count     = stats[age]['count']
+        # The row carries NOTHING inline but its accent ink. `.sect` in
+        # table_shell_css already gives it the surface and a hairline above and
+        # below; the inline pair here restated both and made the lower one 2px —
+        # the heaviest horizontal line in the app, under its quietest content.
+        # A header is a label for the rows beneath it, not a claim about them.
         table_rows.append(f"""
-        <tr style="background: {header_bg}; border-bottom: 2px solid {border_color};">
-            <td colspan="{_NCOLS}" style="padding: 0.75rem 1rem; font-family: 'IBM Plex Mono', monospace !important; font-size: 0.8rem !important; font-weight: 700; color: {accent_light}; text-transform: uppercase; letter-spacing: 0.05em;">
+        <tr>
+            <td class="sect" colspan="{_NCOLS}" style="color: {accent_light};">
                 {_mark} {age} · {count} {_label} signal{'s' if count != 1 else ''} · Avg force: {avg_abs_z:.2f}σ · Avg %: {avg_pct:+.1f}
             </td>
         </tr>
@@ -4960,11 +5108,12 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
             pct_change = float(row.get('PctChange', 0) or 0)
             cvd_slope = float(row.get('CVD_Slope', 0) or 0)
             abs_strength = float(row.get('Abs_Strength', 0) or 0)
-            abs_color = _signed_color(abs_strength - 1.0, pos="#fbbf24", neg="#38bdf8")  # >1× = amber
+            _t = ui.table_tokens()
+            abs_color = _signed_color(abs_strength - 1.0, pos=_t["amber"], neg=_t["cyan"])  # >1× = amber
             zone = html.escape(str(row.get('Zone', '—')))
 
             pct_color        = _signed_color(pct_change)
-            cvd_slope_color  = _signed_color(cvd_slope, pos="#4a9eff", neg="#D4A853")
+            cvd_slope_color  = _signed_color(cvd_slope, pos=_t["accent"], neg=_t["amber"])
             cvd_slope_arrow  = _delta_arrow(cvd_slope)
 
             # The readings at the bar that FIRED this signal (its own bar, not today's).
@@ -4980,7 +5129,7 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
             conv_cell  = _conv_cell(row.get('Conviction'))
             hold_cell  = _hold_cell(row.get('SID_Hold_Age'), row.get('SID_Horizon', eng.SID_HORIZON),
                                     row.get('SID_Hold_Dir'))
-            entry_cell = _status_cell(row.get('_entry', ('—', '#4B5563', '')))
+            entry_cell = _status_cell(row.get('_entry', ('—', _dim(), '')))
 
             table_rows.append(f"""
             <tr>
@@ -4992,8 +5141,8 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
                 {conv_cell}
                 {hold_cell}
                 {entry_cell}
-                <td class="numeric" style="color: #94A3B8; font-size: 0.65rem;">{zone}</td>
-                <td class="numeric" style="color: {cvd_slope_color}; font-size: 0.65rem; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
+                <td class="numeric" style="color: {_sid_neut()}; font-size: {ui.FS["2xs"]};">{zone}</td>
+                <td class="numeric" style="color: {cvd_slope_color}; font-size: {ui.FS["2xs"]}; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
                 <td class="numeric" style="color: {abs_color}; font-weight: 600;">{abs_strength:.2f}×</td>
             </tr>
             """)
@@ -5001,8 +5150,7 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
     if not table_rows:
         table_rows.append(f"""
         <tr>
-            <td colspan="{_NCOLS}" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
-                font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
+            <td class="empty" colspan="{_NCOLS}">
                 — no {_label} signals in the last 5 bars —
             </td>
         </tr>""")
@@ -5011,78 +5159,10 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
     <!DOCTYPE html>
     <html>
     <head>
-    <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        * {{
-            -webkit-text-size-adjust: 100%;
-            -moz-text-size-adjust: 100%;
-            text-size-adjust: 100%;
-        }}
-        body {{
-            font-family: 'IBM Plex Mono', monospace;
-            background: transparent;
-            color: #F1F5F9;
-            padding: 0.5rem 0.5rem 1.5rem 0.5rem;
-            font-size: 16px !important;
-        }}
-        @media (max-width: 768px) {{
-            body {{
-                font-size: 16px !important;
-            }}
-        }}
-        .portfolio-table {{
-            width: 100%;
-            border-radius: 10px;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            background: linear-gradient(145deg, rgba(17, 24, 39, 0.45) 0%, rgba(17, 24, 39, 0.4) 100%);
-        }}
-        .portfolio-table table {{
-            width: 100%;
-            min-width: 480px;
-            border-collapse: collapse;
-        }}
-        .portfolio-table thead th {{
-            background: linear-gradient(180deg, rgba(10, 14, 23, 0.95) 0%, rgba(10, 14, 23, 0.85) 100%);
-            color: #4B5563;
-            font-size: 0.62rem !important;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            padding: 0.75rem 0.75rem;
-            border-bottom: 2px solid {border_color};
-            text-align: left;
-        }}
-        .portfolio-table thead th.numeric {{ text-align: right; }}
-        .portfolio-table tbody tr {{
-            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-            transition: background 0.2s ease;
-        }}
-        .portfolio-table tbody tr:nth-child(odd) {{ background: rgba(255, 255, 255, 0.01); }}
-        .portfolio-table tbody tr:nth-child(even) {{ background: rgba(255, 255, 255, 0.005); }}
-        .portfolio-table tbody tr:hover {{ background: {border_color}; }}
-        .portfolio-table tbody td {{
-            padding: 0.75rem 0.75rem;
-            color: #F1F5F9;
-            vertical-align: middle;
-            font-size: 0.75rem !important;
-        }}
-        .portfolio-table tbody td.symbol {{
-            font-weight: 700;
-            font-size: 0.78rem;
-            letter-spacing: 0.02em;
-            font-family: 'Space Grotesk', sans-serif;
-        }}
-        .portfolio-table tbody td.numeric {{
-            text-align: right;
-            font-variant-numeric: tabular-nums;
-        }}
-    </style>
+    <style>{ui.table_shell_css(max_height=_MAXH)}</style>
     </head>
     <body>
-    <div class="portfolio-table">
+    <div class="tt-scroll">
         <table>
             <thead>
                 <tr>
@@ -5111,17 +5191,15 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
 
 def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy', k: float = None) -> str:
     """Build the full-universe HTML table for Pulse Narrative mode (every symbol)."""
-    _pal = _side_palette(side)
-    border_color = _pal["border_color"]
     k = eng.SID_K if k is None else float(k)
+    _MAXH = 1200
     _NCOLS = 11
 
     table_rows = []
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="{_NCOLS}" style="text-align:center; color:#374151; font-family:'IBM Plex Mono',monospace;
-                font-size:0.72rem; letter-spacing:0.06em; padding:2.25rem 1rem;">
+            <td class="empty" colspan="{_NCOLS}">
                 — no data available —
             </td>
         </tr>""")
@@ -5133,10 +5211,11 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy', k: float = 
             bar_delta = float(row.get('Bar_Delta', 0) or 0)
             cvd_slope = float(row.get('CVD_Slope', 0) or 0)
             abs_strength = float(row.get('Abs_Strength', 0) or 0)
-            abs_color = _signed_color(abs_strength - 1.0, pos="#fbbf24", neg="#38bdf8")
+            _t = ui.table_tokens()
+            abs_color = _signed_color(abs_strength - 1.0, pos=_t["amber"], neg=_t["cyan"])
 
             pct_color       = _signed_color(pct_change)
-            cvd_slope_color = _signed_color(cvd_slope, pos="#4a9eff", neg="#D4A853")
+            cvd_slope_color = _signed_color(cvd_slope, pos=_t["accent"], neg=_t["amber"])
             cvd_slope_arrow = _delta_arrow(cvd_slope)
 
             # `Signal` IS SID_Hist_Z, so showing both would duplicate one number. The
@@ -5151,16 +5230,16 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy', k: float = 
 
             table_rows.append(f"""
             <tr>
-                <td class="symbol" style="color: #F1F5F9;">{symbol}</td>
+                <td class="symbol" style="color: {ui.table_tokens()["ink_primary"]};">{symbol}</td>
                 <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
-                <td class="numeric" style="color: #60A5FA; font-weight: 600;">{fade_txt}</td>
+                <td class="numeric" style="color: {ui.table_tokens()["accent"]}; font-weight: 600;">{fade_txt}</td>
                 {z_cell}
                 {side_cell}
                 {conv_cell}
                 {hold_cell}
-                <td class="numeric" style="color: #D4A853; font-weight: 600;">{_human_vol(bar_delta)}</td>
-                <td class="numeric" style="color: {cvd_slope_color}; font-size: 0.65rem; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
+                <td class="numeric" style="color: {ui.table_tokens()["amber"]}; font-weight: 600;">{_human_vol(bar_delta)}</td>
+                <td class="numeric" style="color: {cvd_slope_color}; font-size: {ui.FS["2xs"]}; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
                 <td class="numeric" style="color: {abs_color}; font-weight: 600;">{abs_strength:.2f}×</td>
             </tr>
             """)
@@ -5169,61 +5248,10 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy', k: float = 
     <!DOCTYPE html>
     <html>
     <head>
-    <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{
-            font-family: 'IBM Plex Mono', monospace;
-            background: transparent;
-            color: #F1F5F9;
-            padding: 0.5rem;
-            font-size: 14px;
-        }}
-        .portfolio-table {{
-            width: 100%;
-            border-radius: 8px;
-            overflow-x: auto;
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            background: rgba(10, 14, 23, 0.4);
-        }}
-        .portfolio-table table {{
-            width: 100%;
-            border-collapse: collapse;
-        }}
-        .portfolio-table thead th {{
-            background: rgba(15, 23, 42, 0.9);
-            color: #94A3B8;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            padding: 0.75rem;
-            border-bottom: 2px solid {border_color};
-            text-align: left;
-        }}
-        .portfolio-table thead th.numeric {{ text-align: right; }}
-        .portfolio-table tbody tr {{
-            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-        }}
-        .portfolio-table tbody tr:hover {{ background: rgba(255, 255, 255, 0.04); }}
-        .portfolio-table tbody td {{
-            padding: 0.85rem 0.75rem;
-            vertical-align: middle;
-            font-size: 0.75rem;
-            white-space: nowrap;
-        }}
-        .portfolio-table tbody td.symbol {{
-            font-weight: 700;
-            font-family: 'Space Grotesk', sans-serif;
-        }}
-        .portfolio-table tbody td.numeric {{
-            text-align: right;
-            font-variant-numeric: tabular-nums;
-        }}
-    </style>
+    <style>{ui.table_shell_css(max_height=_MAXH)}</style>
     </head>
     <body>
-    <div class="portfolio-table">
+    <div class="tt-scroll">
         <table>
             <thead>
                 <tr>
@@ -5264,24 +5292,17 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', k: fl
     """
     _pal = _side_palette(side)
     accent_light = _pal["accent_light"]
-    border_color = _pal["border_color"]
     _is_buy = _is_buy_side(side)
     _pct_col = _priority_pct_col(side)
     k = eng.SID_K if k is None else float(k)
+    _MAXH = 900
     _NCOLS = 13
 
     table_rows = []
     if df.empty:
         table_rows.append(f"""
         <tr>
-            <td colspan="{_NCOLS}" style="
-                text-align: center;
-                color: #374151;
-                font-family: 'IBM Plex Mono', monospace;
-                font-size: 0.72rem;
-                letter-spacing: 0.06em;
-                padding: 2.25rem 1rem;
-            ">— no symbols to rank —</td>
+            <td class="empty" colspan="{_NCOLS}">— no symbols to rank —</td>
         </tr>
         """)
     else:
@@ -5303,16 +5324,19 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', k: fl
             vol_reg  = str(row.get('Vol_Regime', 'NORMAL'))
 
             # Regime risk context — displayed beside the signal, never inside it.
+            _t = ui.table_tokens()
             regime_tag = "NEUTRAL"
-            regime_color = "#94a3b8"
+            regime_color = _sid_neut()
             if _is_buy:
-                if hmm_bull > 0.7: regime_tag, regime_color = "BULL", _GREEN
-                elif hmm_bull < 0.3: regime_tag, regime_color = "BEAR", _RED
+                if hmm_bull > 0.7: regime_tag, regime_color = "BULL", _t["emerald"]
+                elif hmm_bull < 0.3: regime_tag, regime_color = "BEAR", _t["rose"]
             else:
-                if hmm_bear > 0.7: regime_tag, regime_color = "BEAR", _RED
-                elif hmm_bear < 0.3: regime_tag, regime_color = "BULL", _GREEN
+                if hmm_bear > 0.7: regime_tag, regime_color = "BEAR", _t["rose"]
+                elif hmm_bear < 0.3: regime_tag, regime_color = "BULL", _t["emerald"]
 
-            vol_color = {"LOW": "#60a5fa", "NORMAL": "#94a3b8", "HIGH": "#fbbf24", "EXTREME": "#f87171"}.get(vol_reg, "#94a3b8")
+            _vt = ui.table_tokens()
+            vol_color = {"LOW": _vt["accent"], "NORMAL": _vt["ink_tertiary"],
+                         "HIGH": _vt["amber"], "EXTREME": _vt["rose"]}.get(vol_reg, _vt["ink_tertiary"])
 
             # `Signal` IS SID_Hist_Z, so the two columns would duplicate. Show the
             # crossing force beside the level instead — it is the quantity that separates
@@ -5324,19 +5348,19 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', k: fl
 
             table_rows.append(f"""
             <tr>
-                <td class="numeric" style="color: #D4A853; font-weight: 700;">{rank_str}</td>
+                <td class="numeric" style="color: {ui.table_tokens()["amber"]}; font-weight: 700;">{rank_str}</td>
                 <td class="symbol">{symbol}</td>
-                <td class="numeric" style="color: #4a9eff; font-weight: 700;">TOP {min(100.0, 101-pct_rank):,.1f}%</td>
+                <td class="numeric" style="color: {ui.table_tokens()["accent"]}; font-weight: 700;">TOP {min(100.0, 101-pct_rank):,.1f}%</td>
                 <td class="numeric currency">{price:,.2f}</td>
                 <td class="numeric" style="color: {pct_color}; font-weight: 600;">{pct_change:+.2f}%</td>
                 <td class="numeric" style="color: {accent_light}; font-weight: 600;">{fade_txt}</td>
                 {z_cell}
                 {side_cell}
                 {conv_cell}
-                <td class="numeric" style="color: #D4A853; font-weight: 600;">{_human_vol(bar_delta)}</td>
-                <td class="numeric" style="color: {cvd_slope_color}; font-size: 0.65rem; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
-                <td class="numeric" style="color: {regime_color}; font-weight: 700; font-size: 0.65rem;">{regime_tag}</td>
-                <td class="numeric" style="color: {vol_color}; font-weight: 700; font-size: 0.65rem;">{vol_reg}</td>
+                <td class="numeric" style="color: {ui.table_tokens()["amber"]}; font-weight: 600;">{_human_vol(bar_delta)}</td>
+                <td class="numeric" style="color: {cvd_slope_color}; font-size: {ui.FS["2xs"]}; font-weight: 600;">{cvd_slope_arrow}{_human_vol(abs(cvd_slope), signed=False)}</td>
+                <td class="numeric" style="color: {regime_color}; font-weight: 700; font-size: {ui.FS["2xs"]};">{regime_tag}</td>
+                <td class="numeric" style="color: {vol_color}; font-weight: 700; font-size: {ui.FS["2xs"]};">{vol_reg}</td>
             </tr>
             """)
 
@@ -5344,68 +5368,10 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy', k: fl
     <!DOCTYPE html>
     <html>
     <head>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{
-            font-family: 'IBM Plex Mono', monospace;
-            background: transparent;
-            color: #F1F5F9;
-            padding: 0.5rem;
-        }}
-        .portfolio-table {{
-            width: 100%;
-            border-radius: 10px;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            background: linear-gradient(145deg, rgba(17, 24, 39, 0.45) 0%, rgba(17, 24, 39, 0.4) 100%);
-        }}
-        .portfolio-table table {{
-            width: 100%;
-            min-width: 480px;
-            border-collapse: collapse;
-        }}
-        .portfolio-table thead th {{
-            background: linear-gradient(180deg, rgba(10, 14, 23, 0.95) 0%, rgba(10, 14, 23, 0.85) 100%);
-            color: #4B5563;
-            font-size: 0.62rem !important;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            padding: 0.75rem 0.75rem;
-            border-bottom: 2px solid {border_color};
-            text-align: left;
-        }}
-        .portfolio-table thead th.numeric {{ text-align: right; }}
-        .portfolio-table tbody tr {{
-            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-            transition: background 0.2s ease;
-        }}
-        .portfolio-table tbody tr:nth-child(odd) {{ background: rgba(255, 255, 255, 0.01); }}
-        .portfolio-table tbody tr:nth-child(even) {{ background: rgba(255, 255, 255, 0.005); }}
-        .portfolio-table tbody tr:hover {{ background: {border_color}; }}
-        .portfolio-table tbody td {{
-            padding: 0.85rem 0.75rem;
-            color: #F1F5F9;
-            vertical-align: middle;
-            font-size: 0.75rem !important;
-            white-space: nowrap;
-        }}
-        .portfolio-table tbody td.symbol {{
-            font-weight: 700;
-            font-size: 0.78rem;
-            letter-spacing: 0.02em;
-            font-family: 'Space Grotesk', sans-serif;
-        }}
-        .portfolio-table tbody td.numeric {{
-            text-align: right;
-            font-variant-numeric: tabular-nums;
-        }}
-    </style>
+    <style>{ui.table_shell_css(max_height=_MAXH)}</style>
     </head>
     <body>
-    <div class="portfolio-table">
+    <div class="tt-scroll">
         <table>
             <thead>
                 <tr>
@@ -5536,7 +5502,6 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
             help=f"{len(sell_df)} symbols firing the yellow diamond (histogram crossed below zero).",
         )
 
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
     # ── Raw Data Table ────────────────────────────────────────────────────
     ui.render_section_header(
@@ -5577,36 +5542,28 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     display_frame = (results_df[cols]
                      .sort_values("SID_Hist_Z", ascending=False, na_position='last')
                      .rename(columns=_col_display_names))
-    _sysdata_colcfg = {
-        "Hist σ": st.column_config.NumberColumn(
-            help=("The screening variable: the conviction histogram (oscillator minus its signal "
-                  "line) in σ of its own distribution. Its CROSSING of zero is the signal — up "
-                  "fires BUY, down fires SELL — so on a fired bar this reads near zero."),
-            format="%+.2f",
-        ),
-        "Force": st.column_config.NumberColumn(
-            help=("Crossing force: the one-bar change in the histogram, in the same σ units. What "
-                  "separates a crossing that snaps open from one that drifts across."),
-            format="%+.2f",
-        ),
-        "Oscillator": st.column_config.NumberColumn(
-            help=("The conviction oscillator itself, bounded ±100. Above "
-                  "zero, participation-weighted effort is net upward. Context for the signal."),
-            format="%+.1f",
-        ),
-        "Conviction": st.column_config.ProgressColumn(
-            help=("tanh(|Force|) × the cost gate, in [0,1]. Not a probability — a description of "
-                  "how forcefully the crossing opened."),
-            format="%.2f", min_value=0.0, max_value=1.0,
-        ),
-        "Hold Age": st.column_config.NumberColumn(
-            help="Bars since the current hold window opened. Blank = no window open.",
-            format="%.0f",
-        ),
-    }
-    st.dataframe(display_frame, width='stretch', height=500, column_config=_sysdata_colcfg)
+    ui.render_table_panel(
+        display_frame, key="sysdata-frame",
+        context=f"{len(display_frame)} symbols",
+        show_index=False, label_col="Symbol", max_height=560,
+        col_precision={"Hist \u03c3": 2, "Force": 2, "Oscillator": 1, "Conviction": 2,
+                       "Hold Age": 0, "Hist %ile": 1},
+        sign_color_cols={"Hist \u03c3", "Force", "Oscillator"},
+        footer=_glossary({
+            "Hist \u03c3": "The screening variable: the conviction histogram (oscillator minus its "
+                       "signal line) in \u03c3 of its own distribution. Its CROSSING of zero is the "
+                       "signal — up fires BUY, down fires SELL — so on a fired bar this reads "
+                       "near zero.",
+            "Force": "Crossing force: the one-bar change in the histogram, in the same \u03c3 units. "
+                     "What separates a crossing that snaps open from one that drifts across.",
+            "Oscillator": "The conviction oscillator itself, bounded \u00b1100. Above zero, "
+                          "participation-weighted effort is net upward. Context for the signal.",
+            "Conviction": "tanh(|Force|) × the cost gate, in [0,1]. Not a probability — a "
+                          "description of how forcefully the crossing opened.",
+            "Hold Age": "Bars since the current hold window opened. Blank = no window open.",
+        }),
+    )
 
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
     # ── Signal Type Reference ─────────────────────────────────────────────
     ui.render_section_header(
@@ -5617,42 +5574,23 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     # One column per reference card so the three cards widen equally and fill the
     # row — a fixed 4-column grid would leave an empty slot / dead space on the right.
     ref_cols = st.columns(len(_SIGNAL_TYPE_REFERENCE))
-    accent_var_map = {
-        "amber":   "var(--amber)",
-        "violet":  "var(--violet)",
-        "cyan":    "var(--cyan)",
-        "rose":    "var(--rose)",
-        "emerald": _SID_BUY,
-    }
-    # min-height + flex layout keeps all cards visually equal regardless of body text
-    # length. Without it cards stretch to their own content because Streamlit's columns
-    # don't enforce a shared height.
-    SIG_CARD_MIN_H = "14rem"
     for slot, (title, accent_key, body) in zip(ref_cols, _SIGNAL_TYPE_REFERENCE):
         with slot:
-            color = accent_var_map.get(accent_key, "var(--ink-secondary)")
-            st.markdown(f"""
-            <div style="background:rgba(255,255,255,0.015);
-                        border:1px solid var(--border);
-                        border-left:3px solid {color};
-                        border-radius:var(--r-sm);
-                        padding:0.85rem 1rem;
-                        min-height:{SIG_CARD_MIN_H};
-                        display:flex; flex-direction:column;
-                        box-sizing:border-box;">
-                <div style="font-family:var(--display); font-size:0.78rem; font-weight:700;
-                            color:{color}; letter-spacing:0.04em; margin-bottom:0.5rem;">
-                    {title}
-                </div>
-                <div style="font-family:var(--data); font-size:0.7rem; color:var(--ink-secondary);
-                            line-height:1.55; flex:1;">
-                    {body}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            # `panel` rather than a card built here. The hand-rolled one carried
+            # a white tint (`rgba(255,255,255,0.015)` — invisible on Paper) and
+            # a 3px coloured left bar, which is the one container shape this
+            # design system removed on purpose: everything else is a hairline
+            # panel, and a card with a coloured edge reads as a different
+            # product's component sitting on the page.
+            #
+            # The equal-height problem the min-height hack existed for is
+            # handled by the panel's own grid, the same way the landing page's
+            # three system panels are.
+            with ui.panel(f"sigref-{accent_key}", title):
+                st.markdown(f'<div class="panel-copy">{body}</div>',
+                            unsafe_allow_html=True)
 
     # ── Edge Study ────────────────────────────────────────────────────────
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     _render_edge_study_panel(sid, study)
 
 
@@ -5731,7 +5669,7 @@ def main():
         # THIS click shows immediately instead of one interaction later.
         _refresh_engine_card()
         if study is None and not _had_study:
-            st.warning(
+            ui_warning(
                 "**Edge study could not complete.** Not enough history came back to measure "
                 "expectancy on this universe (a common cause is yfinance rate-limiting a deep "
                 "request from a shared cloud IP). The screen below still runs; the expectancy "
@@ -5818,13 +5756,94 @@ def main():
     study = _edge_cache_get(_edge_key(universe, selected_index, timeframe, sid))
     _mv_label, _mv_kind, _mv_detail = _study_state(study, "buy")
 
+    # The universe as the command bar names it — same resolution the rail
+    # readout uses, so the two cannot disagree about what is being analysed.
+    _cb_universe = selected_index or universe
+    if universe == "ETF Index":
+        _cb_universe = "NSE ETFs"
+    elif universe == "Global Macro":
+        _cb_universe = "Global Macro Bonds"
+    elif universe == "Global Indexes" and not selected_index:
+        _cb_universe = "Global Benchmark Indexes"
+
+    # Publish what the command bar resolved, so every panel header downstream
+    # names the same universe and timeframe without being handed them.
+    st.session_state["active_universe"] = _cb_universe
+    st.session_state["active_timeframe"] = timeframe
+
     if show_landing:
+        # The masthead is the cold-start screen's job and only that: it is the
+        # one thing on an empty page that says what the application is. Once a
+        # session is loaded the command bar takes over — it carries the same
+        # mark plus what the masthead cannot, namely what is being analysed and
+        # how fresh it is. Two persistent headers stacked on every page is one
+        # more than the screen can justify.
         ui.render_header("Sanket", f"Market Signal Screener · {ENGINE_NAME}")
         if st.session_state.get("run_error"):
-            st.error(st.session_state["run_error"])
+            ui.render_warning_box("Run failed", str(st.session_state["run_error"]))
         render_landing_page()
         render_footer()
     else:
+        # ── The command bar — the first element on every loaded page ──────
+        # Reading order left to right is identity → state → trust: which
+        # universe, what the screen found, and whether the expectancy behind it
+        # has been measured. NOTHING renders above this bar; data-quality
+        # notices hang BELOW it in the notice rail, so the thing being analysed
+        # is always the first thing on screen rather than an apology about it.
+        _run_stats = st.session_state.get("screener_run_stats", {}) or {}
+        _cb_meta = [
+            ("Timeframe", timeframe),
+            ("As of", analysis_date.strftime("%d %b %Y")
+             if hasattr(analysis_date, "strftime") else str(analysis_date)),
+        ]
+        if _run_stats.get("analyzed"):
+            _cb_meta.insert(0, ("Symbols", f"{_run_stats['analyzed']} / "
+                                           f"{_run_stats.get('total_in_universe', '—')}"))
+        ui.render_top_bar(
+            target=_cb_universe,
+            status_label=_mv_label,
+            status_tone=_mv_kind,
+            meta_items=_cb_meta,
+        )
+
+        # ── Notice rail — everything that qualifies the reading above it ──
+        _notices = []
+        if st.session_state.get("run_error"):
+            _notices.append({"kind": "warning", "title": "Run failed",
+                             "body": html.escape(str(st.session_state["run_error"]))})
+        if _run_stats.get("warming_up"):
+            _notices.append({
+                "kind": "info", "title": "Warming up",
+                "body": f"{_run_stats['warming_up']} symbol(s) excluded — fewer than "
+                        f"{sid.min_bars} bars, so the oscillator chain is not warm.",
+            })
+        if _run_stats.get("failed"):
+            _notices.append({
+                "kind": "warning", "title": "Incomplete fetch",
+                "body": f"{_run_stats['failed']} symbol(s) failed to fetch or analyse; "
+                        f"the cross-section below is the remainder.",
+            })
+        if study is None:
+            _notices.append({
+                "kind": "info", "title": "Expectancy not measured",
+                "body": "No edge study exists for this selection yet. Signals still fire "
+                        "at full conviction — the measurement is reported, never applied.",
+            })
+        if sid.norm_is_adapted:
+            # The one setting on screen that is Sanket's rather than the source
+            # indicator's. It belongs here and not in the rail: it is a fact
+            # about THIS run, it only applies on Weekly, and the notice rail is
+            # where facts about this run go.
+            _notices.append({
+                "kind": "info", "title": "Adapted normalization window",
+                "body": f"Weekly runs a {sid.norm}-bar window, not the source's "
+                        f"{eng.SID_NORM}. Warmup costs two of them, so at "
+                        f"{eng.SID_NORM} a weekly symbol would need "
+                        f"{eng.warmup_bars(sid.length, eng.SID_NORM, sid.vol_n, sid.smooth, sid.signal)} "
+                        f"weekly bars before the screen showed anything.",
+            })
+        ui.render_notice_rail(_notices)
+
         # Body renders directly from session-state — analysis (when triggered)
         # already populated session state above in the run_clicked block.
 
@@ -5840,7 +5859,6 @@ def main():
                 if _col not in results_df.columns:
                     results_df[_col] = "—"
 
-            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
             if mode == "Pulse Narrative":
                 tab_narrative, tab_strength, tab_raw = st.tabs(["Pulse Narrative Dashboard", "Signal Strength", "System Data"])
@@ -5872,16 +5890,19 @@ def main():
                     with m4: ui.render_metric_card("Bullish Breadth", f"{bull_bias:.0f}%",
                                                    "symbols with the histogram above zero",
                                                    "success" if bull_bias > 50 else "danger")
-                    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                     buy_narr_tab, sell_narr_tab = st.tabs(["Long side", "Short side"])
                     with buy_narr_tab:
                         buy_rank_df = results_df.sort_values('Priority_Long', ascending=False, na_position='last')
-                        st.components.v1.html(_build_narrative_table_html(buy_rank_df, side='buy', k=sid.k),
-                                              height=min(1200, 150 + len(buy_rank_df) * 52), scrolling=True)
+                        with ui.html_panel("pn-narr-buy", context=_chart_ctx("long side")):
+                            st.components.v1.html(
+                                _build_narrative_table_html(buy_rank_df, side='buy', k=sid.k),
+                                height=ui.table_iframe_height(len(buy_rank_df), max_height=1200))
                     with sell_narr_tab:
                         sell_rank_df = results_df.sort_values('Priority_Short', ascending=False, na_position='last')
-                        st.components.v1.html(_build_narrative_table_html(sell_rank_df, side='sell', k=sid.k),
-                                              height=min(1200, 150 + len(sell_rank_df) * 52), scrolling=True)
+                        with ui.html_panel("pn-narr-sell", context=_chart_ctx("short side")):
+                            st.components.v1.html(
+                                _build_narrative_table_html(sell_rank_df, side='sell', k=sid.k),
+                                height=ui.table_iframe_height(len(sell_rank_df), max_height=1200))
 
                 # ════ Pulse Narrative · TAB 2: SIGNAL STRENGTH ═════════════════════════════
                 with tab_strength:
@@ -5917,32 +5938,31 @@ def main():
                              else "not measured on this universe"),
                             _mv_kind)
                     if pn_warming:
-                        st.caption(f"{pn_warming} symbol(s) excluded — fewer than {sid.min_bars} bars, "
+                        ui.render_note(f"{pn_warming} symbol(s) excluded — fewer than {sid.min_bars} bars, "
                                    "so the oscillator chain is not warm yet.")
 
-                    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                     pn_l, pn_s = st.columns(2)
                     with pn_l:
                         st.markdown(
-                            f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.62rem; '
+                            f'<p style="font-family:var(--data); font-size:var(--fs-2xs); '
                             f'font-weight:600; text-transform:uppercase; letter-spacing:0.1em; '
-                            f'color:{_SID_BUY}; margin:0 0 0.4rem 0;">▲ Top 10 Long Side</p>',
+                            f'color:{_sid_buy()}; margin:0 0 0.4rem 0;">▲ Top 10 Long Side</p>',
                             unsafe_allow_html=True,
                         )
                         st.components.v1.html(
                             _build_signal_strength_table_html(pn_top_buys, side='buy', k=sid.k),
-                            height=150 + len(pn_top_buys) * 55,
+                            height=ui.table_iframe_height(len(pn_top_buys), max_height=900),
                         )
                     with pn_s:
                         st.markdown(
-                            f'<p style="font-family:\'IBM Plex Mono\',monospace; font-size:0.62rem; '
+                            f'<p style="font-family:var(--data); font-size:var(--fs-2xs); '
                             f'font-weight:600; text-transform:uppercase; letter-spacing:0.1em; '
-                            f'color:{_SID_SELL}; margin:0 0 0.4rem 0;">◆ Top 10 Short Side</p>',
+                            f'color:{_sid_sell()}; margin:0 0 0.4rem 0;">◆ Top 10 Short Side</p>',
                             unsafe_allow_html=True,
                         )
                         st.components.v1.html(
                             _build_signal_strength_table_html(pn_top_sells, side='sell', k=sid.k),
-                            height=150 + len(pn_top_sells) * 55,
+                            height=ui.table_iframe_height(len(pn_top_sells), max_height=900),
                         )
 
                 # ════ Pulse Narrative · TAB 3: SYSTEM DATA ════════════════════════════════
@@ -6008,7 +6028,6 @@ def main():
                                  and pd.notna(_ss_top.get('SID_Impulse')) else "no SELL signals"),
                                 "info")
 
-                        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                         buy_tab, sell_tab = st.tabs(["▲ BUY Signals by Timing", "◆ SELL Signals by Timing"])
 
                         def _render_age_table(df_, side_key):
@@ -6019,17 +6038,17 @@ def main():
                             _g = sum(1 for a in _age_order if _stats[a]['count'] > 0)
                             _r = sum(_stats[a]['count'] for a in _age_order)
                             st.markdown(
-                                f'<div style="font-family:var(--data); font-size:0.66rem; '
+                                f'<div style="font-family:var(--data); font-size:var(--fs-xs); '
                                 f'color:{_tcol}; padding:0.2rem 0 0.5rem 0;">{_trend} — newest crossings vs older, by crossing force.'
                                 f'</div>',
                                 unsafe_allow_html=True,
                             )
-                            st.components.v1.html(_html, height=max(120 + _g * 60 + _r * 56, 160),
+                            st.components.v1.html(_html, height=ui.table_iframe_height(_r, extra_rows=_g * 2, max_height=760),
                                                   scrolling=True)
 
                         with buy_tab:
                             st.markdown(
-                                f'<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
+                                f'<div style="font-family:var(--data); font-size:var(--fs-xs); color:var(--ink-tertiary); '
                                 f'padding:0.2rem 0 0.5rem 0;">The conviction histogram crossed <b>above zero</b> '
                                 f'— the oscillator has pulled above its own signal line. Entry is the next '
                                 f'session\'s open; the declared hold is {sid.horizon} bars. Force is what separates '
@@ -6039,7 +6058,7 @@ def main():
                             _render_age_table(buys_df, 'buy')
                         with sell_tab:
                             st.markdown(
-                                '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
+                                '<div style="font-family:var(--data); font-size:var(--fs-xs); color:var(--ink-tertiary); '
                                 'padding:0.2rem 0 0.5rem 0;">The conviction histogram crossed <b>below zero</b> '
                                 '— the oscillator has dropped under its own signal line. Symmetric with the buy '
                                 'side by construction, but symmetry is not evidence: the source indicator measured '
@@ -6049,7 +6068,7 @@ def main():
                             )
                             _render_age_table(sells_df, 'sell')
                     else:
-                        st.info(
+                        ui_info(
                             f"**No signals fired** for {selected_index} on {analysis_date} ({timeframe}). "
                             f"All {_n_analyzed} symbols were analyzed but none had its conviction "
                             f"histogram cross zero in the last 5 bars. "
@@ -6057,7 +6076,7 @@ def main():
                             "full ranking."
                         )
                         if _n_warming:
-                            st.caption(f"{_n_warming} symbol(s) excluded — fewer than {sid.min_bars} bars of history.")
+                            ui.render_note(f"{_n_warming} symbol(s) excluded — fewer than {sid.min_bars} bars of history.")
 
                 # Action Dashboard's own Signal Strength + System Data tabs.
                 # Pulse Narrative has its own equivalents inside the `if` branch above
@@ -6098,31 +6117,26 @@ def main():
                              else "not measured on this universe"),
                             _mv_kind)
 
-                    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
                     # ── column label renderer ──
                     def _col_label(side_label, side_key):
                         _p = _side_palette(side_key)
                         return f"""
-                        <p style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; font-weight:600;
+                        <p style="font-family:var(--data); font-size:var(--fs-2xs); font-weight:600;
                                    text-transform:uppercase; letter-spacing:0.1em; color:{_p['accent_light']};
                                    margin:0 0 0.4rem 0; display:flex; align-items:center; gap:0.35rem;">
                             {_p['mark']} {side_label}
                         </p>"""
 
-                    st.markdown(f"""
-                    <div style="display:flex; align-items:baseline; gap:0.65rem; margin:1.75rem 0 0.9rem 0;
-                                 padding-bottom:0.6rem; border-bottom:1px solid rgba(212,168,83,0.2);">
-                        <span style="font-family:var(--display); font-size:0.62rem; font-weight:700;
-                                     letter-spacing:0.12em; text-transform:uppercase; color:#D4A853;
-                                     padding:0.18rem 0.5rem; background:rgba(212,168,83,0.1);
-                                     border:1px solid rgba(212,168,83,0.3); border-radius:4px;">{ENGINE_CODE} ENGINE</span>
-                        <span style="font-family:var(--display); font-size:1rem; font-weight:700;
-                                     color:#F1F5F9; letter-spacing:0.04em;">Top 10 Each Side</span>
-                        <span style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:#6B7280;">
-                            highest-priority rows in the universe · a blank Side means the histogram did not cross on this bar</span>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    # Was a hand-built header: the mark in five literals of the
+                    # RETIRED amber-gold brand, a rule beneath it, and a title
+                    # repeating the section header four pixels above. This is a
+                    # division inside an already-titled section, so it uses the
+                    # component for exactly that, with the note tier under it.
+                    # The rule goes entirely: the section rhythm is the separation.
+                    ui.render_sub_header("Top 10 Each Side")
+                    ui.render_note("Highest-priority rows in the universe · a blank "
+                                   "Side means the histogram did not cross on this bar.")
 
                     top_buys  = results_df.sort_values('Priority_Long',  ascending=False, na_position='last').head(10)
                     top_sells = results_df.sort_values('Priority_Short', ascending=False, na_position='last').head(10)
@@ -6132,16 +6146,15 @@ def main():
                         st.markdown(_col_label("Top 10 Long Side", "buy"), unsafe_allow_html=True)
                         st.components.v1.html(
                             _build_signal_strength_table_html(top_buys, side='buy', k=sid.k),
-                            height=150 + len(top_buys) * 55)
+                            height=ui.table_iframe_height(len(top_buys), max_height=900))
                     with _col_s:
                         st.markdown(_col_label("Top 10 Short Side", "sell"), unsafe_allow_html=True)
                         st.components.v1.html(
                             _build_signal_strength_table_html(top_sells, side='sell', k=sid.k),
-                            height=150 + len(top_sells) * 55)
+                            height=ui.table_iframe_height(len(top_sells), max_height=900))
 
-                    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
                     st.markdown(
-                        '<div style="font-family:var(--data); font-size:0.66rem; color:var(--ink-tertiary); '
+                        '<div style="font-family:var(--data); font-size:var(--fs-xs); color:var(--ink-tertiary); '
                         'padding:0.2rem 0 0.6rem 0; line-height:1.55;">Full universe ranked by long-side '
                         'priority. The ranking is continuous, but the claim is in the <b>event</b>: the '
                         'histogram level says who is currently in control, and only its crossing is a signal. '
@@ -6152,7 +6165,7 @@ def main():
                     _all_ranked = results_df.sort_values('Priority_Long', ascending=False, na_position='last')
                     st.components.v1.html(
                         _build_signal_strength_table_html(_all_ranked, side='buy', k=sid.k),
-                        height=min(150 + len(_all_ranked) * 55, 900), scrolling=True)
+                        height=ui.table_iframe_height(len(_all_ranked), max_height=900))
 
                 # ════ Action Dashboard · TAB 3: SYSTEM DATA ═══════════════════════════
                 with tab_raw:
@@ -6173,135 +6186,53 @@ def main():
         # Always render footer
         render_footer()
 
-def _engine_card_html(sid, study) -> str:
-    """The Engine Status card as HTML. Pure, so it can be repainted after a study runs.
+#: Verdict kind (from `_verdict_kind`) -> the tone class `.rail-readout .v`
+#: understands. The readout speaks long/short/caution/accent; the study speaks
+#: success/danger/warning/neutral. One mapping, stated once, rather than a
+#: conditional at each call site.
+_VERDICT_TONE = {"success": "long", "danger": "short",
+                 "warning": "caution", "neutral": ""}
 
-    Content is a 2x4 grid — eight cells, one fact each. The sidebar gives each column roughly
-    145px, so values are kept to ~12 characters and everything verbose (confidence intervals,
-    n_eff, the studied date range, the cost basis) lives in the cell's tooltip. The full
-    per-era breakdown is in System Data ▸ Edge Study; this card is a status line, not a report.
 
-    The eight were chosen to answer, in order: is there an edge on each side, how often was the
-    signal right and could this test even have found an edge that small, on how broad a sample,
-    and at what settings and cost.
+def _render_engine_status_body(sid, study) -> None:
+    """Paint the engine's state into the current container.
+
+    Four rows at most, each one fact, in the rail's own readout grammar — the
+    same component the session readout below it uses, so the sidebar is made of
+    one kind of thing instead of a card pretending to be a rail.
+
+    Everything this deliberately does NOT show — the per-side confidence
+    intervals, the hit rate, the minimum detectable effect, the participation
+    ratio, the studied date range — is in System Data ▸ Edge Study, in full,
+    per era, with a glossary. A 145px column clipped to twelve characters was
+    not reporting those numbers, it was hinting at them.
+
+    Nor does it carry the engine's caveats any more. The bare-crossing warning
+    is stated twice in the body already — on the Signal Reference card and in
+    the SELL tab's own description — and a rail is not where a reader goes to
+    be argued with. The one disclosure with nowhere else to live, the adapted
+    weekly normalization window, moved to the notice rail, which is the
+    component for "something about THIS run you should know".
     """
-    buy_label = _study_state(study, "buy")[0]
-    cost_gate_ok = sid.cost_ok(study)
-    card_class = _verdict_kind(buy_label) if study is not None else "neutral"
-    if not cost_gate_ok:
-        card_class = "danger"
+    label, kind, _detail = _study_state(study, "buy")
+    tone = _VERDICT_TONE.get(kind, "")
+    gate_ok = sid.cost_ok(study)
 
-    DIM = "var(--ink-tertiary)"
+    rows = [("Verdict", label, tone)]
 
-    def _cell(label, value, color="var(--ink-secondary)", title=""):
-        t = f' title="{html.escape(title)}"' if title else ""
-        return (
-            f'<div{t} style="min-width:0;">'
-            f'<div style="font-family:var(--data); font-size:0.52rem; color:var(--ink-tertiary); '
-            f'text-transform:uppercase; letter-spacing:0.09em; line-height:1.2; '
-            f'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{label}</div>'
-            f'<div style="font-family:var(--data); font-size:0.72rem; font-weight:600; '
-            f'color:{color}; line-height:1.35; white-space:nowrap; overflow:hidden; '
-            f'text-overflow:ellipsis;">{value}</div></div>'
-        )
+    # The number behind the verdict, when there is one. A verdict without its
+    # magnitude is an opinion; the magnitude without the verdict is a number
+    # nobody can act on. They belong adjacent.
+    _r = (study.get("buy", "holdout") or study.get("buy", "full")) if study else None
+    if _r is not None:
+        rows.append(("Edge", f"{_r.edge:+.3f} vol", tone))
 
-    def _side_cells(side, mark):
-        r = (study.get(side, "holdout") or study.get(side, "full")) if study else None
-        if r is None:
-            return _cell(f"{mark} {side}", "—", DIM,
-                         "not measured on this universe yet")
-        col = ("var(--emerald)" if r.significant
-               else "var(--rose)" if r.anti else "var(--ink-secondary)")
-        tip = (f"{side} side, {r.era}: drift-free edge {r.edge:+.4f} vol units, "
-               f"95% CI [{r.ci_lo:+.4f}, {r.ci_hi:+.4f}] from a block bootstrap over dates. "
-               f"{r.n_events} events on {r.n_dates} dates. "
-               f"An edge is claimed only when the interval excludes zero.")
-        return _cell(f"{mark} {side}", f"{r.edge:+.3f}", col, tip)
+    rows.append(("Trigger", sid.trigger_short, ""))
+    rows.append(("Cost", f"{sid.cost_bps:.0f}bp · " + ("net +" if gate_ok else "NET NEG"),
+                 "long" if gate_ok else "short"))
 
-    _rb = (study.get("buy", "holdout") or study.get("buy", "full")) if study else None
+    ui.render_rail_readout(rows)
 
-    if _rb is not None:
-        hit_cell = _cell("HIT", f"{_rb.hit:.1f}%", "var(--ink-secondary)",
-                         f"Share of buy events where the signal beat that symbol's OWN mean "
-                         f"forward return — not a raw win rate. 50% is the no-edge line.")
-        mde_cell = _cell("RESOLVES", f"≥{_rb.mde:.3f}", "var(--ink-secondary)",
-                         f"Minimum detectable effect at this power: n_eff {_rb.n_eff:.0f} "
-                         f"independent observations, so the interval could only separate "
-                         f"effects of {_rb.mde:.3f} vol units or larger from zero. A 'no edge' "
-                         f"verdict means nothing unless this is smaller than the effect you "
-                         f"would care about.")
-    else:
-        hit_cell = _cell("HIT", "—", DIM, "not measured on this universe yet")
-        mde_cell = _cell("RESOLVES", "—", DIM, "not measured on this universe yet")
-
-    if study is not None:
-        sample_cell = _cell("SAMPLE", f"{study.n_symbols_studied} syms", "var(--ink-secondary)",
-                            f"{study.n_symbols_studied} of {study.n_symbols_universe} symbols, "
-                            f"{study.start} to {study.end}, holdout from {study.split_date}."
-                            + (f" {study.note}." if study.note else ""))
-        indep_cell = _cell("INDEP", f"{study.part_ratio:.1f}", "var(--ink-secondary)",
-                           f"Effective independent names in the cross-section "
-                           f"({study.part_ratio:.1f} of {study.n_symbols_studied} studied), from "
-                           f"the eigenvalues of their correlation matrix. Correlated symbols do "
-                           f"not each contribute a fresh observation, which is why power is "
-                           f"computed from this and not the symbol count.")
-    else:
-        sample_cell = _cell("SAMPLE", "—", DIM, "not measured on this universe yet")
-        indep_cell = _cell("INDEP", "—", DIM, "not measured on this universe yet")
-
-    # The source indicator's own evidence section says a bare zero-crossing is its WEAKEST
-    # tested configuration. That caveat must stay VISIBLE — burying it in a tooltip would
-    # quietly present the shipped default as the validated one. Same for the weekly
-    # normalization window, which is Sanket's number rather than the source's.
-    _bare = sid.k <= 0
-    _adapted = sid.norm_is_adapted
-    trigger_cell = _cell("TRIGGER ⚠ BARE" if _bare else "TRIGGER",
-                         ("hist × 0" if _bare else f"hist × ±{sid.k:g}σ") + f" · {sid.horizon}b",
-                         "var(--amber)" if _bare else "var(--ink-secondary)",
-                         f"Fires where the conviction histogram crosses "
-                         f"{'zero' if _bare else f'±{sid.k:g}σ of its own distribution'}, holds "
-                         f"{sid.horizon} bars, entry the next session's open. Oscillator: "
-                         f"{sid.length}-bar lookback, {sid.smooth}-bar smoothing, {sid.signal}-bar "
-                         f"signal line, {sid.norm}-bar normalization, {sid.participation.lower()} "
-                         f"participation capped at {sid.cap:g}×. Warmup is two nested "
-                         f"normalizations — {sid.min_bars} bars before this symbol can signal "
-                         f"at all. Every value is the source indicator's own default, which is "
-                         f"why none is adjustable — its 900-configuration search found fitted "
-                         f"and out-of-sample edge essentially uncorrelated."
-                         + (f" ADAPTED: the normalization window is Sanket's {sid.norm}, not "
-                            f"the source's {eng.SID_NORM}. At {eng.SID_NORM} a weekly symbol "
-                            f"would need {eng.warmup_bars(sid.length, eng.SID_NORM, sid.vol_n, sid.smooth, sid.signal)} "
-                            f"weekly bars — 8.7 years each — before the screen showed anything."
-                            if _adapted else "")
-                         + (" BARE CROSSING: the source measures this, its k=0 case, as the "
-                            "WEAKEST setting of the magnitude gate — +0.0015R with t = 0.2 on "
-                            "its held-out instruments. What applies here is the Edge Study "
-                            "measured on your universe, not that number."
-                            if _bare else ""))
-    cost_cell = _cell("COST", f"{sid.cost_bps:.0f}bp " + ("net +" if cost_gate_ok else "NET NEG"),
-                      "var(--emerald)" if cost_gate_ok else "var(--rose)",
-                      f"{sid.cost_bps:.1f} bp round-trip. The gate asks whether that cost, in the "
-                      f"vol units the edge is measured in, stays under the largest effect this "
-                      f"signal has ever shown ({eng.LARGEST_KNOWN_EFFECT:.3f}). It never compares "
-                      f"cost against the MEASURED edge — that would let a no-edge verdict halve "
-                      f"conviction. Basis: {sid.cost_basis(study)}.")
-
-    cells = (_side_cells("buy", "▲") + _side_cells("sell", "◆")
-             + hit_cell + mde_cell
-             + sample_cell + indep_cell
-             + trigger_cell + cost_cell)
-
-    return f"""
-        <div class="metric-card {card_class}" style="
-                min-height:auto; padding:0.8rem 0.9rem; margin-bottom:0.7rem; animation:none;">
-            <h4 style="margin:0 0 0.2rem 0;">{ENGINE_NAME}</h4>
-            <h2 style="font-size:1rem; margin:0 0 0.6rem 0; letter-spacing:-0.01em;">{buy_label}</h2>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem 0.7rem;
-                        padding-top:0.55rem; border-top:1px solid rgba(255,255,255,0.06);">
-                {cells}
-            </div>
-        </div>
-        """
 
 
 def _refresh_engine_card() -> None:
@@ -6316,21 +6247,23 @@ def _refresh_engine_card() -> None:
         return
     try:
         sid = _active_siddhi_settings()
-        slot.markdown(_engine_card_html(sid, _edge_cache_get(_edge_key(*args, sid))),
-                      unsafe_allow_html=True)
+        # `.container()` because the body is now several components rather than
+        # one HTML string; writing into the slot replaces whatever it held.
+        with slot.container():
+            _render_engine_status_body(sid, _edge_cache_get(_edge_key(*args, sid)))
     except Exception:
         pass
 
 
 def _render_engine_status_sidebar(current_universe: str, current_index,
                                   current_timeframe) -> tuple:
-    """Sidebar Engine Status panel — visible in every mode.
+    """Sidebar Engine panel — visible in every mode.
 
-    Deliberately compact: the engine, the measured verdict for the universe on screen (or an
-    honest "not measured yet"), and the four facts a reader needs to interpret it — the two
-    sides' intervals, the power behind them, the sample, and the fixed setup. The full
-    per-era breakdown lives in the Edge Study panel under System Data; this card is a status
-    line, not a report.
+    A status line, and now actually one: the verdict for the universe on screen (or an honest
+    "not measured yet"), the number behind it, what fires, and what it costs. Four rows in the
+    rail's own readout grammar. The per-era breakdown, both sides' intervals, the hit rate and
+    the power behind them live in System Data ▸ Edge Study, which is where a reader who
+    wants them is already going.
 
     There are no controls here. Parameters are all measured plateaus from the source study, so
     a slider would only invite fitting them to whatever universe is on screen — the exact thing
@@ -6341,8 +6274,7 @@ def _render_engine_status_sidebar(current_universe: str, current_index,
     :class:`SiddhiSettings` and stashes it in session state so renderers that do not take it as
     an argument can read it back.
     """
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="sidebar-title">Engine Status</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-title">Engine</div>', unsafe_allow_html=True)
 
     sid = _siddhi_settings(current_universe, current_index, current_timeframe)
     st.session_state["siddhi_settings"] = sid
@@ -6352,7 +6284,8 @@ def _render_engine_status_sidebar(current_universe: str, current_index,
     # sidebar renders BEFORE the analysis executes (single-pass render), so without this the
     # card would show "not measured" for one extra interaction after you measured.
     _slot = st.empty()
-    _slot.markdown(_engine_card_html(sid, study), unsafe_allow_html=True)
+    with _slot.container():
+        _render_engine_status_body(sid, study)
     st.session_state["_engine_card_slot"] = _slot
     st.session_state["_engine_card_args"] = (current_universe, current_index, current_timeframe)
 
