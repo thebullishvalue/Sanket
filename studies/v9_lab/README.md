@@ -3,6 +3,8 @@
 The scripts behind [`../pragati_v9_audit.md`](../pragati_v9_audit.md). Research only — nothing
 in the app imports them.
 
+> **v9.2 note.** The v9.2 cleanup removed the TURN parameters and the research modules (`pine_audit.py`, `pine_v5.py`, `cvgrid4.py`) these scripts import. To re-run them, check out commit `9ab179f` (main, the last v9.1 state).
+
 **Data.** The 380-instrument daily cache and the macro drivers written by the v8 audit's fetch
 step (`pine_audit.py`; `multi_*.pkl`, `drivers_raw20.pkl`), and for `expOI.py` the NSE F&O
 bhavcopy OI extracts in `<cache>/oi/`. Point `PINE_AUDIT_CACHE` at that folder. Work files go

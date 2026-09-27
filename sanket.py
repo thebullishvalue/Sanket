@@ -2,7 +2,7 @@
 Sanket - Market Signal Screener | A Pragyam Product Family Member
 Pragati · Conviction × Value — Quantitative Signal Screener Terminal
 
-Engine: PRAGATI (pragati.pine v9.1), the indicator Pragyam's Conviction-Value Grid
+Engine: PRAGATI (pragati.pine v9.2), the indicator Pragyam's Conviction-Value Grid
 reads. One trace — conviction × value, how far a move is stretched in one-sided
 effort and in price against fair value — its histogram (the trace's push), and
 its two ingredients read across horizons on two tapes. One state: the 3 × 3
@@ -90,7 +90,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v9.1.0"
+VERSION = "v9.2.0"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -1877,7 +1877,7 @@ def to_excel(df):
         # that is descriptive context — the distinction matters more than the ordering.
         legend = [
             ("— THE SIGNAL SET (PRAGATI · conviction × value) —", ""),
-            ("turn_buy / turn_sell", "v9: ▲ CAPITULATION — the first bar the grid stands in Buy · capitulation (sellers in control across the ladder, value cheap past θ) with value momentum turning back toward fair; ▼ DISTRIBUTION — the first bar sellers hold control of a price rich past θ. Read from the grid, 10-bar cooldown per side. The last one stands as the declaration. (v8's TURN is kept as turn_buy_v8 / turn_sell_v8.)"),
+            ("turn_buy / turn_sell", "v9: ▲ CAPITULATION — the first bar the grid stands in Buy · capitulation (sellers in control across the ladder, value cheap past θ) with value momentum turning back toward fair; ▼ DISTRIBUTION — the first bar sellers hold control of a price rich past θ. Read from the grid, 10-bar cooldown per side. The last one stands as the declaration."),
             ("resume_long / resume_short", "◆ RESUME — OFF by default (negative in the v8 and v9 audits): the histogram dipped to the wrong side inside 6 bars and now crosses its k·σ gate; chart conviction on its side; conviction tape past the inner zone; value tape short of θ; effort not absorbed."),
             ("BUY_* / SELL_*", "The long / short event by age (Today … Within 5): ▲ capitulation / ▼ distribution, ◆ a RESUME, — none."),
             ("Side / Signal_Kind", "Buy / Sell / — : an event fired on THIS bar, and its kind — TURN (the ▲▼) or RESUME (◆)."),
@@ -1894,7 +1894,7 @@ def to_excel(df):
             ("PRG_Value / PRG_Value_Z", "Samanvaya's value on this chart, ±100 and in σ — the trace's position ingredient: the macro-hedged relative-value spread blended with seven price-only breadth views."),
             ("PRG_Hedge / PRG_Drivers", "How much of the macro hedge the value leg applies (its own out-of-sample skill) and the drivers selected."),
             ("PRG_Absorbed / PRG_Eff_Pct", "Effort → result: the share of participation that became displacement, as a percentile of its own history. Absorbed = bottom fifth."),
-            ("PRG_Div_Seen_Bull / _Bear", "A regular divergence on conviction's own pivots, zone-gated, at a price value called stretched, inside the dislocation window — context only; no v9 signal reads it."),
+            ("PRG_Div_Seen_Bull / _Bear", "A regular divergence on conviction's own pivots, zone-gated, at a price value called stretched, in the last 20 bars — context only; no signal reads it."),
             ("PRG_Split / PRG_Quiet / PRG_Settling", "Read with caution: the trace's ingredients disagree; the regime is quiet (conviction amplifying a small imbalance); the value basket is settling after a rotation."),
             ("PRG_Stack_OK / PRG_Why", "Whether the signal set can judge this bar, and if not which layer is warming."),
             ("— THE STATE (CONVICTION-VALUE GRID · 3 × 3, v8) —", ""),
@@ -2975,9 +2975,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.item("Trace", f"conviction × value · signal EMA {_p.signal} · θ ±{sid.theta:.1f} "
                           f"(histogram calibrated after {sid.min_bars} bars)")
     console.item("Ladders", f"conviction {sid.ladder_label} · value {sid.value_ladder_label}")
-    console.item("Signals", f"{sid.trigger_label} · source {_p.signal_source} · cooldown {_p.cool} · "
-                            f"hold {sid.horizon} bars · entry next open"
-                            + (f" · confirm {_p.confirm} · dislocation {_p.disloc}" if _p.signal_source == "turn" else ""))
+    console.item("Signals", f"{sid.trigger_label} · read from the grid · cooldown {_p.cool} · "
+                            f"hold {sid.horizon} bars · entry next open")
     console.item("Macro drivers", "prepared" if drivers is not None else "unavailable (unhedged)")
     _vl, _vk, _vd = _study_state(study, "buy")
     console.item("Measured edge (buy)", f"{_vl} — {_study_summary_line(study, 'buy')}")
@@ -4527,7 +4526,7 @@ def _evidence_cell(row, side: str) -> str:
     if bool(row.get('PRG_Div_Seen_Bull' if buy else 'PRG_Div_Seen_Bear', False)):
         parts.append("div")
         tips.append(("bullish" if buy else "bearish") + " divergence at a stretched price, "
-                    "inside the dislocation window")
+                    "in the last 20 bars")
     if bool(row.get('PRG_Abs_Seen', False)):
         parts.append("abs")
         tips.append("effort absorbed — heavy participation, little result")
@@ -5310,8 +5309,8 @@ _SIGNAL_TYPE_REFERENCE = [
      "and weekly bars — about +0.05σ over 10-20 bars, a lean rather than a trade, and not on "
      "crypto. The ▼'s state was followed by underperformance in every era; the entry itself "
      "is too rare to measure alone. v8's TURN (a stretch crossing back through θ, confirmed on "
-     "its tapes) faded to nothing after 2020 and read negative on weekly bars; it stays one "
-     "setting away (signal_source='turn')."),
+     "its tapes) faded to nothing after 2020 and read negative on weekly bars; v9.2 removed "
+     "it."),
     ("◆ RESUME · a trend resuming", "cyan",
      "OFF BY DEFAULT since v8. Measured across 380 instruments it was negative outside crypto "
      "in the v8 audit and negative or mixed again in v9, so the screen does not fire it. The rule, when switched on (engine settings): chart conviction "
@@ -5322,7 +5321,7 @@ _SIGNAL_TYPE_REFERENCE = [
     ("The grid · where a name stands between signals", "violet",
      "The conviction tape (who controls) is the row — UP past +30, DOWN past −30, FAINT "
      "between — and the value tape (where price stands) the column — cheap past −θ, rich past "
-     "+θ, fair between: Pragyam's 3 × 3, the grid pragati.pine v9.1 draws. Its units were MEASURED "
+     "+θ, fair between: Pragyam's 3 × 3, the grid pragati.pine v9.2 draws. Its units were MEASURED "
      "(studies/): Buy · capitulation 4 and Accumulate · washout 1½ where sellers "
      "hold a cheap or fair price, Buy · turned 3, Hold · building 1½ and Trim · paid ¾ where "
      "buyers do. Conviction's own histogram decides when a row may change — a confirmed push, "
@@ -5467,8 +5466,8 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
                                   + (" (adapted)" if sid.norm_is_adapted else ""),
         "Signal EMA": str(_p.signal),
         "θ (trace stretch)": f"±{sv.THETA_OSC:.1f}",
-        "▲▼ source · on": f"{_p.signal_source} · {_p.turn}",
-        "RESUME gate k · cooldown": f"{float(_p.k):g}σ · {_p.cool} bars",
+        "▲▼ · ◆": f"{'on' if _p.turn else 'off'} · {'on' if _p.resume else 'off'}",
+        "Impulse k · cooldown": f"{float(_p.k):g}σ · {_p.cool} bars",
         "Hold horizon": f"{sid.horizon} bars",
         "Round-trip cost": f"{sid.cost_bps:g} bps",
         "Instrument class": sid.iclass,
@@ -5673,7 +5672,7 @@ def main():
     if is_first_render:
         console.header("SANKET TERMINAL — Session Start", VERSION)
         console.item("Started", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        console.item("Signal engine", f"{ENGINE_CODE} — {ENGINE_NAME} (pragati.pine v9.1)")
+        console.item("Signal engine", f"{ENGINE_CODE} — {ENGINE_NAME} (pragati.pine v9.2)")
 
     # Render sidebar and get parameters + run button state
     sbs = render_sidebar()

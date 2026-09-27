@@ -1,7 +1,7 @@
 """
 Sanket Signal Engine — PRAGATI · Conviction × Value.
 
-The screener's logical stack, rebuilt on pragati.pine v9.1 and on the inference
+The screener's logical stack, rebuilt on pragati.pine v9.2 and on the inference
 Pragyam already carries for it. It replaces the Siddhi zero-crossing engine that
 shipped through v7.x: Siddhi fired whenever conviction crossed its own signal
 line — ~113 times per 1000 bars, its source's weakest tested configuration
@@ -15,8 +15,8 @@ THE STACK, bottom to top
                    explain (Samanvaya's unified z), on the chart and its parent
     pragati.py     CONVICTION — who controls, how firmly, on the chart and its
                    ladder; the TRACE (conviction × value) and its HISTOGRAM;
-                   divergence evidence; the ◆ RESUME and the legacy TURN, and
-                   v9_signals — the ▲▼ read from the grid
+                   divergence evidence; the ◆'s condition, and signals() —
+                   the ▲▼ read from the grid, with the ◆ and the declaration
     cvgrid.py      THE GRID — the 3 × 3 state the two tapes place a name in,
                    named as an action with its measured units
     engine.py      THIS FILE — the Sanket-facing layer: settings, per-symbol
@@ -31,7 +31,7 @@ THREE KINDS OF OUTPUT, AND WHAT EACH CLAIMS
               momentum already reverting. ▼ DISTRIBUTION — sellers taking control
               of a price rich past θ. v9's events, read from the grid (the Pine's
               section 8b); the last one stands as the DECLARATION. ◆ RESUME is off
-              by default. p.signal_source = "turn" restores v8's TURN.
+              by default.
     WATCH     a name in capitulation whose value is still cheapening — the ▲
               comes when it turns.
     STATE     the grid cell — Buy / Accumulate / Hold / Wait / Trim / Exit —
@@ -183,7 +183,7 @@ class EngineSettings:
         p = self.params
         return (self.chart, p.length, p.smooth, p.norm, p.participation, p.denominator,
                 p.vol_n, float(p.cap), float(p.z1), float(p.z2), float(p.mix), p.signal,
-                p.turn, p.confirm, p.disloc, p.resume, float(p.k), p.pull, p.effort, p.cool,
+                p.turn, p.resume, float(p.k), p.pull, p.effort, p.cool,
                 p.pl, p.pr, p.gap_min, p.gap_max, p.zone_gate, p.quiet, p.parent_norm,
                 int(self.horizon), sv.DEFAULT_BASKET)
 
@@ -357,8 +357,8 @@ def compute_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
     cv_ready = np.cumsum(ch["sd_ok"].to_numpy(bool)) > p.norm + p.smooth + p.signal
     grid = cg.classify(out, ch["osc"], ch["raw_sd"], cv_ready, p)
     # v9: the ▲▼ are read from the grid (the Pine's section 8b) — the capitulation
-    # turn and distribution; p.signal_source = "turn" keeps v8's TURN.
-    out = pg.v9_signals(out, grid, p)
+    # turn and distribution — with the ◆, the declaration and the watch.
+    out = pg.signals(out, grid, p)
     extra = val[["rv_z", "breadth_z", "legs_split", "hedge", "drivers", "n_obs", "enough",
                  "basket_warm", "bars_since_rot"]]
     return pd.concat([out, grid, extra], axis=1)
@@ -387,7 +387,7 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
       PRG_Stack_OK / PRG_Why     can the signal set judge this bar, and if not why
     EVIDENCE
       PRG_Bull_Div / PRG_Bear_Div       a qualified divergence confirmed on this bar
-      PRG_Div_Seen_Bull / _Bear, PRG_Abs_Seen   inside the dislocation window
+      PRG_Div_Seen_Bull / _Bear, PRG_Abs_Seen   in the last 20 bars (context only)
     EVENTS
       turn_buy / turn_sell / resume_long / resume_short     the four signals
       long_cond / short_cond                                either kind, per side

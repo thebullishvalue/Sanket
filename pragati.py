@@ -1,10 +1,10 @@
 """
-SANKET — Pragati · प्रगति, the conviction × value oscillator (pragati.pine v6)
+SANKET — Pragati · प्रगति, the conviction × value oscillator (pragati.pine v9.2)
 ══════════════════════════════════════════════════════════════════════════════
 
 "Is the push paid for — and at what price?"
 
-The screener's engine: a Python port of pragati.pine v6, the same indicator
+The screener's engine: a Python port of pragati.pine, the same indicator
 Pragyam's Conviction-Value Grid reads, carried the rest of the way — the trace,
 its histogram and the signal set — because a screener's job is the events.
 
@@ -25,28 +25,23 @@ WHAT IT MEASURES (the Pine's own header)
     trace           100 · softbound(0.5 · (w_c·z_c + w_v·z_v) / √(w_c² + w_v² + 2·w_c·w_v·ρ))
     histogram       trace − EMA(trace, 9)
 
-ONE SIGNAL SET, TWO SITUATIONS
-    ▲ ▼  TURN     a stretch releasing. The trace crosses back through θ (this
-                  opens a 5-bar window); inside it, on one closed bar: the value
-                  tape reached θ in the last 20 bars and is not stretched the
-                  other way now, the conviction tape is on the signal's side or
-                  turning toward it, the histogram points the release's way,
-                  and the push that made the stretch FAILED — effort absorbed or
-                  a regular divergence at a price value called stretched.
-    ◆    RESUME   a trend resuming from inside the zone. The histogram dipped
-                  to the wrong side inside 6 bars and now crosses k·σ; the trace
-                  is inside ±θ; the conviction tape is past the inner zone on
-                  the ◆'s side; the value tape is short of θ; effort is not
-                  absorbed on the bar.
-Cooldown 10 bars per direction (▲ and long ◆ share one clock). A TURN takes
-precedence over a RESUME on the same bar. A ▲▼ is a DECLARATION that stands
-until the opposite one; it has no exit.
+ONE SIGNAL SET, READ FROM THE GRID (signals(), once cvgrid has read the bar)
+    ▲    CAPITULATION   the first bar the Conviction-Value Grid stands in DOWN · cheap
+                        (sellers in control across the ladder, value cheap past θ) with
+                        value momentum REVERTING — the fast end has turned toward fair.
+    ▼    DISTRIBUTION   the first bar sellers hold control of a price rich past θ.
+    ◆    RESUME         a trend resuming (off by default). The histogram dipped to the
+                        wrong side inside 6 bars and now crosses k·σ; chart conviction
+                        and the conviction tape past the inner zone on the ◆'s side;
+                        the value tape short of θ; effort not absorbed on the bar.
+Cooldown 10 bars per direction (▲ and long ◆ share one clock). A ▲▼ takes precedence
+over a ◆ on the same bar. A ▲▼ is a DECLARATION that stands until the opposite one;
+it has no exit.
 
-DIVERGENCE IS EVIDENCE, NOT A SIGNAL, found on conviction's own pivots — where
-it was measured — never on the drawn trace. It counts toward a TURN only when
-zone-gated and formed at a price value called stretched.
+DIVERGENCE IS EVIDENCE, NOT A SIGNAL, found on conviction's own pivots — where it was
+measured — never on the drawn trace: zone-gated, at a price value called stretched.
 
-THE LADDER ON A DAILY-BAR FEED — v9.1: LADDER DOWN, from yfinance's intraday history
+THE LADDER ON A DAILY-BAR FEED — LADDER DOWN (since v9.1), from yfinance's intraday history
     chart   conviction ladder                                 value ladder
     D       1m·3m·5m·15m·30m·1h·4h inside · D  (Ladder down)   W · D  (Ladder up)
             ↺ W · D (Ladder up) on bars older than the intraday history
@@ -113,31 +108,18 @@ class Params:
     mix: float = 0.5            # value's weight in the trace (0.5 = conviction × value)
     signal: int = 9             # inpSig   — the trace's signal EMA
     # 4 · signals
-    turn: bool = True           # ▲▼ (inpState)
-    # v9: the ▲▼ are read from the grid — ▲ the capitulation turn, ▼ distribution
-    # (v9_signals, applied by engine.compute_frame once the grid is classified).
-    # "turn" keeps v8's arm-then-confirm TURN (the Pine's 'TURN (v8, legacy)').
-    signal_source: str = "capitulation"
+    turn: bool = True           # ▲▼ (inpState) — read from the grid: ▲ the capitulation
+                                #   turn, ▼ distribution (signals(), once the grid is read)
     # v9.1: the conviction ladder reads DOWN — the frames inside the chart bar (1m … 4h on a
     # daily chart, from intraday.py); where a bar has no intraday history the tape falls
     # back to Ladder up (W · D) and is marked ↺. "up" reads W · D everywhere (v8 / v9).
     ladder: str = "down"
-    confirm: int = 5            # confirmation window
-    disloc: int = 20            # dislocation window
     resume: bool = False        # ◆ RESUME — OFF by default in v8: negative in both eras
                                 #   of the audit outside crypto (studies/pine_audit.md)
     k: float = 0.5              # impulse threshold, σ of the histogram
     pull: int = 6               # pullback window
-    effort: bool = True         # effort evidence
+    effort: bool = True         # ◆ only: the push is producing result, not absorbed
     cool: int = 10              # cooldown per direction
-    # TURN's four confirmation gates, each switchable for the audit (pine_audit.py).
-    # All on = the Pine v6 rule exactly.
-    gate_value: bool = True     # the value tape reached θ inside the dislocation window
-    gate_conv: bool = True      # the conviction tape on the signal's side, or turning to it
-    gate_push: bool = True      # the histogram on the release's side
-    # v6 accepted a regular divergence as the failed push, beside absorption. v8 (and v5)
-    # read absorption alone; the audit found no difference between the two (paired ≈ 0).
-    div_evidence: bool = False
     # 5 · divergence evidence
     pl: int = 5                 # pivot left
     pr: int = 5                 # pivot right
@@ -160,6 +142,7 @@ RAIL_OUT = 70.0          # the trace's outer rail — Samanvaya's ±70
 EFF_ABSORBED = 20.0      # effort → result in the bottom fifth of its history
 QUIET_PCT = 20.0         # rawSd in the bottom fifth of its history
 SLOPE_DEADBAND = 0.10    # a trace move inside 0.1σ of its bar-to-bar change is flat
+RECENT = 20              # bars an absorption or a divergence stays "recent" evidence (display)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -489,11 +472,10 @@ COLUMNS = (
     # the stack
     "stack_ok", "stack_why",
     # evidence
-    "abs_seen", "bull_div", "bear_div", "bull_div_seen", "bear_div_seen",
-    "div_x1", "div_p1", "div_x2", "div_p2",
-    # the signal set
-    "turn_buy", "turn_sell", "resume_long", "resume_short", "con_cand_l", "con_cand_s",
-    "armed", "armed_age", "decl", "decl_since",
+    "bull_div", "bear_div", "div_x1", "div_p1", "div_x2", "div_p2",
+    "abs_seen", "bull_div_seen", "bear_div_seen",
+    # the ◆'s condition, before the cooldown — signals() adds the signal set
+    "con_cand_l", "con_cand_s",
     # reconstruction
     "rec_err",
 )
@@ -632,18 +614,8 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
     m_c = c_tape.to_numpy()
     m_v = v_tape.to_numpy()
     stack_ok = ready & c_ready & v_ready
-    c1 = np.concatenate([[np.nan], m_c[:-1]])
-    c2 = np.concatenate([[np.nan, np.nan], m_c[:-2]]) if T > 1 else np.full(T, np.nan)
-    c1n = np.where(np.isfinite(c1), c1, m_c)
-    c2n = np.where(np.isfinite(c2), c2, np.nan_to_num(c1))
-    m_c_up = (m_c > c1n) & (np.nan_to_num(c1) > c2n)
-    m_c_dn = (m_c < c1n) & (np.nan_to_num(c1) < c2n)
-    vs = pd.Series(m_v, index=idx)
-    v_lo_w = vs.rolling(p.disloc).min().fillna(vs).to_numpy()
-    v_hi_w = vs.rolling(p.disloc).max().fillna(vs).to_numpy()
     eff_pct = ch["eff_pct"].to_numpy()
     eff_abs = np.isfinite(eff_pct) & (np.nan_to_num(eff_pct, nan=100.0) <= EFF_ABSORBED)
-    abs_seen = pd.Series(eff_abs.astype(float), index=idx).rolling(p.disloc, min_periods=1).max().to_numpy() > 0
 
     # ── DIVERGENCE EVIDENCE, on conviction's own pivots ──
     oscv = osc.to_numpy()
@@ -682,92 +654,25 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
                     div_x1[t], div_p1[t], div_x2[t], div_p2[t] = last_x, last_p, px, pp
             last_v, last_b, last_p, last_x = float(pv[t]), b, pp, px
 
-    def _seen(ev: np.ndarray) -> np.ndarray:
-        last = pd.Series(np.where(ev, np.arange(T), np.nan)).ffill().to_numpy()
-        return np.isfinite(last) & (np.arange(T) - np.nan_to_num(last, nan=-1e9) <= p.disloc)
+    # ── recent evidence, for the screen's Evidence column: context, read by no signal ──
+    def _recent(ev: np.ndarray) -> np.ndarray:
+        return pd.Series(ev.astype(float), index=idx).rolling(RECENT, min_periods=1).max().to_numpy() > 0
 
-    bull_seen = _seen(bull_div)
-    bear_seen = _seen(bear_div)
+    abs_seen, bull_seen, bear_seen = _recent(eff_abs), _recent(bull_div), _recent(bear_div)
 
-    # ── THE SIGNAL SET · ▲▼ TURN and ◆ RESUME ──
-    trv = trace.to_numpy()
-    tr1 = np.concatenate([[np.nan], trv[:-1]])
+    # ── the ◆'s condition · the push resumes inside conviction, with value room ──
     tradable = (wV <= 0.0) | basket_ok
-    x_long = (trv > -th) & (tr1 <= -th)
-    x_short = (trv < th) & (tr1 >= th)
     hv = hist.to_numpy()
     hs = pd.Series(hv, index=idx)
     pulled_up = (hs.rolling(p.pull).min() < 0.0).to_numpy()
     pulled_dn = (hs.rolling(p.pull).max() > 0.0).to_numpy()
-    div_b = bull_seen if p.div_evidence else np.zeros(T, dtype=bool)
-    div_s = bear_seen if p.div_evidence else np.zeros(T, dtype=bool)
-    fail_buy = (not p.effort) | abs_seen | div_b
-    fail_sell = (not p.effort) | abs_seen | div_s
-    g_v, g_c, g_p = (not p.gate_value), (not p.gate_conv), (not p.gate_push)
-    t_buy = (g_v | ((v_lo_w <= -th) & (m_v < th))) & (g_p | (hv > 0.0)) \
-        & (g_c | (m_c > 0.0) | m_c_up) & fail_buy
-    t_sell = (g_v | ((v_hi_w >= th) & (m_v > -th))) & (g_p | (hv < 0.0)) \
-        & (g_c | (m_c < 0.0) | m_c_dn) & fail_sell
     not_abs = (not p.effort) | ~eff_abs
-    # ◆ v8 (= v5): chart conviction on the ◆'s side, the ladder in control, value room
+    # chart conviction on the ◆'s side, the ladder in control, value room (v5 / v8)
     oscv_ = osc.to_numpy(dtype=float)
     t_con_l = (m_c >= p.z1) & (m_v < th) & (oscv_ > 0.0) & not_abs
     t_con_s = (m_c <= -p.z1) & (m_v > -th) & (oscv_ < 0.0) & not_abs
-
-    turn_buy = np.zeros(T, dtype=bool)
-    turn_sell = np.zeros(T, dtype=bool)
-    res_long = np.zeros(T, dtype=bool)
-    res_short = np.zeros(T, dtype=bool)
-    armed = np.zeros(T, dtype=int)
-    armed_age = np.zeros(T, dtype=int)
-    decl = np.zeros(T, dtype=int)
-    decl_since = np.full(T, -1, dtype=int)
-    arm_b = arm_s = None
-    last_l = last_s = None
-    d_now, d_bar = 0, -1
-    ok_all = stack_ok.tolist()
-    trd = tradable.tolist()
-    for t in range(T):
-        cool_l = last_l is None or t - last_l >= p.cool
-        cool_s = last_s is None or t - last_s >= p.cool
-        if trd[t] and x_long[t]:
-            arm_b, arm_s = t, None
-        if trd[t] and x_short[t]:
-            arm_s, arm_b = t, None
-        if trv[t] <= -th:
-            arm_b = None
-        if trv[t] >= th:
-            arm_s = None
-        armed_b = arm_b is not None and t - arm_b <= p.confirm - 1
-        armed_s = arm_s is not None and t - arm_s <= p.confirm - 1
-        buy = p.turn and ok_all[t] and trd[t] and armed_b and t_buy[t] and cool_l
-        sell = p.turn and ok_all[t] and trd[t] and armed_s and t_sell[t] and cool_s
-        if buy:
-            arm_b = None
-        if sell:
-            arm_s = None
-        con_l = (p.resume and ok_all[t] and not buy and pulled_up[t] and imp_up[t]
-                 and cool_l and t_con_l[t])
-        con_s = (p.resume and ok_all[t] and not sell and pulled_dn[t] and imp_dn[t]
-                 and cool_s and t_con_s[t])
-        if buy or con_l:
-            last_l = t
-        if sell or con_s:
-            last_s = t
-        if buy:
-            d_now, d_bar = 1, t
-        if sell:
-            d_now, d_bar = -1, t
-        turn_buy[t], turn_sell[t], res_long[t], res_short[t] = buy, sell, con_l, con_s
-        # an open TURN window at the close of this bar — the watchlist
-        if arm_b is not None and t - arm_b <= p.confirm - 1:
-            armed[t], armed_age[t] = 1, t - arm_b + 1
-        elif arm_s is not None and t - arm_s <= p.confirm - 1:
-            armed[t], armed_age[t] = -1, t - arm_s + 1
-        decl[t], decl_since[t] = d_now, d_bar
-
-    # the ◆ condition before the cooldown and the ▲▼'s precedence — v9_signals re-runs
-    # the per-direction clock with the grid's ▲▼, as the Pine's section 8b does
+    # before the cooldown and the ▲▼'s precedence — signals() runs the per-direction
+    # clock with the grid's ▲▼, as the Pine's section 8b does
     con_cand_l = np.asarray(p.resume & stack_ok & pulled_up & imp_up & t_con_l, dtype=bool)
     con_cand_s = np.asarray(p.resume & stack_ok & pulled_dn & imp_dn & t_con_s, dtype=bool)
 
@@ -799,34 +704,26 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
         "c_tape": c_tape, "c_ready": c_ready, "c_rungs": z_cnt, "c_ladder": c_ladder,
         "v_tape": v_tape, "v_ready": v_ready, "v_rungs": value["tape_rungs"],
         "stack_ok": stack_ok, "stack_why": why,
-        "abs_seen": abs_seen, "bull_div": bull_div, "bear_div": bear_div,
-        "bull_div_seen": bull_seen, "bear_div_seen": bear_seen,
+        "bull_div": bull_div, "bear_div": bear_div,
         "div_x1": div_x1, "div_p1": div_p1, "div_x2": div_x2, "div_p2": div_p2,
-        "turn_buy": turn_buy, "turn_sell": turn_sell,
-        "resume_long": res_long, "resume_short": res_short,
+        "abs_seen": abs_seen, "bull_div_seen": bull_seen, "bear_div_seen": bear_seen,
         "con_cand_l": con_cand_l, "con_cand_s": con_cand_s,
-        "armed": armed, "armed_age": armed_age, "decl": decl, "decl_since": decl_since,
         "rec_err": rec_err,
     }, index=idx)[list(COLUMNS)]
 
 
-def v9_signals(out: pd.DataFrame, grid: pd.DataFrame, p: Params = DEFAULT) -> pd.DataFrame:
-    """The Pine's section 8b: v9's ▲▼ read from the grid, on ``compute``'s output.
+def signals(out: pd.DataFrame, grid: pd.DataFrame, p: Params = DEFAULT) -> pd.DataFrame:
+    """The Pine's section 8b: the ▲▼ read from the grid, on ``compute``'s output.
 
     ▲ CAPITULATION TURN — the first bar the grid stands in DOWN · cheap (cell 0) with
     value momentum reverting (the 5 × 5 value phase +1). ▼ DISTRIBUTION — the first bar
     in DOWN · rich (cell 2). Both need the stack able to judge, and the per-direction
-    cooldown, which a ◆ shares. Replaces turn_buy / turn_sell, resume_long / resume_short
+    cooldown, which a ◆ shares. Adds turn_buy / turn_sell, resume_long / resume_short
     (the ◆ yields to a ▲▼ on the same bar), decl / decl_since, and armed / armed_age —
-    in v9 'armed' is a name in capitulation whose value is still cheapening: the ▲
-    comes when it turns. The v8 TURN is kept as turn_buy_v8 / turn_sell_v8.
-
-    With ``p.signal_source == "turn"`` the output is returned unchanged (legacy).
+    'armed' is a name in capitulation whose value is still cheapening: the ▲ comes when
+    it turns.
     """
     out = out.copy()
-    out["turn_buy_v8"], out["turn_sell_v8"] = out["turn_buy"].to_numpy(bool), out["turn_sell"].to_numpy(bool)
-    if p.signal_source != "capitulation":
-        return out
     T = len(out)
     cell = grid["cvg_cell"].to_numpy(dtype=int)
     vph = grid["cvg_vph"].to_numpy(dtype=int)
@@ -884,4 +781,4 @@ def warmup_bars(p: Params = DEFAULT) -> int:
 
 
 __all__ = ["COLUMNS", "DEFAULT", "Params", "RAIL_OUT", "chart_conviction", "child_rung",
-           "compute", "parent_rung", "true_range", "v9_signals", "warmup_bars", "week_label"]
+           "compute", "parent_rung", "signals", "true_range", "warmup_bars", "week_label"]
