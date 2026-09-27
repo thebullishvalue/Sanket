@@ -1864,7 +1864,7 @@ def to_excel(df):
             ("PRG_Trace / Signal", "The trace, ±100: conviction and value in σ, blended with their measured correlation, bounded once on Samanvaya's scale. θ = ±42.9. How far the move is stretched."),
             ("PRG_Hist / PRG_Hist_Z", "The trace's push — trace minus its 9-bar EMA — native, and in σ of its own distribution."),
             ("PRG_Push / PRG_Push_Tier", "The push in five levels (+2 impulse ↑ … −2 impulse ↓, 0 = pale / quiet column) and its drawn tier."),
-            ("PRG_CTape", "MTF conviction tape, ±100 — who controls across the ladder (Daily: W·D; Weekly: daily bars inside the week · W)."),
+            ("PRG_CTape", "MTF conviction tape, ±100 — who controls across the ladder (Ladder down: Daily, the intraday frames inside each day · D, ↺ W·D before intraday history; Weekly, 1h·4h·daily bars inside the week · W)."),
             ("PRG_VTape", "MTF value tape, ±100 — rich (+) or cheap (−) across the ladder (Daily: W·D; Weekly: M·W)."),
             ("PRG_Conv / PRG_Conv_Z", "The chart's conviction (Nishchaya v3 exactly), ±100 and in σ — the trace's flow ingredient."),
             ("PRG_Value / PRG_Value_Z", "Samanvaya's value on this chart, ±100 and in σ — the trace's position ingredient: the macro-hedged relative-value spread blended with seven price-only breadth views."),
@@ -2547,7 +2547,7 @@ _SYSTEM_PANELS = (
      (("Conviction", "Σ(c·w) / Σ(|c|·w), c = ΔC / TR"),
       ("Value", "Samanvaya: hedged RV ⊕ breadth"),
       ("Trace", "blended in σ, bounded once · θ ±43"),
-      ("Ladders", "Daily W·D · Weekly D-inside·W / M·W"))),
+      ("Ladders", "conviction ↓ 1m…4h·D (↺ W·D) · value W·D / M·W"))),
     ("events", "Two Signals, One State", "Events, and where a name stands",
      "The 3 × 3 grid names each name's state as an action, and v9 reads the events from it: "
      "▲ CAPITULATION — sellers in control of a cheap price, value turning back toward fair, "
@@ -5281,8 +5281,8 @@ _SIGNAL_TYPE_REFERENCE = [
     ("The grid · where a name stands between signals", "violet",
      "The conviction tape (who controls) is the row — UP past +30, DOWN past −30, FAINT "
      "between — and the value tape (where price stands) the column — cheap past −θ, rich past "
-     "+θ, fair between: Pragyam's 3 × 3, the grid pragati.pine v9 draws. Its units were MEASURED "
-     "(studies/pine_audit.md): Buy · capitulation 3 and Accumulate · washout 1½ where sellers "
+     "+θ, fair between: Pragyam's 3 × 3, the grid pragati.pine v9.1 draws. Its units were MEASURED "
+     "(studies/): Buy · capitulation 4 and Accumulate · washout 1½ where sellers "
      "hold a cheap or fair price, Buy · turned 3, Hold · building 1½ and Trim · paid ¾ where "
      "buyers do. Conviction's own histogram decides when a row may change — a confirmed push, "
      "else the row is HELD (gold). The units are graded by where the name sits inside its "
@@ -5293,9 +5293,9 @@ _SIGNAL_TYPE_REFERENCE = [
      "through the same engine call the screener makes, each instrument's own drift removed "
      "causally (its trailing drift), vol-normalised, block-bootstrapped over dates, with the power stated. "
      "Parameters are never tuned to your data. A 'no edge' or 'underpowered' verdict is "
-     "reported, never applied: the signals still fire. Daily-bar feeds carry no intraday "
-     "history, so the conviction ladder reads W · D (Ladder up) where the Pine's default "
-     "reads the inside of each bar — stated in the notes, not hidden."),
+     "reported, never applied: the signals still fire. The conviction ladder reads DOWN — "
+     "the intraday frames yfinance carries inside each bar — and falls back to W · D (↺) "
+     "on bars older than that history; PRG_Ladder says which."),
 ]
 
 

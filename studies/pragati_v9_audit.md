@@ -161,3 +161,45 @@ The gold cast is borne out (on by default since v8, colour only). Short-covering
 **Not changed:** every engine and every numeric input; the grid's units; the ranking (stretch read as reversion — the unbiased IC agrees with its sign before 2020 and reads ≈ 0 since, as v8.2 reported).
 
 **Limits.** Effects are small — about +0.05σ over 10–20 bars: a lean, not a trade, and far below what one symbol's Edge Study can resolve (it will usually read UNDERPOWERED). Crypto is the exception. Intraday is unmeasured (no free intraday history at depth). The `.pine` file is not compiled here — load it in TradingView and check it compiles.
+
+---
+
+## 10 · v9.1 addendum — the conviction ladder, and the grid walked through
+
+**Ladder down vs Ladder up, head to head.** The same daily charts, value identical, only the
+conviction ladder differing: Ladder up (W · D) against Ladder down built from the 1h and 4h bars
+yfinance carries (377 instruments; scoreable Nov 2024 – Sep 2026 after the Pine's own warm-up).
+Paired block bootstrap on the difference:
+
+| (market-neutral, h = 10) | up | down | down − up |
+|---|---|---|---|
+| grid units, non-crypto | +0.014 | +0.018 | +0.004 (n.s.) |
+| capitulation state, stocks | +0.111 | +0.074 | −0.037 (n.s.) |
+| ▲ capitulation turn, stocks | +0.088 | +0.120 | +0.031 (n.s.) |
+| ▲ capitulation turn, indices + commodities + FX | −0.034 | +0.137 | **+0.171** [+0.057, +0.306] |
+
+By class the ▲ was as good or better on Ladder down in all five non-crypto classes (time-series)
+and four of five (market-neutral); crypto read better on Ladder up. Decision (v9.1): the Pine
+defaults to Ladder down; Sanket and Pragyam read it from yfinance (`intraday.py`) and fall back
+to W · D (↺) on bars older than the intraday history. Everything in sections 1–9 before that
+history is therefore still exactly what production computes.
+
+**The grid, walked through.** Buy · capitulation and Exit · distribution hold as stated in every
+era; Accumulate · washout weakly; Basing, Building, Stalling and Paid read ≈ 0. A 200-day split
+inside the cells is too collinear with the tapes to separate. Pre-registered in Pragyam's
+allocator (`research/cvg_v9.py`, three eras, both universes, net of costs):
+
+| Variant vs v8 units, every name held | Nifty 50 E1 / E2 / E3 | Dow 30 E1 / E2 / E3 | |
+|---|---|---|---|
+| neutralise the ≈ 0 cells | −0.17 / −0.19 / +0.04 | +0.27 / +0.05 / −0.05 | rejected |
+| × 200-day trend tilt | 0.00 / −0.16 / −0.47 | −0.24 / −0.01 / −0.09 | rejected |
+| value phase inside capitulation | −0.02 / 0.00 / −0.01 | +0.07 / −0.05 / −0.15 | rejected |
+| **Buy · capitulation 4 units** | **+0.29 / +0.13 / +0.10** | **+0.04 / +0.02 / +0.07** | **adopted** |
+
+In this lab, capitulation at 4 raised the grid's units read as a position in every era on both
+scorers (time-series h 10: +0.032 / +0.048 / +0.030 against +0.025 / +0.046 / +0.025).
+
+**Old vs new in Pragyam's book**, each model on its own freshly generated snapshots: before
+Nov 2024 (units only) +0.01 %/yr Nifty 50, +0.07 Dow 30; since Nov 2024 (Ladder down live)
+−0.35 %/yr Nifty 50 (t −0.8), −0.08 Dow 30, turnover higher. Not significant either way; on stock
+books the ladder reads neutral-to-slightly-worse so far, consistent with the tie above.

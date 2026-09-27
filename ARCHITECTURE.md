@@ -1,7 +1,7 @@
 # Sanket — Engine Architecture & Research Basis
 
 > This document records *why* the engine is built the way it is. Sanket screens a universe with
-> **Pragati** (`pragati.pine` v9, conviction × value) — the indicator Pragyam's Conviction-Value
+> **Pragati** (`pragati.pine` v9.1, conviction × value) — the indicator Pragyam's Conviction-Value
 > Grid reads — ported in `pragati.py`, `samanvaya.py`, `pine_v5.py` and `cvgrid.py`, and surfaced by `engine.py`.
 >
 > Two kinds of number appear below. Numbers about **the source indicator** come from the Pine's
@@ -99,8 +99,8 @@ second normalization, so agreement across frames is **rarer** than any one frame
 
 | Chart | Conviction tape | Value tape |
 |:---|:---|:---|
-| Daily | W · D — the W rung **reconstructed**: the week's settled state as of its last close, completed with the week forming | W · D — the RV ensemble on the spread sampled at weekly closes, finished with today's spread; breadth at the last closed week |
-| Weekly | the daily bars inside each week (participation-weighted) · W | M · W — the monthly rung is its RV leg alone (100 months of breadth are never available) |
+| Daily | **Ladder down**: 1m·3m·5m·15m·30m·1h·4h inside · D, from yfinance's intraday history (`intraday.py`), each rung joining where it has calibrated; ↺ on older bars: W · D — the W rung **reconstructed**: the week's settled state as of its last close, completed with the week forming | W · D — the RV ensemble on the spread sampled at weekly closes, finished with today's spread; breadth at the last closed week |
+| Weekly | the daily bars inside each week (participation-weighted), plus 1h and 4h where they exist · W | M · W — the monthly rung is its RV leg alone (100 months of breadth are never available) |
 
 ## The signals
 
@@ -256,7 +256,7 @@ study. Measured once per universe per day and reused until the date rolls.
 
 | Adaptation | Why |
 |:---|:---|
-| Daily conviction ladder is W · D (Ladder up) | The Pine's default reads 1m … 4h intrabars; no free feed carries them at depth |
+| Daily conviction ladder is Ladder down to the depth yfinance carries (1m 7 d … 1h ≈ 730 d), ↺ W · D before it | The Pine's default (v9.1) reads 1m … 4h intrabars; free intraday history is shallow, so older bars fall back as the Pine falls back when a direction has no frames |
 | The Daily chart's W conviction rung normalises over 52 weeks | At 200 it needs four years of weekly history |
 | Weekly normalises over 60 bars | Calibration costs two windows; at 200 a weekly name needs 8.7 years |
 | Quiet regime ranks over the history available (≥ one window) | The panel cannot supply 4 × 200 bars of σ |

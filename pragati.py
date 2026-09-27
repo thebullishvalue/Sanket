@@ -46,18 +46,20 @@ DIVERGENCE IS EVIDENCE, NOT A SIGNAL, found on conviction's own pivots — where
 it was measured — never on the drawn trace. It counts toward a TURN only when
 zone-gated and formed at a price value called stretched.
 
-THE LADDER ON A DAILY-BAR FEED — ADAPTED, and stated
-    chart   conviction ladder                  value ladder
-    D       W · D  (Ladder up)                 W · D  (Ladder up)
-    W       D inside · W  (Ladder down)        M · W  (Ladder up)
-The Pine's default conviction ladder on a daily chart is Ladder DOWN — 1m … 4h
-intrabars — which no free feed carries at depth. Its own FALLBACK rule reads the
-other direction when a direction has no frames; here the finer frames exist on
-the exchange but not in the data, so Daily reads Ladder up (Pragyam's choice,
-for the same reason). On Weekly, Ladder up has no frames (the ladder's ceiling
-is 4h), so the Pine itself falls back to Ladder down — and the daily bars inside
-each week are the one lower frame the feed carries, averaged by participation
-exactly as request.security_lower_tf would deliver them.
+THE LADDER ON A DAILY-BAR FEED — v9.1: LADDER DOWN, from yfinance's intraday history
+    chart   conviction ladder                                 value ladder
+    D       1m·3m·5m·15m·30m·1h·4h inside · D  (Ladder down)   W · D  (Ladder up)
+            ↺ W · D (Ladder up) on bars older than the intraday history
+    W       1h·4h·D inside · W  (Ladder down)                 M · W  (Ladder up)
+The Pine's default conviction ladder (v9.1) is Ladder DOWN. intraday.py supplies the lower frames
+yfinance carries — 1m for 7 days, 5m / 15m / 30m for 60, 1h for ~730; 3m and 4h built from them —
+and each joins where its own history has calibrated, exactly as the Pine's rungs join when their
+intrabars reach back far enough. A daily bar older than every intraday frame has nothing inside it
+to read; there the tape reads Ladder up (W · D, the parent reconstructed on the chart) and is
+marked ↺ — the Pine's FALLBACK rule, extended from "no frames on this chart" to "no intrabars on
+this bar". The daily tape switches to Ladder down once a lower rung has held for the Pine's own
+warm-up (ladReady: norm + smooth bars). On Weekly the daily bars inside each week are always
+there, so Weekly is Ladder down throughout, with 1h and 4h joining where they exist.
 
     · The daily chart's W conviction rung normalises over 52 weeks, not 200: at
       200 it would need four years of weekly history (Pragyam's adaptation).
@@ -503,7 +505,8 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
 
     df      the chart's OHLCV, lower-case columns, ascending
     value   samanvaya.compute_value(df, …) on the same index
-    chart   "D" (conviction ladder W · D) or "W" (D inside · W, needs `daily`)
+    chart   "D" (conviction Ladder down from ``intraday``, ↺ W · D before it) or
+            "W" (D inside · W, needs `daily`; 1h / 4h from ``intraday`` where present)
     daily   the daily bars behind a weekly chart, for its Ladder-down rung
     """
     T = len(df)
