@@ -38,6 +38,11 @@ beat it in 1 of 8 runs and was worse on NIFTY 200 in discovery; Value only never
 
 UI: ranking descriptions rewritten; the Grid tab now states the measurement. Reports in `studies/`.
 
+Every row's read now states its stretch — "stretched down −54 — reversion candidate, leads the long
+side · grid Watch · still falling (1u)" — so the reason matches the rank. Verified end to end on real
+data (NIFTY 50 / NIFTY 100, all four modes, Daily and Weekly). The NSE archive index fetch retries a
+403 with the bare user-agent token, which some egress paths require.
+
 ### The trace study tool — measure the three trace settings instead of assuming the default
 
 `trace_study.py` backtests the screener under each of pragati.pine's three trace settings —
