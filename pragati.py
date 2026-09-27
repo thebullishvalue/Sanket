@@ -119,6 +119,11 @@ class Params:
     pull: int = 6               # pullback window
     effort: bool = True         # effort evidence
     cool: int = 10              # cooldown per direction
+    # TURN's four confirmation gates, each switchable for the audit (pine_audit.py).
+    # All on = the Pine v6 rule exactly.
+    gate_value: bool = True     # the value tape reached θ inside the dislocation window
+    gate_conv: bool = True      # the conviction tape on the signal's side, or turning to it
+    gate_push: bool = True      # the histogram on the release's side
     # 5 · divergence evidence
     pl: int = 5                 # pivot left
     pr: int = 5                 # pivot right
@@ -612,8 +617,11 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
     in_zone = (trv < th) & (trv > -th)
     fail_buy = (not p.effort) | abs_seen | bull_seen
     fail_sell = (not p.effort) | abs_seen | bear_seen
-    t_buy = (v_lo_w <= -th) & (m_v < th) & (hv > 0.0) & ((m_c > 0.0) | m_c_up) & fail_buy
-    t_sell = (v_hi_w >= th) & (m_v > -th) & (hv < 0.0) & ((m_c < 0.0) | m_c_dn) & fail_sell
+    g_v, g_c, g_p = (not p.gate_value), (not p.gate_conv), (not p.gate_push)
+    t_buy = (g_v | ((v_lo_w <= -th) & (m_v < th))) & (g_p | (hv > 0.0)) \
+        & (g_c | (m_c > 0.0) | m_c_up) & fail_buy
+    t_sell = (g_v | ((v_hi_w >= th) & (m_v > -th))) & (g_p | (hv < 0.0)) \
+        & (g_c | (m_c < 0.0) | m_c_dn) & fail_sell
     not_abs = (not p.effort) | ~eff_abs
     t_con_l = (m_c >= p.z1) & (m_v < th) & in_zone & not_abs
     t_con_s = (m_c <= -p.z1) & (m_v > -th) & in_zone & not_abs

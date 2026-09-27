@@ -310,7 +310,9 @@ def _lower(df: pd.DataFrame) -> pd.DataFrame:
 
 def _chart_bars(df: pd.DataFrame) -> pd.DataFrame:
     lo = _lower(df)
-    return lo[lo["close"].notna() & lo["high"].notna() & lo["low"].notna()]
+    # A non-positive close has no log return: the value engine drops it, so the conviction
+    # engine must too or the two run on different bars (CL=F, 20 April 2020).
+    return lo[lo["close"].notna() & lo["high"].notna() & lo["low"].notna() & (lo["close"] > 0)]
 
 
 def value_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
