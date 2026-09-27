@@ -634,6 +634,17 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
 
     notes = {"buy": _note("buy"), "sell": _note("sell")}
     cost_txt = "" if gate else f" · cost gate fails at {settings.cost_bps:g}bp"
+    trace = _f("PRG_Trace")
+    theta = float(settings.params.theta)
+
+    def _stretch(t: float) -> str:
+        # The ranking's own reason: how far the trace is stretched, read as reversion.
+        if t <= -theta:
+            return f"stretched down {t:+.0f} — reversion candidate, leads the long side"
+        if t >= theta:
+            return f"stretched up {t:+.0f} — reversion candidate, leads the short side"
+        return f"trace {t:+.0f}, inside ±{theta:.0f} — little stretch to revert"
+
     reasons = []
     for i, r in enumerate(df.itertuples(index=False)):
         rd = r._asdict()
@@ -664,16 +675,16 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
             continue
         a = int(armed[i]) if np.isfinite(armed[i]) else 0
         if a != 0:
-            reasons.append(f"watch · the trace turned {'▲' if a > 0 else '▼'} — TURN window "
-                           f"{int(a_age[i])}/{int(confirm)}, awaiting its ingredients · {grid}")
+            reasons.append(f"{_stretch(trace[i])} · the trace turned {'▲' if a > 0 else '▼'} — "
+                           f"TURN window {int(a_age[i])}/{int(confirm)}, awaiting its ingredients · {grid}")
             continue
         hd = int(h_dir[i]) if np.isfinite(h_dir[i]) else 0
         if hd != 0 and np.isfinite(h_age[i]):
             k = rd.get("PRG_Hold_Kind") or "event"
-            reasons.append(f"{'long' if hd > 0 else 'short'} {k} {int(h_age[i])} bars ago, inside "
-                           f"its {int(horizon)}-bar hold · {grid}")
+            reasons.append(f"{_stretch(trace[i])} · {'long' if hd > 0 else 'short'} {k} "
+                           f"{int(h_age[i])} bars ago, inside its {int(horizon)}-bar hold · {grid}")
             continue
-        reasons.append(f"state only · {grid}")
+        reasons.append(f"{_stretch(trace[i])} · {grid}")
     df["Signal_Reason"] = reasons
     return df.sort_values("Priority_Long", ascending=False, kind="stable", na_position="last")
 

@@ -1415,6 +1415,11 @@ def get_index_stock_list(index):
                 session = requests.Session()
                 session.get(f"https://{host}", headers=headers, verify=False, timeout=10)
                 response = session.get(candidate_url, headers=headers, verify=False, timeout=15)
+                if response.status_code == 403:
+                    # Some egress paths are refused on the full browser string and accepted
+                    # on the bare token — retry once with it before moving on.
+                    response = session.get(candidate_url, headers={**headers, 'User-Agent': 'Mozilla/5.0'},
+                                           verify=False, timeout=15)
                 response.raise_for_status()
                 stock_df = pd.read_csv(io.StringIO(response.text))
                 symbol_col = next((c for c in stock_df.columns if c.lower() == 'symbol'), None)
