@@ -186,7 +186,7 @@ the grid calls *Add* lagged, the sellers-firm cheap cells it calls *Watch* / *Re
 
 The replacement was chosen on the pre-2021 era only: stretch +0.058σ, TURN kept on top +0.059σ;
 RESUME and the hold / open-window bands cost edge and no longer order the list. On the sealed
-2021–2026 holdout it was never worse than the grid ranking (Daily −0.007σ vs −0.043σ; Weekly
+2021–2026 holdout it beat the grid ranking on average (Daily −0.007σ vs −0.043σ; Weekly
 +0.087σ vs −0.040σ; rank IC clearly positive on NIFTY 50 / 100). Stated plainly: once a name's own
 20-bar return is removed the trace carries ~0 information — on NSE equities this ranking **is**
 short-term reversal, read through the indicator, and that effect has been weaker since 2021 on
