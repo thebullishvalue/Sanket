@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v8.1.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v8.2.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -167,22 +167,31 @@ Reduce and Exit now or into a push ↑; Hold, Wait and Watch change nothing.
 
 ## Ranking
 
-The events are rare and the state is universal, so priority is **banded**:
+Priority is **a TURN on this bar, then stretch**:
 
 ```
 long side                                   short side
-5 + g   ▲ TURN on this bar                  5 + g'  ▼ TURN on this bar
-4 + g   ◆ RESUME ↑ on this bar              4 + g'  ◆ RESUME ↓ on this bar
-3 + r   a long event inside its hold        3 + r   a short event inside its hold
-2 + a   a ▲ TURN window open (watchlist)    2 + a   a ▼ TURN window open
-g − ½   the grid state alone                g' − ½  the grid state alone
+5 + s   ▲ TURN on this bar                  5 + s'  ▼ TURN on this bar
+s       every other name, by stretch        s'      every other name, by stretch
+
+s = −trace / 200 ∈ (−½, ½)   (stretched furthest DOWN leads the long side)   s' = −s
 ```
 
-`g = (units − ¼) / 2¾` — **Pragyam's inference: the state is the weight.** Among names that fired
-the same event, the one the grid calls Buy · turn outranks the one it calls Watch · still falling.
-`g'` mirrors it for the short side. `r` is the hold left, `a` the confirmation window left. The
-bands cannot overlap. Nothing measured enters the ranking: the Edge Study is reported, never
-applied, and the cost gate is a flag on the row, not a multiplier.
+**Read as reversion — measured, not inherited.** v8.0.0 ranked by the grid's weight, banded
+TURN > RESUME > hold window > open TURN window > grid state. `trace_study.py` measured that on five
+NSE universes over ~15 years and it ran **backwards**: long-minus-short −0.022σ before 2021 and
+−0.043σ after, clearly negative in 4 of 8 runs. Every ingredient — conviction, value, the trace,
+the push, the grid weight — correlated *negatively* with the next 5–40 bars; the buyers-firm cells
+the grid calls *Add* lagged, the sellers-firm cheap cells it calls *Watch* / *Reduce* led.
+
+The replacement was chosen on the pre-2021 era only: stretch +0.058σ, TURN kept on top +0.059σ;
+RESUME and the hold / open-window bands cost edge and no longer order the list. On the sealed
+2021–2026 holdout it was never worse than the grid ranking (Daily −0.007σ vs −0.043σ; Weekly
++0.087σ vs −0.040σ; rank IC clearly positive on NIFTY 50 / 100). Stated plainly: once a name's own
+20-bar return is removed the trace carries ~0 information — on NSE equities this ranking **is**
+short-term reversal, read through the indicator, and that effect has been weaker since 2021 on
+mid and small caps. The grid, RESUME and the windows are still computed and shown; they describe
+a name, they do not order the list. Reports: `studies/`.
 
 ---
 
@@ -261,7 +270,7 @@ Per symbol, on each run:
 | `PRG_Split` / `PRG_Quiet` / `PRG_Settling` | read-with-caution qualifiers |
 | `PRG_Stack_OK` / `PRG_Why` | whether the signal set can judge, and if not why |
 | `CVG_Action` / `CVG_Why` / `CVG_Units` / `CVG_Held` / `CVG_Lead` | the grid state |
-| `Priority_Long` / `Priority_Short` | the banded ranking keys |
+| `Priority_Long` / `Priority_Short` | the ranking keys — a TURN on this bar, then stretch |
 | `Signal_Reason` | a plain-language read of the row |
 | Risk / flow context | `Vol_Regime`, `Regime_Confidence`, `Change_Point`, `Bar_Delta`, `CVD`, `Delta_Z`, `Buy_Share`, `Absorption_Score` — displayed, never an input |
 
@@ -271,7 +280,7 @@ Per symbol, on each run:
 
 ```
 sanket.py            ← Streamlit entry point: UI, data + macro-driver fetch, screen routing
-engine.py            ← settings, per-symbol features, the snapshot row, banded ranking, cost gate
+engine.py            ← settings, per-symbol features, the snapshot row, ranking, cost gate
 pragati.py           ← pragati.pine v6: conviction, ladders, trace, histogram, TURN / RESUME
 samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
 cvgrid.py            ← the 4 × 4 conviction-value grid
@@ -293,7 +302,7 @@ volume profile, absorption) are unchanged and remain context only.
 
 1. **Single Date Screener** — Action Dashboard (events by age, each with its grid state, push,
    tapes and evidence) · **Grid** (the 4 × 4 census, the watchlist of open TURN windows, names by
-   action) · Signal Strength (the banded ranking) · System Data (exports, raw frame, Edge Study).
+   action) · Signal Strength (the ranking) · System Data (exports, raw frame, Edge Study).
 2. **Historical Range** — event breadth by kind, open TURN windows, grid breadth (build vs cut),
    the universe-mean tapes, regime context, forward-return labels, Excel export.
 3. **Correlation Analysis** — cross-asset correlation, with confluence = |correlation| × the
@@ -778,4 +787,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v8.1.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v8.2.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

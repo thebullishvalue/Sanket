@@ -27,7 +27,7 @@ A · THE EVENTS (``edge.measure``, unchanged). ▲▼ TURN and ◆ RESUME, enter
     and held ``horizon`` bars; drift-removed and vol-normalised within era; block-bootstrap
     CI over dates; costs charged; power stated. The same six slices as the Edge Study.
 
-B · THE SCREEN. On every date, the names are ranked by the screener's banded priority
+B · THE SCREEN. On every date, the names are ranked by the screener's priority
     (``engine.priorities`` — the function the Action Dashboard ranks with). Measured:
 
       Long book    the top ``quantile`` of names by long priority — their mean score MINUS
@@ -154,14 +154,8 @@ def _panel(frames: dict, col: str, index: pd.DatetimeIndex) -> np.ndarray:
 def priority_panels(frames: dict, index: pd.DatetimeIndex, base: "eng.EngineSettings"):
     """(P_long, P_short, trace) as date × symbol arrays, via engine.priorities."""
     b = lambda c: np.nan_to_num(_panel(frames, c, index)).astype(bool)   # noqa: E731
-    f = lambda c: _panel(frames, c, index)                                # noqa: E731
-    trace = f("PRG_Trace")
-    pl, ps = eng.priorities(b("turn_buy"), b("turn_sell"), b("resume_long"), b("resume_short"),
-                            f("CVG_Units"), np.isfinite(trace), np.nan_to_num(f("PRG_Armed")),
-                            np.nan_to_num(f("PRG_Armed_Age")), np.nan_to_num(f("PRG_Hold_Dir")),
-                            f("PRG_Hold_Age"), np.nan_to_num(f("PRG_Push")),
-                            float(max(int(base.horizon), 1)),
-                            float(max(int(base.params.confirm), 1)))
+    trace = _panel(frames, "PRG_Trace", index)
+    pl, ps = eng.priorities(b("turn_buy"), b("turn_sell"), trace, np.isfinite(trace))
     return pl, ps, trace
 
 
@@ -204,9 +198,8 @@ def screen_series(pl: np.ndarray, ps: np.ndarray, score: np.ndarray,
         xs_mean = np.nanmean(s, axis=1)
 
     def _book(p):
-        # Percentile rank inside the date's eligible names, ties averaged — the banded
-        # priority ties heavily inside a grid cell, and a tie must not be broken by column
-        # order. A book is every name at or above the (1 − q) percentile.
+        # Percentile rank inside the date's eligible names, ties averaged, so a tie is
+        # never broken by column order. A book is every name at or above the (1 − q) percentile.
         pr = pd.DataFrame(np.where(ok, p, np.nan)).rank(axis=1, pct=True).to_numpy()
         m = ok & (pr >= 1.0 - quantile)
         with np.errstate(invalid="ignore"):

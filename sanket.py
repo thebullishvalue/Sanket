@@ -88,7 +88,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v8.1.0"
+VERSION = "v8.2.0"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -1853,7 +1853,7 @@ def to_excel(df):
             ("CVG_Held", "The conviction tape has moved to another row but the push has not confirmed it, so the row is held."),
             ("CVG_Bars / CVG_From", "Bars in the current cell, and the cell before it."),
             ("CVG_Chart_Action / CVG_Lead", "Where the chart's own conviction and value would place the name, and whether that cell carries more (+1) or fewer (−1) units than the state."),
-            ("Priority_Long / Priority_Short", "BANDED ranking keys: TURN today > RESUME today > inside a hold window > a TURN window open > the grid state alone. Inside a band, the grid weight orders."),
+            ("Priority_Long / Priority_Short", "Ranking keys, by STRETCH read as reversion: a ▲/▼ TURN on this bar first, then every name by how far its trace is stretched against the side (long: stretched down first; short: stretched up first). Measured by trace_study.py — the grid-weight ranking it replaced ran backwards."),
             ("Signal_Reason", "Plain-language read of the row, with the measured verdict for this universe."),
             ("— CONTEXT ONLY (never a signal input; none predicts outcome out of sample) —", ""),
             ("Zone / Condition", "Where cumulative delta sits vs its 20-bar mean: Accumulation(+) / Distribution(+) / Neutral."),
@@ -3164,10 +3164,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     results_df = pd.DataFrame(results)
 
-    # Cross-sectional ranking (engine.py). Priority is banded — a TURN fired on this bar
-    # outranks a RESUME, which outranks an event inside its hold window, which outranks an
-    # open TURN window, which outranks the grid state alone — and inside every band the
-    # grid's weight orders (Pragyam's inference: the state IS the weight). The measured
+    # Cross-sectional ranking (engine.py). A TURN fired on this bar ranks first on its side,
+    # then every name by stretch read as reversion (−trace for the long side, +trace for the
+    # short) — measured by trace_study.py, which found the grid-weight ranking ran backwards
+    # on NSE universes. The measured
     # expectancy (`study`) informs the cost gate and the per-row read; it never scales or
     # filters a signal. One call emits the whole UI contract.
     if not results_df.empty:
@@ -4137,12 +4137,9 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         # is relative to the rest of the universe. Normalising by the observed max keeps the
         # score in [0,1] across universes whose readings spread differently.
         #
-        # Strength is DIRECTION-FREE: max(Priority_Long, Priority_Short). The priority bands
-        # are per-side and mutually exclusive, so this reads out as "an event today" > "inside
-        # a hold window" > "a TURN window open" > "the grid state", whichever side it is on —
-        # which is what the confluence question actually asks. Nothing is multiplied in on
-        # top: the grid weight already orders every band, so scaling by it again would count
-        # the same fact twice.
+        # Strength is DIRECTION-FREE: max(Priority_Long, Priority_Short) — a TURN on this bar,
+        # else how far the name is stretched either way (|trace| / 200), whichever side it is
+        # on. That is what the confluence question asks: how loud is this name's own read.
         _pri_cols = [c for c in ('Priority_Long', 'Priority_Short') if c in corr_df.columns]
         if _pri_cols and corr_df[_pri_cols].notna().any().any():
             abs_pri = corr_df[_pri_cols].max(axis=1).fillna(0).clip(lower=0)
@@ -4790,7 +4787,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy') -> str:
 
 
 def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy') -> str:
-    """Ranked HTML table for one side, by the side's banded priority."""
+    """Ranked HTML table for one side, by the side's priority (a TURN on this bar, then stretch)."""
     _pct_col = _priority_pct_col(side)
     _is_buy = _is_buy_side(side)
     _MAXH = 900
@@ -4834,9 +4831,9 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy') -> st
                 <td class="numeric" style="color: {vol_color}; font-weight: 700; font-size: {ui.FS["2xs"]};">{vol_reg}</td>
             </tr>""")
     head = (_th("Rank") + _th("Symbol", numeric=False)
-            + _th("Percentile", "This side's priority percentile. Banded: a TURN today > a RESUME "
-                                "today > inside a hold window > an open TURN window > the grid "
-                                "state; inside a band, the grid weight orders.")
+            + _th("Percentile", "This side's priority percentile. A TURN on this bar first, then "
+                                "by stretch: the long side leads with the names stretched furthest "
+                                "down, the short side with the names stretched furthest up.")
             + _th("Price") + _th("% Change")
             + _th("State", "An event on this bar, an open TURN window (gold), the standing declaration, or —")
             + _th("Grid", _TH_GRID, numeric=False) + _th("Push", _TH_PUSH) + _th("Trace", _TH_TRACE)
@@ -5477,6 +5474,12 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
                    "tone: **emerald** builds below a rich price, **cyan** is cheap and watched, "
                    "**amber** is rich or stalling, **rose** is sellers in control, grey has no "
                    "edge. " + cg.READ_THE_PUSH)
+    ui.render_note("**Measured, read with care:** the grid's actions are Pragyam's allocator "
+                   "reading. As a *10-bar screen* on five NSE universes (~15 years, trace_study.py) "
+                   "the build cells — *Add · strong trend*, *Hold · don't add* — lagged the "
+                   "cross-section and the sellers-firm, cheap cells — *Watch · still falling*, "
+                   "*Reduce · downtrend* — led it. So the grid describes where a name stands; the "
+                   "screen's ranking reads the stretch as reversion instead.")
 
     # ── the watchlist: TURN windows open ──
     wl = results_df[armed != 0].copy()
@@ -5514,11 +5517,11 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
 
 
 def _render_ranking_tab(results_df, sid, study, _mv_label, _mv_kind, key: str = "rank") -> None:
-    """Signal Strength — the whole cross-section, by the banded priority."""
+    """Signal Strength — the whole cross-section, by priority (a TURN today, then stretch)."""
     ui.render_section_header(
         "Signal Strength",
-        "Full universe by priority — events on this bar first, then open hold windows, then "
-        "open TURN windows, then the grid state; inside every band the grid weight orders",
+        "Full universe by priority — a TURN on this bar first, then by stretch: the long side "
+        "leads with names stretched furthest down, the short side with names stretched furthest up",
         icon="zap", accent="amber",
     )
     _n = max(len(results_df), 1)
@@ -5550,8 +5553,10 @@ def _render_ranking_tab(results_df, sid, study, _mv_label, _mv_kind, key: str = 
                 f'margin:0 0 0.4rem 0;">{_p["mark"]} {side_label}</p>')
 
     ui.render_sub_header("Top 10 Each Side")
-    ui.render_note("Highest-priority rows in the universe · a dash in State means nothing fired "
-                   "and no TURN window is open — the row is ranked on its grid state alone.")
+    ui.render_note("Highest-priority rows in the universe. Ranking reads the trace as **reversion**: "
+                   "across ~15 years of five NSE universes, names stretched down (sellers in control, "
+                   "priced cheap) led the next 10 bars and names stretched up lagged — so the long "
+                   "side starts with the most stretched-down names. A TURN on this bar ranks first.")
     top_buys = results_df.sort_values('Priority_Long', ascending=False, na_position='last').head(10)
     top_sells = results_df.sort_values('Priority_Short', ascending=False, na_position='last').head(10)
     _l, _s = st.columns(2)
