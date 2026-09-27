@@ -4,7 +4,7 @@
 
 **Scoring.** Each output becomes a position p ∈ [−1, 1] (+ = the output's own "up"). Score = p × the forward return from the next open over h bars, minus the instrument's own mean and divided by its own σ inside the era — timing skill in σ, drift removed, so simply holding a rising asset scores zero. `**` = 95% block-bootstrap interval (blocks of whole dates) excludes zero.
 
-Reproduce: `pine_audit.py` (`baseline`, `sweep`, `experiments`, `capitulation`, `oi`; `v5`, `oi5` for sections 9–10). Sections 1–8 audit v6 → v7; **sections 9–11 audit the user's v5, compare it with v7, and record the decision: v8.**
+Reproduce (the harness was removed in v9.2 — check out commit `9ab179f`): `pine_audit.py` (`baseline`, `sweep`, `experiments`, `capitulation`, `oi`; `v5`, `oi5` for sections 9–10). Sections 1–8 audit v6 → v7; **sections 9–11 audit the user's v5, compare it with v7, and record the decision: v8.**
 
 ## 1 · The defaults, every output (h = 10 bars)
 

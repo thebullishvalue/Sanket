@@ -1,9 +1,9 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v9.1.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v9.2.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
-Sanket screens a universe with **Pragati** (`pragati.pine` v9.1) — the indicator Pragyam's
+Sanket screens a universe with **Pragati** (`pragati.pine` v9.2) — the indicator Pragyam's
 Conviction-Value Grid already reads — and asks of every name the indicator's own question:
 **is the push paid for, and at what price?**
 
@@ -88,7 +88,7 @@ The trace says **how far**, the histogram says **which way it is going**, the ta
 |:---|:---|:---|
 | Value — rich or cheap against the macro drivers | `samanvaya.py` | Pragyam's port, vectorised; Weekly added |
 | Conviction, the trace, the histogram, the signals | `pragati.py` | Pragyam's conviction port, extended; signals at v8 (= v5) |
-| The 3 × 3 grid | `cvgrid.py` + `pine_v5.py` | the v8 Pine's CVG block, graded — bit for bit Pragyam's graded map |
+| The 3 × 3 grid | `cvgrid.py` | the v8 Pine's CVG block, graded — bit for bit Pragyam's graded map |
 | Settings, per-symbol features, snapshot, ranking | `engine.py` | Sanket |
 | Measured expectancy | `edge.py` | Sanket, now measuring the new events |
 
@@ -130,8 +130,8 @@ entry is too rare to measure alone.
 
 **Why not v8's TURN.** v8's ▲▼ — the trace crossing back through θ, then its value tape, conviction
 tape, push and absorption confirming inside 5 bars — faded to nothing after 2020 on daily bars,
-read *negative* on weekly bars, and on daily worked only when a capitulation came first. It stays
-one setting away (`signal_source="turn"`; the Pine's `▲ ▼ source`).
+read *negative* on weekly bars, and on daily worked only when a capitulation came first. v9.2
+removed it from the Pine and the port.
 
 **◆ RESUME** (long; short mirrors) — *a trend resuming.* The histogram dipped below zero inside
 6 bars and now crosses +k·σ (k = 0.5); chart conviction is above zero; the conviction tape is past
@@ -299,7 +299,7 @@ Per symbol, on each run:
 | `PRG_CTape` / `PRG_VTape` | the two MTF tapes — the grid's axes |
 | `PRG_Conv` / `PRG_Value` | the trace's two ingredients on this chart |
 | `PRG_Hedge` / `PRG_Drivers` | the macro hedge applied and the drivers selected |
-| `PRG_Div_Seen_*` / `PRG_Abs_Seen` | divergence / absorption inside the dislocation window (context; the legacy TURN reads absorption) |
+| `PRG_Div_Seen_*` / `PRG_Abs_Seen` | a divergence / absorbed effort in the last 20 bars (context; no signal reads it) |
 | `PRG_Split` / `PRG_Quiet` / `PRG_Settling` | read-with-caution qualifiers |
 | `PRG_Stack_OK` / `PRG_Why` | whether the signal set can judge, and if not why |
 | `CVG_Action` / `CVG_Why` / `CVG_Units` / `CVG_Held` / `CVG_Lead` | the grid state |
@@ -314,19 +314,14 @@ Per symbol, on each run:
 ```
 sanket.py            ← Streamlit entry point: UI, data + macro-driver fetch, screen routing
 engine.py            ← settings, per-symbol features, the snapshot row, ranking, cost gate
-pragati.py           ← pragati.pine v9.1: conviction, ladders, trace, histogram, ◆, legacy TURN, v9_signals (the ▲▼)
+pragati.py           ← pragati.pine v9.2: conviction, ladders, trace, histogram, the ◆'s condition, signals() (▲▼ ◆)
 samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
-cvgrid.py            ← the 3 × 3 conviction-value grid: names, units, tones, classify — the ▲▼'s source
-pine_v5.py           ← the v5/v8 Pine's own logic: ▲▼ ◆, R / H, the graded grid and phases, OI quadrant
-cvgrid4.py           ← v7's 4 × 4 grid, kept so the audit can reproduce the comparison
-pragati.pine         ← the indicator itself, v9.1 — the Pine the port mirrors (archive/: v5, v7, v8)
+cvgrid.py            ← the 3 × 3 conviction-value grid: the state engine, names, units, tones — the ▲▼'s source
+pragati.pine         ← the indicator itself, v9.2 — the Pine the port mirrors (archive/: v5, v7, v8)
 intraday.py          ← the conviction ladder's lower frames from yfinance (1m … 4h), batched and cached
-pine_audit.py        ← the v7/v8 audit harness (baseline, sweep, experiments, OI) — its scorer is biased, see v9
 studies/v9_lab/      ← the v9 audit: look-ahead-free scorers, feature caches, every experiment
 charts.py            ← chart builders: the conviction-value map, tone history, correlation heatmap
-trace_study.py       ← backtest: the screener under all three trace settings, paired, holdout-sealed
 edge.py              ← measured expectancy: event study, causal drift removal, block bootstrap, power
-research.py          ← LEGACY harness from an older momentum engine; validates nothing here
 logger.py            ← structured terminal logging
 ARCHITECTURE.md      ← the stack, the evidence, and the design rationale
 ui/                  ← theme.py · theme.css · components.py (the Graphite design system)
@@ -469,6 +464,17 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 ---
 
 ## What Changed
+
+**v9.2.0 — the legacy goes; the Pine's settings say what they move.** v8's TURN is gone from the
+Pine (its `▲ ▼ source` option and two windows) and from the port (`signal_source`, the confirm /
+dislocation windows, the four TURN gates, the arm loop); `pragati.signals()` alone produces the
+▲▼, ◆ and declaration — checked bar for bar identical to v9.1.0 on the defaults and with the ◆ on.
+Modules the app no longer reached are removed (`pine_v5.py` — its grid engine moved into
+`cvgrid.py` — `cvgrid4.py`, `pine_audit.py`, `research.py`, `trace_study.py`; all in git history,
+their reports stay in `studies/`). The Pine's settings are regrouped (impulse threshold k with the
+engine; ◆-only knobs marked; one Readout group; two redundant volume-profile switches removed), each
+tape sits one point clear of its momentum band, and the tape names carry the reading — not the
+frame list — coloured by what the tape says.
 
 **v9.1.0 — the conviction ladder reads DOWN everywhere; Buy · capitulation 4 units.** Measured
 head to head on the same daily charts (377 instruments, Nov 2024 – Sep 2026, 1h + 4h rungs): the
@@ -832,7 +838,7 @@ screeners (Set A · Momentum Pullback-Resumption, Set B · Gap-and-Go Continuati
 delta-divergence/clamp-cross signals; `VOL_REGIME_MOM` was recalibrated to near-neutral. *(Both
 retired in v6.0.0.)*
 
-**v5.0.0 — thesis replacement driven by a reproducible harness.** [`research.py`](research.py)
+**v5.0.0 — thesis replacement driven by a reproducible harness.** `research.py` (removed in v9.2; in git history)
 showed the prior reversion core was a cost trap and found 12-1 cross-sectional momentum as the
 cost-survivable edge. *(Retired in v6.0.0.)* See [`CHANGELOG.md`](CHANGELOG.md) for full entries.
 

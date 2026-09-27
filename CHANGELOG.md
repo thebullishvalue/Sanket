@@ -7,6 +7,34 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v9.2.0] · 2026-09-27
+### The legacy goes · the Pine's settings regrouped · tape names and spacing
+
+- **v8's TURN removed.** Pine: the `▲ ▼ source` option, its confirmation and dislocation windows and
+  the arm-then-confirm engine. Port: `signal_source`, `confirm`, `disloc`, the four TURN gates and
+  the arm loop; `pragati.signals()` (was `v9_signals`) is the only producer of the ▲▼, the ◆, the
+  declaration and the watch. Verified bar for bar identical to v9.1.0 (three synthetic series,
+  daily and weekly, ◆ off and on).
+- **Dead modules removed:** `pine_v5.py` (its grid state engine moved into `cvgrid.py`),
+  `cvgrid4.py`, `pine_audit.py`, `research.py`, `trace_study.py` — none reached by the app. Their
+  reports stay in `studies/`; the scripts are in git history (commit `9ab179f`).
+- **Pine settings.** Impulse threshold k moved to the engine group (the grid's push gate and the
+  conviction-momentum edge read it, not only the ◆); ◆-only knobs labelled `◆ ·`; the readout's
+  position, OI row and grid row in one `10 · Readout` group; volume profile loses `Enable profile
+  compute` (it now builds only when a layer or the detailed panel reads it) and `Split profile into
+  inferred buy/sell` (follows the histogram style); build settings before draw layers; the impulse
+  band under Histogram; tooltips rewritten where they still described v8 (Signal EMA, θ, Trace, ◆,
+  gold cast, grid row) and added where missing.
+- **Tapes.** Each tape and its momentum band sit exactly one point apart (`TAPE_GAP`; momentum at
+  ±89). The right-edge names drop "MTF" and the frame list (now in the tooltip): `CONVICTION +34 ·
+  building inside +12`, `VALUE ↺ cheap −48 · reverting +6` — coloured by what the tape says: green
+  buyers / red sellers past the inner zone, green rich / red cheap past θ, soft inside, gold when a
+  ladder has no frames.
+- The screen's Evidence column keeps its recent divergence / absorption flags, now on their own
+  20-bar window (`RECENT`) instead of the TURN's dislocation window.
+
+---
+
 ## [v9.1.0] · 2026-09-27
 ### Conviction ladder DOWN in the Pine, Sanket and Pragyam · Buy · capitulation 4 units
 

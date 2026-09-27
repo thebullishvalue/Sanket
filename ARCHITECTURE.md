@@ -1,8 +1,8 @@
 # Sanket — Engine Architecture & Research Basis
 
 > This document records *why* the engine is built the way it is. Sanket screens a universe with
-> **Pragati** (`pragati.pine` v9.1, conviction × value) — the indicator Pragyam's Conviction-Value
-> Grid reads — ported in `pragati.py`, `samanvaya.py`, `pine_v5.py` and `cvgrid.py`, and surfaced by `engine.py`.
+> **Pragati** (`pragati.pine` v9.2, conviction × value) — the indicator Pragyam's Conviction-Value
+> Grid reads — ported in `pragati.py`, `samanvaya.py` and `cvgrid.py`, and surfaced by `engine.py`.
 >
 > Two kinds of number appear below. Numbers about **the source indicator** come from the Pine's
 > own evidence section; numbers about **Pragyam's grid** come from Pragyam's pre-registered study.
@@ -114,11 +114,8 @@ stands as the declaration. Measured (studies/pragati_v9_audit.md, three eras, da
 look-ahead): the ▲ +0.046 / +0.056 / +0.046σ at 10 bars; the distribution state followed by
 underperformance in every era.
 
-**Legacy · v8's TURN** (`signal_source="turn"`) — the trace crosses back up through −θ with the
-value basket settled, opening a 5-bar window; inside it the value tape reached −θ in the last 20
-bars and is not rich now, the conviction tape is above zero or rising two bars, the histogram is
-above zero, and effort was absorbed inside the 20 bars. Measured in v9: no edge after 2020 on daily
-bars, negative on weekly, and on daily only positive after a capitulation.
+**v8's TURN** — the trace crossing back through θ, confirmed on its tapes inside 5 bars — measured
+no edge after 2020 on daily bars and negative on weekly; v9.2 removed it.
 
 **◆ RESUME** — the histogram dipped below zero inside 6 bars and crosses +0.5σ; chart conviction
 is above zero; the conviction tape is at or past +30; the value tape is below +θ; effort is not
