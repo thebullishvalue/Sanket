@@ -338,10 +338,12 @@ def compute_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
     val = sv.compute_value(lo, drivers, symbol, chart=chart) if value is None else value
     dl = _lower(daily) if daily is not None and len(daily) else None
     out = pg.compute(lo, val, settings.params, chart=chart, daily=dl)
-    grid = cg.classify(out["c_tape"], out["v_tape"], out["push"], out["hist_ready"],
-                       out["c_ready"] & out["v_ready"], out["conv"], out["value"],
-                       out["conv_ready"] & out["value_built"],
-                       settings.params.z1, settings.params.theta, index=out.index)
+    # The grid (v8, 3 × 3): conviction's own histogram runs its rows, so it reads chart
+    # conviction and its calibration gate beside the tapes.
+    p = settings.params
+    ch = pg.chart_conviction(lo, p)
+    cv_ready = np.cumsum(ch["sd_ok"].to_numpy(bool)) > p.norm + p.smooth + p.signal
+    grid = cg.classify(out, ch["osc"], ch["raw_sd"], cv_ready, p)
     extra = val[["rv_z", "breadth_z", "legs_split", "hedge", "drivers", "n_obs", "enough",
                  "basket_warm", "bars_since_rot"]]
     return pd.concat([out, grid, extra], axis=1)
@@ -464,7 +466,9 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     df["CVG_Cell"] = cell
     df["CVG_Action"] = [cg.action(c) for c in cell]
     df["CVG_Why"] = [cg.reason(c) for c in cell]
-    df["CVG_Units"] = [cg.UNITS[c] for c in cell]
+    # graded: the cell's units read at the name's shaded position (Pragyam's map)
+    df["CVG_Units"] = f["cvg_units"].where(f["cvg_cell"].fillna(cg.UNREAD) != cg.UNREAD,
+                                           cg.UNITS[cg.UNREAD]).astype(float).round(3)
     df["CVG_Side"] = [cg.SIDES[c] for c in cell]
     df["CVG_Held"] = b("cvg_held")
     df["CVG_Bars"] = pos - f["cvg_since"].fillna(0).astype(int).to_numpy() + 1
@@ -663,11 +667,9 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
             kind = "turn" if (tb[i] or ts[i]) else "resume"
             lab = EVENT_LABEL[(kind, 1 if side_key == "buy" else -1)]
             if kind == "turn":
-                why = []
+                why = ["effort absorbed"] if bool(rd.get("PRG_Abs_Seen")) else []
                 if bool(rd.get("PRG_Div_Seen_Bull" if side_key == "buy" else "PRG_Div_Seen_Bear")):
-                    why.append(("bullish" if side_key == "buy" else "bearish") + " divergence")
-                if bool(rd.get("PRG_Abs_Seen")):
-                    why.append("effort absorbed")
+                    why.append(("bullish" if side_key == "buy" else "bearish") + " divergence seen")
                 ev = (f"{lab} · the stretch released, the push that made it failed"
                       + (f" ({' + '.join(why)})" if why else "") + f" · {notes[side_key]}")
             else:

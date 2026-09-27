@@ -114,7 +114,8 @@ class Params:
     turn: bool = True           # ▲▼ TURN
     confirm: int = 5            # confirmation window
     disloc: int = 20            # dislocation window
-    resume: bool = True         # ◆ RESUME
+    resume: bool = False        # ◆ RESUME — OFF by default in v8: negative in both eras
+                                #   of the audit outside crypto (studies/pine_audit.md)
     k: float = 0.5              # impulse threshold, σ of the histogram
     pull: int = 6               # pullback window
     effort: bool = True         # effort evidence
@@ -124,6 +125,9 @@ class Params:
     gate_value: bool = True     # the value tape reached θ inside the dislocation window
     gate_conv: bool = True      # the conviction tape on the signal's side, or turning to it
     gate_push: bool = True      # the histogram on the release's side
+    # v6 accepted a regular divergence as the failed push, beside absorption. v8 (and v5)
+    # read absorption alone; the audit found no difference between the two (paired ≈ 0).
+    div_evidence: bool = False
     # 5 · divergence evidence
     pl: int = 5                 # pivot left
     pr: int = 5                 # pivot right
@@ -502,8 +506,9 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
     z_conv_u = 3.0 * z_chart
     z_conv = _ema(z_conv_u, p.smooth) if p.smooth > 1 else z_conv_u
     z_val = u_z.where(built, 0.0)
-    rho = z_conv.rolling(sv.VAR_CORR_LEN, min_periods=sv.VAR_CORR_LEN).corr(u_z.where(built))
-    rho_c = rho.fillna(0.5).clip(-0.90, 0.99)
+    # v8 (the Pine): ρ = ta.correlation(zcS, unified_z, 200), nz → 0 until it exists
+    rho = z_conv.rolling(sv.VAR_CORR_LEN, min_periods=sv.VAR_CORR_LEN).corr(u_z)
+    rho_c = rho.fillna(0.0).clip(-0.90, 0.99)
     cv_var = wC * wC + wV * wV + 2.0 * wC * wV * rho_c
     cv_corr = np.where(cv_var > 1e-9, 1.0 / np.sqrt(cv_var), 1.0)
     trace_ok = ((wC <= 0.0) | sd_ok) & ((wV <= 0.0) | built)
@@ -516,7 +521,10 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
     sig = _ema(trace, p.signal)
     hist = trace - sig
     n_tr = np.cumsum(trace_ok)
-    ready = n_tr > p.norm + p.signal
+    # the Pine's warm-up: conviction's smoothing, the blend's ρ window, then the
+    # histogram's own σ window
+    ready = n_tr > ((p.smooth if wC > 0.0 else 0) + (sv.VAR_CORR_LEN if 0.0 < wV < 1.0 else 0)
+                    + p.norm + p.signal)
     hist_sd = hist.rolling(p.norm).std(ddof=0)
     thr = p.k * hist_sd.fillna(0.0)
     h_prev = hist.shift(1)
@@ -614,17 +622,20 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
     hs = pd.Series(hv, index=idx)
     pulled_up = (hs.rolling(p.pull).min() < 0.0).to_numpy()
     pulled_dn = (hs.rolling(p.pull).max() > 0.0).to_numpy()
-    in_zone = (trv < th) & (trv > -th)
-    fail_buy = (not p.effort) | abs_seen | bull_seen
-    fail_sell = (not p.effort) | abs_seen | bear_seen
+    div_b = bull_seen if p.div_evidence else np.zeros(T, dtype=bool)
+    div_s = bear_seen if p.div_evidence else np.zeros(T, dtype=bool)
+    fail_buy = (not p.effort) | abs_seen | div_b
+    fail_sell = (not p.effort) | abs_seen | div_s
     g_v, g_c, g_p = (not p.gate_value), (not p.gate_conv), (not p.gate_push)
     t_buy = (g_v | ((v_lo_w <= -th) & (m_v < th))) & (g_p | (hv > 0.0)) \
         & (g_c | (m_c > 0.0) | m_c_up) & fail_buy
     t_sell = (g_v | ((v_hi_w >= th) & (m_v > -th))) & (g_p | (hv < 0.0)) \
         & (g_c | (m_c < 0.0) | m_c_dn) & fail_sell
     not_abs = (not p.effort) | ~eff_abs
-    t_con_l = (m_c >= p.z1) & (m_v < th) & in_zone & not_abs
-    t_con_s = (m_c <= -p.z1) & (m_v > -th) & in_zone & not_abs
+    # ◆ v8 (= v5): chart conviction on the ◆'s side, the ladder in control, value room
+    oscv_ = osc.to_numpy(dtype=float)
+    t_con_l = (m_c >= p.z1) & (m_v < th) & (oscv_ > 0.0) & not_abs
+    t_con_s = (m_c <= -p.z1) & (m_v > -th) & (oscv_ < 0.0) & not_abs
 
     turn_buy = np.zeros(T, dtype=bool)
     turn_sell = np.zeros(T, dtype=bool)

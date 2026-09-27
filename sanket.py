@@ -7,7 +7,7 @@ reads. One trace — conviction × value, how far a move is stretched in one-sid
 effort and in price against fair value — its histogram (the trace's push), and
 its two ingredients read across horizons on two tapes. Two signals: ▲▼ TURN (a
 stretch releasing, the push that made it failed) and ◆ RESUME (a trend resuming
-from inside the zone). One state: the 4 × 4 conviction-value grid, named as an
+from inside the zone). One state: the 3 × 3 conviction-value grid, named as an
 action with Pragyam's units. `edge.py` measures the signal set on the symbols
 actually on screen. See engine.py, pragati.py, samanvaya.py, cvgrid.py and
 ARCHITECTURE.md.
@@ -88,7 +88,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v8.3.0"
+VERSION = "v8.4.0"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -1850,11 +1850,11 @@ def to_excel(df):
             ("PRG_Value / PRG_Value_Z", "Samanvaya's value on this chart, ±100 and in σ — the trace's position ingredient: the macro-hedged relative-value spread blended with seven price-only breadth views."),
             ("PRG_Hedge / PRG_Drivers", "How much of the macro hedge the value leg applies (its own out-of-sample skill) and the drivers selected."),
             ("PRG_Absorbed / PRG_Eff_Pct", "Effort → result: the share of participation that became displacement, as a percentile of its own history. Absorbed = bottom fifth."),
-            ("PRG_Div_Seen_Bull / _Bear", "A regular divergence on conviction's own pivots, zone-gated, at a price value called stretched, inside the dislocation window — TURN evidence."),
+            ("PRG_Div_Seen_Bull / _Bear", "A regular divergence on conviction's own pivots, zone-gated, at a price value called stretched, inside the dislocation window — context; v8's TURN reads absorption alone as the failed push."),
             ("PRG_Split / PRG_Quiet / PRG_Settling", "Read with caution: the trace's ingredients disagree; the regime is quiet (conviction amplifying a small imbalance); the value basket is settling after a rotation."),
             ("PRG_Stack_OK / PRG_Why", "Whether the signal set can judge this bar, and if not which layer is warming."),
-            ("— THE STATE (CONVICTION-VALUE GRID · 4 × 4) —", ""),
-            ("CVG_Action / CVG_Why / CVG_Units", "The grid cell as an action and its reason, with Pragyam's seed units: Buy 3 · Add 3 · Hold 1.5 · Accumulate 1.5 · Wait 1 · Watch 1 · Trim 0.75 · Reduce 0.5 · Exit 0.25. A weight, not a forecast."),
+            ("— THE STATE (CONVICTION-VALUE GRID · 3 × 3, v8) —", ""),
+            ("CVG_Action / CVG_Why / CVG_Units", "The grid cell as an action and its reason, with its GRADED units — the cell's units read at the name's shaded position, as Pragyam sizes. v8's measured cell units: Buy · capitulation 3 · Accumulate · washout 1.5 · Exit · distribution 0.25 · Accumulate · basing 1.5 · Wait · idle 1 · Trim · stalling 0.75 · Buy · turned 3 · Hold · building 1.5 · Trim · paid 0.75. A weight, not a forecast."),
             ("CVG_Held", "The conviction tape has moved to another row but the push has not confirmed it, so the row is held."),
             ("CVG_Bars / CVG_From", "Bars in the current cell, and the cell before it."),
             ("CVG_Chart_Action / CVG_Lead", "Where the chart's own conviction and value would place the name, and whether that cell carries more (+1) or fewer (−1) units than the state."),
@@ -1947,7 +1947,7 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     """Per-symbol feature engine — the Pragati stack plus order-flow context.
 
     The SIGNALS are Pragati's (see engine.py / pragati.py): the trace (conviction × value),
-    its histogram, the two tapes, ▲▼ TURN and ◆ RESUME, and the 4 × 4 grid state. They
+    its histogram, the two tapes, ▲▼ TURN and ◆ RESUME, and the 3 × 3 grid state. They
     are attached here via ``eng.add_pragati_features``; the cross-section is ranked later
     by ``eng.compute_ranking``. ``drivers`` are the macro closes behind the value
     ingredient (prepared for the chart), ``symbol`` names the instrument (its close time
@@ -2531,7 +2531,8 @@ _SYSTEM_PANELS = (
     ("events", "Two Signals, One State", "Events, and where a name stands",
      "▲▼ TURN: a stretch releasing, each ingredient confirming on its own tape and the "
      "push that made it shown to have failed. ◆ RESUME: a trend resuming from inside the "
-     "zone. Between signals, the 4 × 4 grid names each name's state as an action.",
+     "zone (off by default in v8 — measured negative). Between signals, the 3 × 3 grid names "
+     "each name's state as an action.",
      (("TURN", "trace back through θ · 5-bar window"),
       ("RESUME", "push past k·σ after a pullback"),
       ("Grid", "Buy 3 … Exit 0.25 (Pragyam's units)"),
@@ -3450,7 +3451,7 @@ def _aggregate_timeseries(ts_df):
 
     # Grid breadth: of the names the grid can read, the share whose cell builds the position
     # (Buy / Add / Accumulate) and the share whose cell cuts it (Trim / Reduce / Exit). The
-    # remainder holds (Hold / Wait / Watch).
+    # remainder holds (Hold / Wait).
     _read = daily_agg['_read'].where(daily_agg['_read'] > 0)
     daily_agg['Build_Pct'] = (daily_agg['_build'] / _read * 100).fillna(0)
     daily_agg['Cut_Pct']   = (daily_agg['_cut'] / _read * 100).fillna(0)
@@ -4576,9 +4577,9 @@ _TH_TRACE = ("The trace, ±100: conviction × value on this chart — how far th
              "θ is ±43. Green stretched up, red stretched down; bold past θ.")
 _TH_PUSH = ("The trace's push, from its histogram: ↑↑ impulse · ↑ push · · none · ↓ push · ↓↓ "
             "impulse. 'held' (gold): the grid row stands against its tape for want of a push.")
-_TH_GRID = ("The conviction-value grid: where the two tapes place this name, as an action with "
-            "Pragyam's units (Buy 3 … Exit 0.25). ↑/↓: the chart's own cell is better / weaker. "
-            "Hover for the full reading.")
+_TH_GRID = ("The conviction-value grid (3 × 3, v8): where the two tapes place this name, as an "
+            "action with its graded units (Buy 3 … Exit 0.25). ↑/↓: the chart's own cell carries "
+            "more / fewer units. Hover for the full reading.")
 _TH_C = "MTF conviction tape — who controls across the ladder. ±30 is the knee."
 _TH_V = "MTF value tape — rich (+) or cheap (−) across the ladder. ±43 (θ) is the knee."
 
@@ -4853,11 +4854,11 @@ _CENSUS_CELL_H = 66   # three stacked lines of text + padding, measured in the r
 
 def _census_iframe_height(n_unread: int) -> int:
     """The census is four tall rows, not four table rows — size its iframe for that."""
-    return ui.TABLE_HEADER_H + 4 * _CENSUS_CELL_H + (ui.TABLE_ROW_H + 8 if n_unread else 0) + 6
+    return ui.TABLE_HEADER_H + cg.N_ROWS * _CENSUS_CELL_H + (ui.TABLE_ROW_H + 8 if n_unread else 0) + 6
 
 
 def _build_grid_census_html(df: pd.DataFrame) -> str:
-    """The 4 × 4 as the pane's grid: rows are who controls, columns where price stands.
+    """The 3 × 3 as the pane's grid: rows are who controls, columns where price stands.
 
     Each cell names its action and counts the names in it; held rows are counted apart,
     in gold, because a held row is a claim the push has not yet backed.
@@ -4867,11 +4868,11 @@ def _build_grid_census_html(df: pd.DataFrame) -> str:
     held = df.get('CVG_Held', pd.Series(False, index=df.index)).fillna(False).astype(bool)
     n_read = int((cells != cg.UNREAD).sum())
     rows = []
-    for r in (3, 2, 1, 0):
+    for r in reversed(range(cg.N_ROWS)):
         tds = [f'<td class="symbol" style="color:{_t["ink_secondary"]}; white-space:nowrap;">'
                f'{html.escape(cg.ROW_LABELS[r])}</td>']
-        for c in range(4):
-            cell = r * 4 + c
+        for c in range(cg.N_COLS):
+            cell = r * cg.N_COLS + c
             n = int((cells == cell).sum())
             nh = int(((cells == cell) & held).sum())
             tone = cg.TONES[cell]
@@ -4880,7 +4881,7 @@ def _build_grid_census_html(df: pd.DataFrame) -> str:
             share = f"{n / n_read * 100:.0f}%" if n_read else "—"
             held_t = (f' <span style="color:{_t["amber"]};" title="rows held against their tape">'
                       f'· {nh} held</span>') if nh else ""
-            tip = f"{cg.NAMES[cell]} - {cg.MEANING[cell]}. {cg.UNITS[cell]:g} units."
+            tip = f"{cg.NAMES[cell]} ({cg.FAMILY[cell]}) - {cg.MEANING[cell]}. {cg.UNITS[cell]:g} units."
             tds.append(
                 f'<td style="text-align:center; padding:0.45rem 0.35rem; opacity:{1.0 if n else 0.45};{tint}" '
                 f'title="{html.escape(tip)}">'
@@ -4892,11 +4893,11 @@ def _build_grid_census_html(df: pd.DataFrame) -> str:
         rows.append("<tr>" + "".join(tds) + "</tr>")
     n_un = int((cells == cg.UNREAD).sum())
     if n_un:
-        rows.append(f'<tr><td class="empty" colspan="5">{n_un} name{"s" if n_un != 1 else ""} unread — '
+        rows.append(f'<tr><td class="empty" colspan="{cg.N_COLS + 1}">{n_un} name{"s" if n_un != 1 else ""} unread — '
                     f'a tape not yet calibrated</td></tr>')
     head = (_th("conviction ↓ · value →", numeric=False)
-            + "".join(_th(cg.COL_LABELS[c], "value ≤ −θ" if c == 0 else "−θ < value < 0" if c == 1
-                          else "0 ≤ value < θ" if c == 2 else "value ≥ θ", center=True) for c in range(4)))
+            + "".join(_th(cg.COL_LABELS[c], "value ≤ −θ" if c == 0 else "−θ < value < θ" if c == 1
+                          else "value ≥ θ", center=True) for c in range(cg.N_COLS)))
     return _html_doc(head, rows, 420)
 
 
@@ -5244,24 +5245,27 @@ _SIGNAL_TYPE_REFERENCE = [
      "own tape: the value tape reached θ in the last 20 bars (a dislocation every horizon saw) "
      "and is not stretched the other way now; the conviction tape is on the signal's side or "
      "turning toward it; the histogram points the release's way; and the push that made the "
-     "stretch FAILED — effort absorbed, or a regular divergence at a price value called "
-     "stretched. A ▲ declares BUY, a ▼ SELL; it stands until the opposite one and has no exit."),
+     "stretch FAILED — effort absorbed inside the dislocation window. A ▲ declares BUY, a ▼ "
+     "SELL; it stands until the opposite one and has no exit. Measured (v8 audit): positive "
+     "after 2018 on indices, US stocks and FX, negative on NSE in both eras — a reversal "
+     "event, weak on its own."),
     ("◆ RESUME · a trend resuming", "cyan",
-     "Continuation from inside the zone. The histogram dipped to the wrong side inside 6 bars "
-     "and now crosses its impulse gate (k·σ); the trace is inside ±θ — neither over-stretched "
-     "nor dislocated the other way; the conviction tape is past its inner zone on the ◆'s side "
-     "(control held across horizons); the value tape is short of θ (room left); and effort is "
-     "not absorbed on the bar. A TURN takes precedence on the same bar, and the two share one "
-     "10-bar cooldown per direction."),
+     "OFF BY DEFAULT in v8. Measured across 380 instruments (studies/pine_audit.md) it was "
+     "negative in both eras outside crypto, and significantly so on US stocks in both, so the "
+     "screen no longer fires it. The rule, when switched on (engine settings): chart conviction "
+     "on the ◆'s side; the histogram dipped to the wrong side inside 6 bars and now crosses its "
+     "impulse gate (k·σ); the conviction tape past its inner zone on the ◆'s side; the value "
+     "tape short of θ; effort not absorbed on the bar. A TURN takes precedence, and the two "
+     "share one 10-bar cooldown per direction."),
     ("The grid · where a name stands between signals", "violet",
-     "The conviction tape (who controls) is the row, the value tape (where price stands) the "
-     "column, each split at its knee and at zero — a 4 × 4 whose cells are named as actions "
-     "with Pragyam's seed units: Buy 3 · Add 3 · Hold 1.5 · Accumulate 1.5 · Wait 1 · Watch 1 · "
-     "Trim 0.75 · Reduce 0.5 · Exit 0.25. The histogram's push decides when a row may change — "
-     "a push one step, an impulse all the way, none holds it (gold 'held'). A state, not a "
-     "signal: neither reads the other. Pragyam measured the seed as an allocator — within half "
-     "a percent a year of equal weight, never above it — so read the units as a weight, not a "
-     "forecast."),
+     "The conviction tape (who controls) is the row — UP past +30, DOWN past −30, FAINT "
+     "between — and the value tape (where price stands) the column — cheap past −θ, rich past "
+     "+θ, fair between: Pragyam's 3 × 3, the grid pragati.pine v8 draws. Its units were MEASURED "
+     "(studies/pine_audit.md): Buy · capitulation 3 and Accumulate · washout 1½ where sellers "
+     "hold a cheap or fair price, Buy · turned 3, Hold · building 1½ and Trim · paid ¾ where "
+     "buyers do. Conviction's own histogram decides when a row may change — a confirmed push, "
+     "else the row is HELD (gold). The units are graded by where the name sits inside its "
+     "cell. A state, not a signal: a weight, not a forecast."),
     ("Scope · measured on YOUR universe", "amber",
      "The source measured conviction's components — regular divergence ranked first, nothing "
      "significant once overlapping windows are counted — and left the TURN / RESUME set "
@@ -5437,7 +5441,7 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
 
     ui.render_section_header(
         "Conviction-Value Grid",
-        f"{len(read)} of {len(results_df)} names read · the 4 × 4 the two tapes place each "
+        f"{len(read)} of {len(results_df)} names read · the 3 × 3 the two tapes place each "
         f"name in, named as an action",
         icon="grid", accent="violet",
     )
@@ -5474,17 +5478,18 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
     with ui.html_panel(f"{key}-census", context=_chart_ctx("cell counts · share of names read")):
         st.components.v1.html(_build_grid_census_html(results_df),
                               height=_census_iframe_height(n_un))
-    ui.render_note("Rows are who controls (the conviction tape, split at ±30 and 0); columns "
-                   "are where price stands (the value tape, split at ±θ and 0). A cell wears its "
-                   "tone: **emerald** builds — a capitulation, a turn, a trend below fair; **cyan** "
-                   "accumulates a washout or a base; **amber** holds an extended or rich price; "
-                   "**rose** is sellers in control above fair; grey has no edge. " + cg.READ_THE_PUSH)
-    ui.render_note("**Measured (grid v7):** across 380 instruments in six asset classes over ~20 "
-                   "years (pine_audit.py), sellers-firm names at a cheap or below-fair price were "
-                   "followed by gains in *both* eras on every class but crypto — so those cells now "
-                   "read *Buy · capitulation* and *Accumulate · washout*, where v6 said Watch and "
-                   "Reduce. Buyers-firm above fair earned nothing in either era and now reads *Hold · "
-                   "extended*. Crypto trends; the capitulation cells carried nothing there.")
+    ui.render_note("Rows are who controls (the conviction tape: UP past +30, DOWN past −30); "
+                   "columns are where price stands (the value tape: cheap past −θ, rich past +θ). "
+                   "A cell wears its tone: **emerald** builds — capitulation or a turn; **cyan** "
+                   "accumulates a washout or a base; **amber** holds or trims — building, stalling, "
+                   "paid; **rose** exits distribution; grey waits. " + cg.READ_THE_PUSH)
+    ui.render_note("**Measured (grid v8):** across 380 instruments in six asset classes over ~20 "
+                   "years (pine_audit.py), sellers-in-control names at a cheap or fair price were "
+                   "followed by gains in *both* eras on every class but crypto — those cells read "
+                   "*Buy · capitulation* and *Accumulate · washout* — and buyers-in-control at a fair "
+                   "price earned nothing, so it *holds*. Chosen before 2018, confirmed after; the "
+                   "same units beat the seed in Pragyam's own allocator. Crypto trends and is the "
+                   "stated exception.")
 
     # ── the watchlist: TURN windows open ──
     wl = results_df[armed != 0].copy()
@@ -5503,9 +5508,9 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
 
     # ── the lists, by what the grid says to do ──
     ui.render_sub_header("Names by action")
-    t_build, t_hold, t_cut = st.tabs(["Build · Buy / Add / Accumulate",
-                                      "Hold · Hold / Wait / Watch",
-                                      "Cut · Trim / Reduce / Exit"])
+    t_build, t_hold, t_cut = st.tabs(["Build · Buy / Accumulate",
+                                      "Hold · Hold / Wait",
+                                      "Cut · Trim / Exit"])
     for tab, sel, side_key, pcol, name in ((t_build, sides > 0, 'buy', 'Priority_Long', 'build'),
                                            (t_hold, sides == 0, 'buy', 'Priority_Long', 'hold'),
                                            (t_cut, sides < 0, 'sell', 'Priority_Short', 'cut')):

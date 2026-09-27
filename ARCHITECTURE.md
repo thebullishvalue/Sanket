@@ -1,8 +1,8 @@
 # Sanket — Engine Architecture & Research Basis
 
 > This document records *why* the engine is built the way it is. Sanket screens a universe with
-> **Pragati** (`pragati.pine` v6, conviction × value) — the indicator Pragyam's Conviction-Value
-> Grid reads — ported in `pragati.py`, `samanvaya.py` and `cvgrid.py`, and surfaced by `engine.py`.
+> **Pragati** (`pragati.pine` v8, conviction × value) — the indicator Pragyam's Conviction-Value
+> Grid reads — ported in `pragati.py`, `samanvaya.py`, `pine_v5.py` and `cvgrid.py`, and surfaced by `engine.py`.
 >
 > Two kinds of number appear below. Numbers about **the source indicator** come from the Pine's
 > own evidence section; numbers about **Pragyam's grid** come from Pragyam's pre-registered study.
@@ -36,7 +36,7 @@ targets — directional, not decisive). Pragati does one level up what Samanvaya
                                 │
         ┌───────────────────────┼─────────────────────────┐
         ▼                       ▼                         ▼
-  ▲▼ TURN / ◆ RESUME       4 × 4 GRID STATE           edge.py
+  ▲▼ TURN / ◆ RESUME       3 × 3 GRID STATE           edge.py
   (events)                 (where a name stands)      (measured on your universe)
 ```
 
@@ -108,16 +108,19 @@ second normalization, so agreement across frames is **rarer** than any one frame
 the last rotation) and at least 30 anchor observations in the fit; that opens a 5-bar window.
 Inside it, on one closed bar: the value tape reached −θ inside the last 20 bars and is not rich past
 +θ now; the conviction tape is above zero or rising two bars running; the histogram is above zero;
-and the push failed — effort absorbed or a qualified bullish divergence inside the same 20 bars.
+and the push failed — effort absorbed inside the same 20 bars (v6 also took a divergence; v8, as
+v5, does not — the audit found the two paired ≈ 0).
 Falling back below −θ closes the window. **▼** mirrors.
 
-**◆ RESUME** — the histogram dipped below zero inside 6 bars and crosses +0.5σ; the trace is inside
-±θ; the conviction tape is at or past +30; the value tape is below +θ; effort is not absorbed on
-the bar. Short mirrors.
+**◆ RESUME** — the histogram dipped below zero inside 6 bars and crosses +0.5σ; chart conviction
+is above zero; the conviction tape is at or past +30; the value tape is below +θ; effort is not
+absorbed on the bar. Short mirrors. **Off by default in v8**: negative in both eras of the audit
+outside crypto (−0.021σ / −0.041σ at h 10).
 
 A TURN takes precedence over a RESUME on the same bar; ▲ and long ◆ share one 10-bar cooldown.
 
-**Divergence is evidence, not a signal**, and it is found on **conviction's own pivots** (5/5,
+**Divergence is drawn, not traded** (v8: the audit found R without a stable edge and H negative
+in both eras), and it is found on **conviction's own pivots** (5/5,
 separated by 5 … 60 bars), not on the trace — whose pivots would be a new, unmeasured object. It
 counts only when zone-gated (the earlier pivot beyond ±30) and when value at the pivot was
 stretched the right way. Price is sampled at the swing's true extreme.
@@ -140,7 +143,7 @@ Quoted from the Pine, at face value, including what does not flatter it:
 | Continuation | +0.036R on the primaries, −0.016R elsewhere |
 | Anything, overlap-corrected | **Nothing reaches significance**; best t = 1.9 of 48 cells |
 | Fitted vs unseen edge, 900 configurations | correlation ≈ 0 |
-| Trace, histogram, TURN / RESUME, grid | **unmeasured** |
+| Trace, histogram, TURN / RESUME, grid | unmeasured by the source — measured since by `pine_audit.py` (`studies/pine_audit.md`) |
 
 Method: next-bar entry, 2 ATR target / 1 ATR stop, 20 bars max, edge in R over a matched
 baseline; 60/40 split plus eight held-out instruments; 26 years daily, ~730 days hourly, 60 days
@@ -151,15 +154,29 @@ exposed in the UI.
 
 ## The grid, and what Pragyam measured about it
 
-The conviction tape is the row (±30 and 0), the value tape the column (±θ and 0). The histogram's
-push decides when a row may change — one step on a push, all the way on an impulse, held otherwise.
-Each cell is named as an action with its seed units: Buy 3 · Add 3 · Hold 1.5 · Accumulate 1.5 ·
-Wait 1 · Trim 0.75 · Reduce 0.5 · Exit 0.25. **Grid v7** moved three cells by measurement
-(`studies/pine_audit.md`): sellers firm × cheap → Buy · capitulation 3, sellers firm × below fair →
-Accumulate · washout 1.5, buyers firm × above fair → Hold · extended 1.5.
+The conviction tape is the row (UP past +30, FAINT between, DOWN past −30), the value tape the
+column (cheap past −θ, fair, rich past +θ). Conviction's own histogram decides when a row may
+change — only while it confirms a push that way (on the move's side, not turning, not quiet);
+otherwise the row is held. Units are graded inside each cell on the Pine's shading ramps, and the
+5 × 5 phases halve an edge the faster view does not confirm. **Grid v8** is Pragati v5's 3 × 3
+with four cells measured (`studies/pine_audit.md`, chosen before 2018, confirmed after):
 
-Pragyam measured the 3 × 3 seed through a real allocator — monthly rebalances, every name held —
-on its ETF book, Nifty 50 and Dow 30:
+```
+            CHEAP                     FAIR                      RICH
+UP          Buy · turned 3            Hold · building 1.5       Trim · paid 0.75
+FAINT       Accumulate · basing 1.5   Wait · idle 1             Trim · stalling 0.75
+DOWN        Buy · capitulation 3      Accumulate · washout 1.5  Exit · distribution 0.25
+```
+
+The seed had DOWN·cheap 1, DOWN·fair 0.5, UP·fair 3, UP·rich 1.5. Read as a position outside
+crypto, the v8 units give +0.039σ / +0.039σ before / after 2018 at h 10, against −0.007σ / −0.027σ
+for the seed and +0.016σ / +0.002σ for v7's 4 × 4. It is the final version for that reason. In
+Pragyam's own allocator, re-measured before shipping (`research/cvg_reweight.py` there), v8 beats
+the seed units in both eras on Nifty 50 (+0.42 / +0.98 %/yr) and Dow 30 (+0.55 / +0.89 %/yr) at
+lower turnover. No single t clears 2.
+
+For the record, the seed units through the same kind of allocator (monthly rebalances, every
+name held) on Pragyam's ETF book, Nifty 50 and Dow 30:
 
 ```
              CVG − EW             gate (histogram)      grading
@@ -168,7 +185,7 @@ Nifty 50     −0.32%/yr (t −0.62)  +0.31%/yr (t +2.17)   −0.07%/yr (t −0.
 Dow 30       −0.41%/yr (t −0.78)  +0.28%/yr (t +1.47)   +0.28%/yr (t +0.99)
 ```
 
-Within half a percent of equal weight everywhere, never above it. The histogram's gate earns its
+The seed units: within half a percent of equal weight everywhere, never above it. The histogram's gate earns its
 place on single stocks. The two tapes are about +0.6 correlated (value's breadth leg is momentum),
 so the corners that need them to disagree stay thin. **Sanket shows the grid as a name's state; it
 neither fires on it nor, since the trace study, ranks by it.**

@@ -7,6 +7,57 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v8.4.0] · 2026-09-27
+### Pragati v8 — the final version: v5's grid, measured units, the audit's defaults
+
+The user's **Pragati v5** was audited exactly as v7 was: ported where it differs (`pine_v5.py`),
+checked bar for bar, run on the same 380 instruments with the same scoring and the same
+before/after-2018 split, then compared with v7 head to head. Report: sections 9–11 of
+[`studies/pine_audit.md`](studies/pine_audit.md).
+
+**What it found.**
+- **The signals tie.** v5 and v7 TURN, and the declaration held, are paired ≈ 0.
+- **◆ RESUME is negative in both eras** in both versions (v5 −0.021σ / −0.041σ, h 10, outside
+  crypto), and significantly so on US stocks in both.
+- **R divergence has no stable sign** (−0.031σ / +0.024σ) and **H is negative in both eras**. The
+  source's "ranked first" claim did not reproduce.
+- **The grid decides it.** v5's graded 3 × 3 with units re-weighted on discovery (U4) reads
+  +0.039σ / +0.039σ at h 10 and +0.044σ / +0.051σ at h 20, against −0.007σ / −0.027σ for v5's own
+  units and +0.016σ / +0.002σ for v7's 4 × 4. Paired on the holdout, U4 − v7 = **+0.017σ** (h 10)
+  and **+0.020σ** (h 20), both significant.
+- **OI:** no quadrant is stable. The gold cast marks weaker pushes in both eras (+0.027 vs +0.041;
+  −0.060σ\*\* vs −0.018σ), so it earns its place as a caution colour.
+
+**What v8 is** — v5 plus exactly what held in both eras:
+
+| | v5 | v8 |
+|---|---|---|
+| DOWN · cheap | Watch 1u | **Buy · capitulation 3u** |
+| DOWN · fair | Reduce ½u | **Accumulate · washout 1½u** |
+| UP · fair | Add 3u | **Hold · building 1½u** |
+| UP · rich | Hold 1½u | **Trim · paid ¾u** |
+| ◆ RESUME | on | **off by default** |
+| Conviction ladder | Ladder down | **Ladder up** (what every port runs; Ladder down is unmeasured) |
+| OI gold cast | off | **on**, colour only |
+| R / H | claims as written | drawn as before; the tooltips state what was measured |
+
+**In the repo.** `pragati.pine` is v8 (v5 and v7 kept in `archive/`). `cvgrid.py` is the v8 3 × 3
+(names, units, tones, the graded classify over `pine_v5.grid`); v7's 4 × 4 lives on as
+`cvgrid4.py` for the audit. `pragati.py`: RESUME off by default, v5's ◆ condition (chart
+conviction on its side, no in-zone test), the failed push read from absorption alone
+(`div_evidence`, off), and the Pine's ρ and warm-up. The census, the map, the grid tabs
+(*Build · Buy / Accumulate*, *Hold · Hold / Wait*, *Cut · Trim / Exit*), the legend and every
+reference text are 3 × 3. The screener's ranking is unchanged.
+
+**Pragyam** adopts the same units after its own pre-registered allocator test
+(`research/cvg_reweight.py`): v8 − seed units, before / after 2018, Nifty 50 +0.42 / +0.98 %/yr,
+Dow 30 +0.55 / +0.89 %/yr, at lower turnover; no single t clears 2.
+
+**Not verified here:** the `.pine` file has no compiler in this environment. Load it in
+TradingView and confirm it compiles.
+
+---
+
 ## [v8.3.0] · 2026-09-27
 ### Pragati v7 — the indicator audited from scratch, and changed only where the data held
 

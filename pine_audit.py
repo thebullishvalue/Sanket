@@ -42,7 +42,7 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
-import cvgrid as cg          # noqa: E402
+import cvgrid4 as cg         # noqa: E402
 import engine as eng         # noqa: E402
 import pragati as pg         # noqa: E402
 import samanvaya as sv       # noqa: E402
@@ -674,3 +674,182 @@ def main_oi(oi_folder: str, tag: str = "oi"):
 
 if __name__ == "__main__" and sys.argv[1:2] == ["oi"]:
     main_oi(sys.argv[2])
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════
+# v5 · the same audit on pragati_v5.pine's logic (pine_v5.py), beside v7 on the same bars
+# ════════════════════════════════════════════════════════════════════════════════════════
+V5_UNITS = {
+    "U0": {},                                                    # v5 as published
+    "U1": {(-1, 0): 3.0},                                        # DOWN · cheap  Watch 1 → 3
+    "U2": {(-1, 0): 3.0, (-1, 1): 1.5},                          # + DOWN · fair Reduce ½ → 1½
+    "U3": {(-1, 0): 3.0, (-1, 1): 1.5, (1, 1): 1.5},             # + UP · fair   Add 3 → 1½
+    "U4": {(-1, 0): 3.0, (-1, 1): 1.5, (1, 1): 1.5, (1, 2): 0.75},  # + UP · rich Hold 1½ → ¾
+}
+
+
+def _v5_units(over: dict) -> dict:
+    import pine_v5 as p5
+    u = dict(p5.UNITS_V5)
+    u.update(over)
+    return u
+
+
+def _v5_side(units: dict) -> dict:
+    """The side each cell's action works under a unit map: above Wait's 1u builds, below cuts."""
+    return {k: (1.0 if v > 1.0 else (-1.0 if v < 1.0 else 0.0)) for k, v in units.items()}
+
+
+def _v5_job(args):
+    import pine_v5 as p5
+    g, tkr, df = args
+    cal = _W["cal"]
+    try:
+        lo0 = eng._chart_bars(df)
+        val = sv.compute_value(lo0, _W["drv"], tkr, chart="D")
+        P = eng.settings_for(None, None, "Daily").params
+        lo, out, grid7 = run_port(df, val, P)
+        ch = pg.chart_conviction(lo, P)
+        cv = ch["osc"]
+        cvr = np.cumsum(ch["sd_ok"].to_numpy(bool)) > P.norm + P.smooth + P.signal
+        sig = p5.signals(out, cv, P)
+        div = p5.divergence(lo, out, cv, cvr, P)
+    except Exception as e:
+        return g, tkr, None, f"{type(e).__name__}: {e}"
+    ev = lambda u, d: np.where(u, 1.0, np.where(d, -1.0, np.nan))       # noqa: E731
+    pos7 = positions(out, grid7, lo["close"])
+    pos = {
+        "v7_turn": pos7["turn"], "v7_resume": pos7["resume"], "v7_decl": pos7["decl"],
+        "v7_grid_units": pos7["grid_units"], "v7_grid_side": pos7["grid_side"],
+        "v5_turn": ev(sig.v5_buy.to_numpy(), sig.v5_sell.to_numpy()),
+        "v5_resume": ev(sig.v5_con_l.to_numpy(), sig.v5_con_s.to_numpy()),
+        "v5_decl": np.where(out["stack_ok"].fillna(False).to_numpy(bool) & (sig.v5_decl.to_numpy() != 0),
+                            sig.v5_decl.to_numpy(dtype=float), np.nan),
+        "v5_R": ev(div.v5_r_bull.to_numpy(), div.v5_r_bear.to_numpy()),
+        "v5_H": ev(div.v5_h_bull.to_numpy(), div.v5_h_bear.to_numpy()),
+        "trace": pos7["trace"], "mom20": pos7["mom20"],
+    }
+    cells7 = grid7["cvg_cell"].fillna(cg.UNREAD).astype(int).to_numpy()
+    for k in (0, 1, 14, 15, 12, 13):
+        pos[f"v7_cell{k:02d}"] = np.where(cells7 == k, 1.0, np.nan)
+    for name, over in V5_UNITS.items():
+        units = _v5_units(over)
+        G = p5.grid(out, cv, ch["raw_sd"], cvr, P, units)
+        read = G.v5_units.notna().to_numpy()
+        pos[f"v5{name}_units"] = np.where(read, (G.v5_units.to_numpy() - 1.0) / 2.0, np.nan)
+        side = _v5_side(units)
+        rc = list(zip(G.v5_row.fillna(9).astype(int), G.v5_col.fillna(9).astype(int)))
+        sd = np.array([side.get(k, np.nan) for k in rc], dtype=float)
+        pos[f"v5{name}_side"] = np.where(read & (sd != 0), sd, np.nan)
+        if name == "U0":
+            for (r, c) in p5.UNITS_V5:
+                m = read & (G.v5_row.to_numpy() == r) & (G.v5_col.to_numpy() == c)
+                pos[f"v5cell_{r:+d}{c}"] = np.where(m, 1.0, np.nan)
+                # the 5 × 5 split of the capitulation analogue: phase confirmed vs not
+            m0 = read & (G.v5_row.to_numpy() == -1) & (G.v5_col.to_numpy() == 0)
+            pos["v5cell_-10_reverting"] = np.where(m0 & (G.v5_vph.to_numpy() == 1), 1.0, np.nan)
+            pos["v5cell_-10_widening"] = np.where(m0 & (G.v5_vph.to_numpy() == -1), 1.0, np.nan)
+    sc = score_instrument(lo, pos, cal.get_indexer(lo.index), len(cal), strats=tuple(pos),
+                          horizons=(1, 5, 10, 20))
+    return g, tkr, sc, None
+
+
+def main_v5(tag: str = "v5"):
+    cal = calendar()
+    jobs = [(g, t, df) for g in GROUPS for t, df in load_group(g).items()]
+    accum, errs = Accumulator(len(cal)), []
+    with Pool(4, initializer=_init, initargs=(cal,)) as pool:
+        for i, (g, tkr, sc, err) in enumerate(pool.imap_unordered(_v5_job, jobs, chunksize=2)):
+            if err:
+                errs.append((g, tkr, err)); continue
+            accum.add(g, sc)
+            if (i + 1) % 50 == 0:
+                print(f"  {i + 1}/{len(jobs)}", flush=True)
+    tab = accum.table()
+    # per-date sums for the paired comparisons (grid positions), non-crypto and crypto apart
+    keep = {k: (v[4], v[5]) for k, v in accum.acc.items()
+            if k[1] in ("v7_grid_units", "v5U0_units", "v5U4_units", "v7_grid_side", "v5U4_side",
+                        "v7_turn", "v5_turn")}
+    pickle.dump({"table": tab, "errors": errs, "per_date": keep, "calendar": cal},
+                open(os.path.join(CACHE, f"audit_{tag}.pkl"), "wb"))
+    print(f"done · {len(jobs) - len(errs)} instruments · {len(errs)} errors")
+
+
+def paired(per_date: dict, a: str, b: str, h: int, era: str, groups=("nse", "us", "idx", "cmd", "fx"),
+           n_boot: int = 2000, seed: int = 3) -> dict:
+    """Paired per-date difference a − b of pooled timing edge, block-bootstrapped (blocks of h)."""
+    def series(s):
+        pz = sum(per_date[(g, s, h, era)][0] for g in groups if (g, s, h, era) in per_date)
+        ap = sum(per_date[(g, s, h, era)][1] for g in groups if (g, s, h, era) in per_date)
+        return np.where(ap > 0, pz / np.where(ap > 0, ap, 1.0), np.nan)
+    d = series(a) - series(b)
+    d = d[np.isfinite(d)]
+    blk = max(h, 5)
+    nb = d.size // blk
+    if nb < 4:
+        return {"mean": np.nan, "lo": np.nan, "hi": np.nan, "dates": int(d.size)}
+    bs = d[: nb * blk].reshape(nb, blk).mean(1)
+    rng = np.random.default_rng(seed)
+    means = bs[rng.integers(0, nb, size=(n_boot, nb))].mean(1)
+    return {"mean": float(d.mean()), "lo": float(np.percentile(means, 2.5)),
+            "hi": float(np.percentile(means, 97.5)), "dates": int(d.size)}
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["v5"]:
+    main_v5()
+
+
+def _oi5_job(args):
+    import pine_v5 as p5
+    g, tkr, df, oi = args
+    cal = _W["cal"]
+    try:
+        lo0 = eng._chart_bars(df)
+        val = sv.compute_value(lo0, _W["drv"], tkr, chart="D")
+        P = eng.settings_for(None, None, "Daily").params
+        lo, out, _ = run_port(df, val, P)
+    except Exception as e:
+        return g, tkr, None, f"{type(e).__name__}: {e}"
+    o = oi.reindex(lo.index)
+    have = o.notna().to_numpy()
+    q = p5.oi_quadrant(lo["close"], o.ffill(), P.signal)
+    ch = q["oi_char"].to_numpy()
+    hist = out["hist"].to_numpy(dtype=float)
+    ab = hist >= 0
+    cast = (np.where(ab, (q.oi_exit_up > q.oi_build_up) & (q.oi_exit_up >= P.signal / 3.0),
+                     (q.oi_exit_dn > q.oi_build_dn) & (q.oi_exit_dn >= P.signal / 3.0))).astype(bool)
+    one = lambda m: np.where(m & have, 1.0, np.nan)                  # noqa: E731
+    push = np.where(np.isfinite(hist) & have, np.sign(hist), np.nan)
+    pos = {"LB5": one(ch == "LONG BUILDUP"), "SB5": one(ch == "SHORT BUILDUP"),
+           "SC5": one(ch == "SHORT COVERING"), "LU5": one(ch == "LONG UNWINDING"),
+           "BAL5": one(ch == "balanced"),
+           "crowd80": one(np.nan_to_num(q.oi_rank.to_numpy(), nan=0.0) >= 80),
+           "push_cast": np.where(cast, push, np.nan), "push_nocast": np.where(~cast, push, np.nan)}
+    sc = score_instrument(lo, pos, cal.get_indexer(lo.index), len(cal), strats=tuple(pos),
+                          horizons=(1, 5, 10), split=OI_SPLIT)
+    return g, tkr, sc, None
+
+
+def main_oi5(oi_folder: str, tag: str = "oi5"):
+    cal = calendar()
+    panel = load_oi_panel(oi_folder)
+    px = {**load_group("nse")}
+    extra = os.path.join(CACHE, "multi_fno_extra.pkl")
+    if os.path.exists(extra):
+        px.update(pickle.load(open(extra, "rb")))
+    jobs = [("fno", f"{s}.NS", px[f"{s}.NS"], panel[s]) for s in panel.columns
+            if f"{s}.NS" in px and panel[s].notna().sum() > 300]
+    cal = cal.union(pd.DatetimeIndex(sorted(set().union(*[set(j[2].index) for j in jobs]))))
+    accum, errs = Accumulator(len(cal)), []
+    with Pool(4, initializer=_init, initargs=(cal,)) as pool:
+        for g, tkr, sc, err in pool.imap_unordered(_oi5_job, jobs, chunksize=2):
+            if err:
+                errs.append((tkr, err)); continue
+            accum.add(g, sc)
+    pickle.dump({"table": accum.table(), "errors": errs, "n": len(jobs)},
+                open(os.path.join(CACHE, f"audit_{tag}.pkl"), "wb"))
+    print(f"done · {len(jobs) - len(errs)} F&O names · {len(errs)} errors")
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["oi5"]:
+    main_oi5(sys.argv[2])

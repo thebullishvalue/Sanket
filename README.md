@@ -1,20 +1,21 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v8.3.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v8.4.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
-Sanket screens a universe with **Pragati** (`pragati.pine` v6) — the indicator Pragyam's
+Sanket screens a universe with **Pragati** (`pragati.pine` v8) — the indicator Pragyam's
 Conviction-Value Grid already reads — and asks of every name the indicator's own question:
 **is the push paid for, and at what price?**
 
 It reports three things, and keeps them apart:
 
 - **Events.** ▲▼ **TURN** — a stretch releasing, each ingredient confirming on its own tape and
-  the push that made the stretch shown to have failed. ◆ **RESUME** — a trend resuming from
-  inside the zone. Bucketed by age, ranked, and measured.
-- **State.** Every name's cell in the **4 × 4 conviction-value grid**, named as an action —
-  Buy · Add · Accumulate · Hold · Wait · Watch · Trim · Reduce · Exit — with Pragyam's seed units
-  as its weight. Where the name stands *between* events.
+  the push that made the stretch shown to have been absorbed. ◆ **RESUME** — a trend resuming —
+  is still computed but **off by default** in v8: it was negative in both eras of the audit.
+  Bucketed by age, ranked, and measured.
+- **State.** Every name's cell in the **3 × 3 conviction-value grid** (v8), named as an action —
+  Buy · Accumulate · Hold · Wait · Trim · Exit — with the measured v8 units, the same units
+  Pragyam's book now sizes from. Where the name stands *between* events.
 - **Evidence.** The out-of-sample expectancy of the event set **on the symbols you put on
   screen**, measured every day by the built-in Edge Study, with the interval and the power stated.
 
@@ -26,10 +27,11 @@ Part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/
 >    its place, the scaling is calibrated — and nothing it measured reaches significance once
 >    overlapping windows are counted (best t = 1.9 of 48 cells). The TURN / RESUME stack, the
 >    trace, its histogram and the grid are new objects. So the app measures them, on your symbols.
-> 2. **The grid is a weight, not a forecast.** Pragyam measured its 3 × 3 seed through a real
->    allocator on three universes: within half a percent a year of equal weight, never above it,
->    none of the gaps significant. Sanket ranks with it because it is the indicator's own reading
->    of where a name stands — not because it predicts.
+>    The v5 / v7 / v8 audit (`studies/pine_audit.md`) has since measured them on 380 instruments.
+> 2. **The grid is a weight, not a forecast.** Its v8 units were chosen before 2018 and confirmed
+>    after on 380 instruments, and in Pragyam's allocator they beat the seed units in both eras on
+>    Nifty 50 and Dow 30 — but no single t clears 2 there. Sanket shows it as the indicator's own
+>    reading of where a name stands; the screener does not rank by it.
 > 3. **Scope is earned per universe, never inherited.** Nothing about your symbols is hardcoded;
 >    until the Edge Study measures, the app says "not measured".
 >
@@ -84,8 +86,8 @@ The trace says **how far**, the histogram says **which way it is going**, the ta
 | Layer | Module | Carried from |
 |:---|:---|:---|
 | Value — rich or cheap against the macro drivers | `samanvaya.py` | Pragyam's port, vectorised; Weekly added |
-| Conviction, the trace, the histogram, the signals | `pragati.py` | Pragyam's conviction port, extended to v6 |
-| The 4 × 4 grid | `cvgrid.py` | the v6 Pine's section 10 (Pragyam's 3 × 3 seed, grown) |
+| Conviction, the trace, the histogram, the signals | `pragati.py` | Pragyam's conviction port, extended; signals at v8 (= v5) |
+| The 3 × 3 grid | `cvgrid.py` + `pine_v5.py` | the v8 Pine's CVG block, graded — bit for bit Pragyam's graded map |
 | Settings, per-symbol features, snapshot, ranking | `engine.py` | Sanket |
 | Measured expectancy | `edge.py` | Sanket, now measuring the new events |
 
@@ -118,52 +120,59 @@ window. Inside it, on one closed bar, all of:
 | Value · its tape | reached −θ inside the last 20 bars (a dislocation every horizon saw), and not rich past +θ now |
 | Conviction · its tape | above zero, or rising two bars running |
 | The trace's push | histogram > 0 — the release still pushing |
-| The push failed | inside the same 20 bars, effort was **absorbed** (bottom fifth of its history) **or** a regular bullish **divergence** formed on conviction's own pivots, zone-gated, at a price value called cheap |
+| The push failed | inside the same 20 bars, effort was **absorbed** (bottom fifth of its history). v6 also accepted a regular divergence here; v8 (as v5) does not — the audit found no difference (paired ≈ 0) |
 
 A ▲ declares BUY, a ▼ SELL. A declaration stands until the opposite one; it has no exit.
 
-**◆ RESUME** (long; short mirrors) — *a trend resuming from inside the zone.* The histogram dipped
-below zero inside 6 bars and now crosses +k·σ (k = 0.5); the trace is inside ±θ; the conviction
-tape is past +30 (control held across horizons); the value tape is short of +θ (room left); and
-effort is not absorbed on the bar.
+**◆ RESUME** (long; short mirrors) — *a trend resuming.* The histogram dipped below zero inside
+6 bars and now crosses +k·σ (k = 0.5); chart conviction is above zero; the conviction tape is past
++30 (control held across horizons); the value tape is short of +θ (room left); and effort is not
+absorbed on the bar. **Off by default in v8** (`Params.resume`): outside crypto it read −0.021σ
+before 2018 and −0.041σ after (h = 10), significantly negative on US stocks in both eras.
 
 TURN takes precedence over RESUME on the same bar; ▲ and long ◆ share one 10-bar cooldown.
 Nothing pauses silently: a name whose tapes are still calibrating is **paused**, and says which
 layer it is waiting for.
 
-**Why divergence and absorption are evidence, not signals.** Divergence was the one element the
-source ranked first; hidden divergence and the chart-only reversal trigger measured nothing.
-So v6 folds the ranked element into the TURN as evidence that the push failed, rather than
-firing it alone.
+**Divergence is drawn, not traded.** The Pine's R (regular) and H (hidden) marks stay on the
+chart. Measured as positions, R read −0.031σ before 2018 and +0.024σ after — no stable edge — and
+H was negative in both eras. The source's claim that R "ranked first" did not reproduce.
 
 ---
 
 ## The Grid
 
-The two tapes place every name in a 4 × 4, each split at its knee and at zero:
+The two tapes place every name in a 3 × 3 — conviction at its inner zone (±30), value at θ (±42.9):
 
 ```
-                 CHEAP              BELOW FAIR          ABOVE FAIR          RICH
-buyers firm      Buy · turn 3       Add · trend 3       Hold · extended 1.5 Hold · don't add 1.5
-buyers edge      Accumulate ·       Accumulate ·        Wait · drifting 1   Trim · stalling 0.75
-                 basing 1.5         early turn 1.5
-sellers edge     Accumulate ·       Wait · no edge 1    Trim · rolling      Trim · topping 0.75
-                 deep value 1.5                         over 0.75
-sellers firm     Buy ·              Accumulate ·        Reduce ·            Exit · distribution
-                 capitulation 3     washout 1.5         breakdown 0.5       0.25
+                 CHEAP                     FAIR                      RICH
+buyers           Buy · turned 3            Hold · building 1.5       Trim · paid 0.75
+undecided        Accumulate · basing 1.5   Wait · idle 1             Trim · stalling 0.75
+sellers          Buy · capitulation 3      Accumulate · washout 1.5  Exit · distribution 0.25
 ```
 
-**Grid v7 — three cells measured, not chosen.** `pine_audit.py` ran the indicator's port on 380
-instruments in six asset classes over ~20 years, split before / after 2018. Sellers firmly in
-control at a cheap or below-fair price was followed by gains in *both* eras on every class but
-crypto (+0.10 to +0.35σ after 2018, significant on US, indices, commodities, FX), and it adds to
-plain oversold. So v6's *Watch · still falling* and *Reduce · downtrend* are now *Buy ·
-capitulation* and *Accumulate · washout*, and *Add · strong trend* — which earned nothing in either
-era — is *Hold · extended*. Full report: [`studies/pine_audit.md`](studies/pine_audit.md).
+**Grid v8 — Pragati v5's grid, with four cells measured.** `pine_audit.py` ran the port on 380
+instruments in six asset classes over ~20 years, split before / after 2018. Sellers in control at
+a cheap or fair price was followed by gains in *both* eras on every class but crypto, and adding
+where buyers hold a fair price earned nothing. The units were chosen on the pre-2018 era alone and
+confirmed once after it — outside crypto, the graded units read as a position:
 
-**The histogram runs the rows.** Columns move freely — price is where it is. A row moves only
-with the push behind it: a push moves it one step toward the tape, an impulse all the way, no push
-holds it (**held**, in gold). Before the histogram is calibrated the row follows the tape.
+```
+                      h = 10 before / after 2018     h = 20 before / after 2018
+v5 seed units         −0.007σ / −0.027σ              −0.003σ / −0.043σ
+v7 (4 × 4)            +0.016σ / +0.002σ              +0.019σ / +0.003σ
+v8 units              +0.039σ / +0.039σ              +0.044σ / +0.051σ
+```
+
+v8 − v7, paired by date: +0.017σ (h 10) and +0.020σ (h 20) after 2018, both significant. That is
+why the final version is v5's 3 × 3 rather than v7's 4 × 4. **Crypto is the stated limit** — it
+trends. Full report: [`studies/pine_audit.md`](studies/pine_audit.md).
+
+**The histogram runs the rows.** Columns move freely — price is where it is. A row moves to its
+tape only while conviction's own histogram confirms a push that way: on the move's side, not
+turning, not quiet. Otherwise it is **held**, in gold. Before the histogram is calibrated the row
+follows the tape. **Graded**: the units are read at the name's shaded position inside its cell on
+the Pine's own ramps, and the Pine's 5 × 5 phases halve an edge the faster view does not confirm.
 
 **The chart cell.** The trace's two ingredients on this chart alone place a second cell; when it
 carries more units than the state, the chart **leads ↑**, fewer **↓**. Display only.
@@ -289,10 +298,12 @@ Per symbol, on each run:
 ```
 sanket.py            ← Streamlit entry point: UI, data + macro-driver fetch, screen routing
 engine.py            ← settings, per-symbol features, the snapshot row, ranking, cost gate
-pragati.py           ← pragati.pine v6: conviction, ladders, trace, histogram, TURN / RESUME
+pragati.py           ← pragati.pine v8: conviction, ladders, trace, histogram, TURN / RESUME
 samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
-cvgrid.py            ← the 4 × 4 conviction-value grid (v7)
-pragati.pine         ← the indicator itself, v7 — the Pine the port mirrors
+cvgrid.py            ← the 3 × 3 conviction-value grid (v8): names, units, tones, classify
+pine_v5.py           ← the v5/v8 Pine's own logic: ▲▼ ◆, R / H, the graded grid and phases, OI quadrant
+cvgrid4.py           ← v7's 4 × 4 grid, kept so the audit can reproduce the comparison
+pragati.pine         ← the indicator itself, v8 — the Pine the port mirrors (archive/: v5, v7)
 pine_audit.py        ← from-scratch multi-asset audit of the indicator (baseline, sweep, experiments, OI)
 charts.py            ← chart builders: the conviction-value map, tone history, correlation heatmap
 trace_study.py       ← backtest: the screener under all three trace settings, paired, holdout-sealed
@@ -311,7 +322,7 @@ volume profile, absorption) are unchanged and remain context only.
 ## Analysis Modes
 
 1. **Single Date Screener** — Action Dashboard (events by age, each with its grid state, push,
-   tapes and evidence) · **Grid** (the 4 × 4 census, the watchlist of open TURN windows, names by
+   tapes and evidence) · **Grid** (the 3 × 3 census, the watchlist of open TURN windows, names by
    action) · Signal Strength (the ranking) · System Data (exports, raw frame, Edge Study).
 2. **Historical Range** — event breadth by kind, open TURN windows, grid breadth (build vs cut),
    the universe-mean tapes, regime context, forward-return labels, Excel export.
@@ -440,6 +451,13 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 ---
 
 ## What Changed
+
+**v8.4.0 — Pragati v8, the final version: v5's grid with measured units.** The user's v5 Pine
+was audited the same way v7 was and the two compared head to head. Their signals tie; v5's
+graded 3 × 3 with four cells re-weighted beats v7's 4 × 4 after 2018 (paired +0.017σ at h 10,
++0.020σ at h 20). v8 = v5 + those units, ◆ RESUME off by default, Ladder up by default, the OI
+gold cast on (colour only). Pragyam's book adopts the same units after passing its own allocator
+test in both eras. See the CHANGELOG for the full list.
 
 **v8.0.0 — Pragati: the screener re-envisioned on conviction × value.** The Siddhi zero-crossing
 engine is replaced by the indicator Pragyam's Conviction-Value Grid reads, carried the rest of the
@@ -797,4 +815,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v8.3.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v8.4.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
