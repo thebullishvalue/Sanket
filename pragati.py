@@ -111,7 +111,11 @@ class Params:
     mix: float = 0.5            # value's weight in the trace (0.5 = conviction × value)
     signal: int = 9             # inpSig   — the trace's signal EMA
     # 4 · signals
-    turn: bool = True           # ▲▼ TURN
+    turn: bool = True           # ▲▼ (inpState)
+    # v9: the ▲▼ are read from the grid — ▲ the capitulation turn, ▼ distribution
+    # (v9_signals, applied by engine.compute_frame once the grid is classified).
+    # "turn" keeps v8's arm-then-confirm TURN (the Pine's 'TURN (v8, legacy)').
+    signal_source: str = "capitulation"
     confirm: int = 5            # confirmation window
     disloc: int = 20            # dislocation window
     resume: bool = False        # ◆ RESUME — OFF by default in v8: negative in both eras
@@ -444,7 +448,7 @@ COLUMNS = (
     "abs_seen", "bull_div", "bear_div", "bull_div_seen", "bear_div_seen",
     "div_x1", "div_p1", "div_x2", "div_p2",
     # the signal set
-    "turn_buy", "turn_sell", "resume_long", "resume_short",
+    "turn_buy", "turn_sell", "resume_long", "resume_short", "con_cand_l", "con_cand_s",
     "armed", "armed_age", "decl", "decl_since",
     # reconstruction
     "rec_err",
@@ -689,6 +693,11 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
             armed[t], armed_age[t] = -1, t - arm_s + 1
         decl[t], decl_since[t] = d_now, d_bar
 
+    # the ◆ condition before the cooldown and the ▲▼'s precedence — v9_signals re-runs
+    # the per-direction clock with the grid's ▲▼, as the Pine's section 8b does
+    con_cand_l = np.asarray(p.resume & stack_ok & pulled_up & imp_up & t_con_l, dtype=bool)
+    con_cand_s = np.asarray(p.resume & stack_ok & pulled_dn & imp_dn & t_con_s, dtype=bool)
+
     # ── why the stack cannot judge, when it cannot ──
     need = sv.HOLD_OUT + sv.MODEL_MIN
     why = np.full(T, "", dtype=object)
@@ -722,9 +731,71 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
         "div_x1": div_x1, "div_p1": div_p1, "div_x2": div_x2, "div_p2": div_p2,
         "turn_buy": turn_buy, "turn_sell": turn_sell,
         "resume_long": res_long, "resume_short": res_short,
+        "con_cand_l": con_cand_l, "con_cand_s": con_cand_s,
         "armed": armed, "armed_age": armed_age, "decl": decl, "decl_since": decl_since,
         "rec_err": rec_err,
     }, index=idx)[list(COLUMNS)]
+
+
+def v9_signals(out: pd.DataFrame, grid: pd.DataFrame, p: Params = DEFAULT) -> pd.DataFrame:
+    """The Pine's section 8b: v9's ▲▼ read from the grid, on ``compute``'s output.
+
+    ▲ CAPITULATION TURN — the first bar the grid stands in DOWN · cheap (cell 0) with
+    value momentum reverting (the 5 × 5 value phase +1). ▼ DISTRIBUTION — the first bar
+    in DOWN · rich (cell 2). Both need the stack able to judge, and the per-direction
+    cooldown, which a ◆ shares. Replaces turn_buy / turn_sell, resume_long / resume_short
+    (the ◆ yields to a ▲▼ on the same bar), decl / decl_since, and armed / armed_age —
+    in v9 'armed' is a name in capitulation whose value is still cheapening: the ▲
+    comes when it turns. The v8 TURN is kept as turn_buy_v8 / turn_sell_v8.
+
+    With ``p.signal_source == "turn"`` the output is returned unchanged (legacy).
+    """
+    out = out.copy()
+    out["turn_buy_v8"], out["turn_sell_v8"] = out["turn_buy"].to_numpy(bool), out["turn_sell"].to_numpy(bool)
+    if p.signal_source != "capitulation":
+        return out
+    T = len(out)
+    cell = grid["cvg_cell"].to_numpy(dtype=int)
+    vph = grid["cvg_vph"].to_numpy(dtype=int)
+    cap = (cell == 0) & (vph == 1)
+    dist = cell == 2
+    cap_b = cap & ~np.r_[False, cap[:-1]]
+    dist_s = dist & ~np.r_[False, dist[:-1]]
+    ok = out["stack_ok"].fillna(False).to_numpy(bool)
+    cl, cs = out["con_cand_l"].to_numpy(bool), out["con_cand_s"].to_numpy(bool)
+    tb, ts = np.zeros(T, bool), np.zeros(T, bool)
+    rl, rs = np.zeros(T, bool), np.zeros(T, bool)
+    decl = np.zeros(T, dtype=int)
+    decl_since = np.full(T, -1, dtype=int)
+    armed = np.zeros(T, dtype=int)
+    armed_age = np.zeros(T, dtype=int)
+    last_l = last_s = None
+    d_now, d_bar, in_cap = 0, -1, 0
+    for t in range(T):
+        cool_l = last_l is None or t - last_l >= p.cool
+        cool_s = last_s is None or t - last_s >= p.cool
+        buy = p.turn and ok[t] and cool_l and cap_b[t]
+        sell = p.turn and ok[t] and cool_s and dist_s[t]
+        con_l = cl[t] and not buy and cool_l
+        con_s = cs[t] and not sell and cool_s
+        if buy or con_l:
+            last_l = t
+        if sell or con_s:
+            last_s = t
+        if buy:
+            d_now, d_bar = 1, t
+        if sell:
+            d_now, d_bar = -1, t
+        tb[t], ts[t], rl[t], rs[t] = buy, sell, con_l, con_s
+        decl[t], decl_since[t] = d_now, d_bar
+        in_cap = in_cap + 1 if cell[t] == 0 else 0
+        if cell[t] == 0 and vph[t] != 1 and ok[t]:
+            armed[t], armed_age[t] = 1, in_cap
+    out["turn_buy"], out["turn_sell"] = tb, ts
+    out["resume_long"], out["resume_short"] = rl, rs
+    out["decl"], out["decl_since"] = decl, decl_since
+    out["armed"], out["armed_age"] = armed, armed_age
+    return out
 
 
 def warmup_bars(p: Params = DEFAULT) -> int:
@@ -740,4 +811,4 @@ def warmup_bars(p: Params = DEFAULT) -> int:
 
 
 __all__ = ["COLUMNS", "DEFAULT", "Params", "RAIL_OUT", "chart_conviction", "child_rung",
-           "compute", "parent_rung", "true_range", "warmup_bars", "week_label"]
+           "compute", "parent_rung", "true_range", "v9_signals", "warmup_bars", "week_label"]

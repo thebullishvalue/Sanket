@@ -3,38 +3,42 @@ edge.py — measured out-of-sample expectancy for the Pragati signal set, per un
 
 Why this module exists
 ----------------------
-The signal set (``engine.py``: ▲▼ TURN and ◆ RESUME, pragati.pine v6) is a fixed,
+The signal set (``engine.py``: the ▲▼ read from the grid and ◆ RESUME, pragati.pine v9) is a fixed,
 pre-declared rule. The question this module answers is separate and empirical: **does
 that rule carry an edge on the universe actually on screen, and can we prove it from data
-the app can fetch?** The source indicator's own answer for this set is "unmeasured" — its
-evidence section measured conviction's components, not the TURN / RESUME stack — so a
-quoted number would be worse than none. This measures it, on your symbols.
+the app can fetch?** The v9 audit measured the set across 380 instruments (the ▲ about
++0.05σ over 10-20 bars in every era outside crypto), but a number from other symbols is
+not a number for yours. This measures it, on your symbols.
 
 What is measured
 ----------------
 Six slices, each with the full method below:
 
-    buy / sell                   every long event (▲ TURN + ◆ RESUME ↑) / every short one
-    turn_buy / turn_sell         ▲ TURN / ▼ TURN alone — the declarations
+    buy / sell                   every long event (▲ + ◆ RESUME ↑) / every short one
+    turn_buy / turn_sell         ▲ capitulation / ▼ distribution alone (v9's ▲▼)
     resume_long / resume_short   ◆ RESUME alone — continuation
 
 The pooled sides are what the screen's two sides are; the per-kind slices say which of
-the two situations is carrying (or costing) the pooled number. TURNs are rare by
-construction — every layer must confirm on one bar — so their slices will usually read
-UNDERPOWERED, and the app says so rather than quoting a number it cannot resolve.
+the two situations is carrying (or costing) the pooled number. The ▲▼ are rare by
+construction — a capitulation turning, sellers taking a rich price — so their slices will
+often read UNDERPOWERED, and the app says so rather than quoting a number it cannot resolve.
 
 Method (each step exists to kill a specific way of fooling yourself)
 -------------------------------------------------------------------
 1. **Event study at the declared horizon.** Enter at the bar AFTER the signal bar closes,
    exit ``horizon`` bars later (EXEC-B).
 
-2. **Drift removal, within era.** Subtract each symbol's own mean forward return, computed
-   inside the era being measured. Without this every long signal on an equity universe in
-   a bull market prints a profit and you have measured beta, not edge.
+2. **Drift removal, CAUSAL.** Subtract each symbol's own mean h-bar forward return over
+   the 500 returns fully REALISED before the event (ending h + 1 bars earlier). Without
+   drift removal every long signal on an equity universe in a bull market prints a profit
+   and you have measured beta, not edge. (Up to v8.4 the mean was taken inside the era being
+   measured — a look-ahead the v9 audit showed flatters reversal signals: on random walks
+   it alone scores a persistent momentum reading as reversion, and events that cluster in
+   names whose era went badly look better than they were.)
 
-3. **Volatility normalisation.** Divide by the symbol's own forward-return sigma, so an FX
-   pair, a bond ETF and a small-cap equity land on one scale — and the cost charge means
-   the same thing on each.
+3. **Volatility normalisation.** Divide by the symbol's own forward-return sigma over the
+   same trailing window, so an FX pair, a bond ETF and a small-cap equity land on one
+   scale — and the cost charge means the same thing on each.
 
 4. **Sign folding.** A long event scores positive when the return beat the symbol's drift;
    a short event scores positive when it fell short.
@@ -93,8 +97,8 @@ SLICES = {
     "resume_long":  (1.0, "resume"),
     "resume_short": (-1.0, "resume"),
 }
-SLICE_LABEL = {"buy": "Long · all", "sell": "Short · all", "turn_buy": "▲ TURN",
-               "turn_sell": "▼ TURN", "resume_long": "◆ RESUME ↑", "resume_short": "◆ RESUME ↓"}
+SLICE_LABEL = {"buy": "Long · all", "sell": "Short · all", "turn_buy": "▲ capitulation",
+               "turn_sell": "▼ distribution", "resume_long": "◆ RESUME ↑", "resume_short": "◆ RESUME ↓"}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
@@ -106,8 +110,8 @@ def symbol_events(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
 
     ``df`` is the chart's OHLCV (Title-case, ascending) — weekly bars on a weekly study,
     with ``daily`` the bars behind them. ``side`` is +1 long / -1 short, ``kind`` is
-    'turn' or 'resume', ``fwd`` the raw h-bar forward return from the next bar. Drift
-    removal and vol normalisation happen later, in :func:`measure`, within era.
+    'turn' (the ▲▼) or 'resume', ``fwd`` the raw h-bar forward return from the next bar.
+    Drift removal and vol normalisation happen later, in :func:`measure`, causally.
 
     THE EVENTS COME FROM THE ENGINE ITSELF (``engine.compute_frame``), so every guard
     the screener applies — warm-up, the stack gate, the basket-settling gate, cooldowns —
@@ -145,8 +149,8 @@ def symbol_events(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
 def symbol_baseline(close: pd.Series, horizon: int) -> pd.Series:
     """Per-bar h-bar forward return for one symbol — the drift/vol baseline.
 
-    Returned as a dated series so :func:`measure` can slice it per era and compute the
-    mean and sigma *inside* each era, which is what keeps the holdout clean.
+    Returned as a dated series (dated by its entry bar) so :func:`measure` can take the
+    trailing mean and sigma of the returns already realised at each event.
     """
     entry = close.shift(-1)
     exit_ = close.shift(-1 - int(horizon))
@@ -400,40 +404,53 @@ class EdgeStudy:
 # ════════════════════════════════════════════════════════════════════════════════════════
 # THE MEASUREMENT
 # ════════════════════════════════════════════════════════════════════════════════════════
-def _score_events(ev: pd.DataFrame, baselines: dict, symbols: np.ndarray,
-                  lo: pd.Timestamp, hi: pd.Timestamp) -> pd.DataFrame:
-    """Drift-remove and vol-normalise events inside one era. Returns scored events.
+BASE_WINDOW = 500      # realised h-bar returns behind each event's drift and sigma
+BASE_MIN = 100         # fewer than this and the symbol's event is not scored
 
-    ``baselines[sym]`` is that symbol's dated forward-return series. The mean and sigma are
-    taken over ``[lo, hi]`` only — the era being measured — so nothing leaks across the
-    split. Symbols whose in-era sigma is undefined or zero are dropped rather than divided
-    by, which would manufacture infinite scores on a flat instrument.
+
+def _causal_stats(b: pd.Series, horizon: int) -> tuple:
+    """Trailing mean and sigma of a symbol's h-bar forward returns, as known at each date.
+
+    A forward return dated t (entered t+1, exited t+1+h) is realised h + 1 bars later, so
+    the statistics at t use only returns dated t − h − 1 and earlier. Under the null — a
+    return independent of its past — the score is then exactly unbiased."""
+    r = b.rolling(BASE_WINDOW, min_periods=BASE_MIN)
+    return r.mean().shift(horizon + 1), r.std(ddof=1).shift(horizon + 1)
+
+
+def _score_events(ev: pd.DataFrame, baselines: dict, symbols: np.ndarray,
+                  lo: pd.Timestamp, hi: pd.Timestamp, horizon: int = 1) -> pd.DataFrame:
+    """Drift-remove and vol-normalise the events dated inside ``[lo, hi]``. Returns scored events.
+
+    ``baselines[sym]`` is that symbol's dated forward-return series. Each event's drift and
+    sigma are the symbol's trailing ones as known at the event (:func:`_causal_stats`) —
+    nothing from the event's future, inside or outside the era. Events whose sigma is
+    undefined or zero are dropped rather than divided by, which would manufacture infinite
+    scores on a flat instrument.
     """
     m = (ev["date"] >= lo) & (ev["date"] <= hi)
     sub = ev.loc[m]
     if sub.empty:
         return sub.assign(score=pd.Series(dtype=float), cost=pd.Series(dtype=float))
 
-    stats = {}
-    for sym in np.unique(sub["symbol"].to_numpy()):
+    mu = np.full(len(sub), np.nan)
+    sg = np.full(len(sub), np.nan)
+    syms = sub["symbol"].to_numpy()
+    dts = pd.DatetimeIndex(sub["date"])
+    for sym in np.unique(syms):
         b = baselines.get(sym)
         if b is None or b.empty:
             continue
-        w = b.loc[(b.index >= lo) & (b.index <= hi)]
-        if len(w) < 30:
-            continue
-        sd = float(w.std(ddof=1))
-        if not np.isfinite(sd) or sd <= 0:
-            continue
-        stats[sym] = (float(w.mean()), sd)
+        mc, sc = _causal_stats(b.sort_index(), int(horizon))
+        k = syms == sym
+        mu[k] = mc.reindex(dts[k], method="ffill").to_numpy(dtype=float)
+        sg[k] = sc.reindex(dts[k], method="ffill").to_numpy(dtype=float)
 
-    if not stats:
+    keep = np.isfinite(mu) & np.isfinite(sg) & (sg > 0)
+    if not keep.any():
         return sub.iloc[0:0].assign(score=pd.Series(dtype=float), cost=pd.Series(dtype=float))
-
-    keep = sub["symbol"].isin(stats.keys())
     sub = sub.loc[keep].copy()
-    mu = sub["symbol"].map(lambda s: stats[s][0]).to_numpy(dtype=float)
-    sg = sub["symbol"].map(lambda s: stats[s][1]).to_numpy(dtype=float)
+    mu, sg = mu[keep], sg[keep]
     # Sign folding: positive score == the signal was right, for BOTH sides.
     sub["score"] = sub["side"].to_numpy(dtype=float) * (sub["fwd"].to_numpy(dtype=float) - mu) / sg
     # Cost in the same vol units as the score: a round trip of `cost_bps` against this
@@ -531,7 +548,7 @@ def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
     }
     results: dict = {k: {} for k in SLICES}
     for era, (a, b) in eras.items():
-        scored = _score_events(ev, baselines, ev["symbol"].unique(), a, b)
+        scored = _score_events(ev, baselines, ev["symbol"].unique(), a, b, int(horizon))
         if scored.empty:
             continue
         for side_key in SLICES:

@@ -1,18 +1,19 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v8.4.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v9.0.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
-Sanket screens a universe with **Pragati** (`pragati.pine` v8) — the indicator Pragyam's
+Sanket screens a universe with **Pragati** (`pragati.pine` v9) — the indicator Pragyam's
 Conviction-Value Grid already reads — and asks of every name the indicator's own question:
 **is the push paid for, and at what price?**
 
 It reports three things, and keeps them apart:
 
-- **Events.** ▲▼ **TURN** — a stretch releasing, each ingredient confirming on its own tape and
-  the push that made the stretch shown to have been absorbed. ◆ **RESUME** — a trend resuming —
-  is still computed but **off by default** in v8: it was negative in both eras of the audit.
-  Bucketed by age, ranked, and measured.
+- **Events** (v9 — read from the grid). ▲ **CAPITULATION** — sellers in control across the ladder
+  at a price cheap past θ, and value momentum already turned back toward fair: the one event the
+  v9 audit found positive in every era, daily and weekly. ▼ **DISTRIBUTION** — sellers taking
+  control of a rich price. ◆ **RESUME** is computed but off by default. Bucketed by age, ranked,
+  and measured.
 - **State.** Every name's cell in the **3 × 3 conviction-value grid** (v8), named as an action —
   Buy · Accumulate · Hold · Wait · Trim · Exit — with the measured v8 units, the same units
   Pragyam's book now sizes from. Where the name stands *between* events.
@@ -22,12 +23,12 @@ It reports three things, and keeps them apart:
 Part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/thebullishvalue).
 
 > **Read this first.** Sanket is **decision-support**, not a turnkey strategy.
-> 1. **The signal set is unmeasured in its source.** `pragati.pine`'s evidence section measured
->    conviction's *components* — regular divergence ranked first, participation weighting earns
->    its place, the scaling is calibrated — and nothing it measured reaches significance once
->    overlapping windows are counted (best t = 1.9 of 48 cells). The TURN / RESUME stack, the
->    trace, its histogram and the grid are new objects. So the app measures them, on your symbols.
->    The v5 / v7 / v8 audit (`studies/pine_audit.md`) has since measured them on 380 instruments.
+> 1. **The edge is small, and it lives in one place.** The v9 audit
+>    ([`studies/pragati_v9_audit.md`](studies/pragati_v9_audit.md); 380 instruments, six classes,
+>    three eras, daily and weekly, scored without look-ahead) found the readings — conviction,
+>    value, the trace, its histogram, both tapes — carry almost no timing information of their
+>    own. The capitulation state and its turn carry the one robust edge: about +0.05 to +0.08σ
+>    over 10–20 bars in every era outside crypto. A lean, not a trade.
 > 2. **The grid is a weight, not a forecast.** Its v8 units were chosen before 2018 and confirmed
 >    after on 380 instruments, and in Pragyam's allocator they beat the seed units in both eras on
 >    Nifty 50 and Dow 30 — but no single t clears 2 there. Sanket shows it as the indicator's own
@@ -111,32 +112,40 @@ to 1e-13.
 
 ## The Signals
 
-**▲ TURN** (▼ mirrors) — *a stretch releasing, the selling spent.* The trace crosses back up
-through −θ (θ = ±42.9, Samanvaya's 1.5σ) with the value basket settled; that opens a 5-bar
-window. Inside it, on one closed bar, all of:
+v9 reads the ▲▼ **from the grid** (the Pine's section 8b; `pragati.v9_signals` in the port):
 
-| Layer | Condition |
-|:---|:---|
-| Value · its tape | reached −θ inside the last 20 bars (a dislocation every horizon saw), and not rich past +θ now |
-| Conviction · its tape | above zero, or rising two bars running |
-| The trace's push | histogram > 0 — the release still pushing |
-| The push failed | inside the same 20 bars, effort was **absorbed** (bottom fifth of its history). v6 also accepted a regular divergence here; v8 (as v5) does not — the audit found no difference (paired ≈ 0) |
+**▲ CAPITULATION** — the first closed bar on which the grid stands in **Buy · capitulation**
+(the conviction tape past −30 and held there by conviction's own histogram — sellers in control
+across the ladder — and the value tape cheap past −θ) with the value momentum tape
+**reverting**: the fast end of value has already turned back toward fair.
 
-A ▲ declares BUY, a ▼ SELL. A declaration stands until the opposite one; it has no exit.
+**▼ DISTRIBUTION** — the first closed bar on which sellers hold control of a price rich past +θ
+(**Exit · distribution**).
+
+A 10-bar cooldown per side; the last event stands as the declaration, with no exit. Measured
+(v9 audit): the ▲ was positive in 2006–13, 2014–19 and 2020–26, on daily and on weekly bars, in
+four or five of the five non-crypto classes each time (+0.046 / +0.056 / +0.046σ at 10 bars,
+time-series); the distribution *state* was followed by underperformance in every era, though its
+entry is too rare to measure alone.
+
+**Why not v8's TURN.** v8's ▲▼ — the trace crossing back through θ, then its value tape, conviction
+tape, push and absorption confirming inside 5 bars — faded to nothing after 2020 on daily bars,
+read *negative* on weekly bars, and on daily worked only when a capitulation came first. It stays
+one setting away (`signal_source="turn"`; the Pine's `▲ ▼ source`).
 
 **◆ RESUME** (long; short mirrors) — *a trend resuming.* The histogram dipped below zero inside
 6 bars and now crosses +k·σ (k = 0.5); chart conviction is above zero; the conviction tape is past
 +30 (control held across horizons); the value tape is short of +θ (room left); and effort is not
-absorbed on the bar. **Off by default in v8** (`Params.resume`): outside crypto it read −0.021σ
-before 2018 and −0.041σ after (h = 10), significantly negative on US stocks in both eras.
+absorbed on the bar. **Off by default since v8** (`Params.resume`): negative outside crypto in
+the v8 audit and negative or mixed again in v9.
 
-TURN takes precedence over RESUME on the same bar; ▲ and long ◆ share one 10-bar cooldown.
+A ▲▼ takes precedence over a ◆ on the same bar; ▲ and long ◆ share one 10-bar cooldown.
 Nothing pauses silently: a name whose tapes are still calibrating is **paused**, and says which
 layer it is waiting for.
 
-**Divergence is drawn, not traded.** The Pine's R (regular) and H (hidden) marks stay on the
-chart. Measured as positions, R read −0.031σ before 2018 and +0.024σ after — no stable edge — and
-H was negative in both eras. The source's claim that R "ranked first" did not reproduce.
+**Divergence is off by default.** The Pine's R (regular) and H (hidden) marks remain available.
+Re-measured, R read about zero in every era on daily and weekly bars and H was negative or mixed;
+the source's claim that R "ranked first" did not reproduce.
 
 ---
 
@@ -177,18 +186,21 @@ the Pine's own ramps, and the Pine's 5 × 5 phases halve an edge the faster view
 **The chart cell.** The trace's two ingredients on this chart alone place a second cell; when it
 carries more units than the state, the chart **leads ↑**, fewer **↓**. Display only.
 
-**Read the push against the action.** Buy, Add and Accumulate are best done on a push ↑; Trim,
-Reduce and Exit now or into a push ↑; Hold, Wait and Watch change nothing.
+**Read the push against the action.** The push says which way a row may move next. Measured:
+inside capitulation its direction made no consistent difference — the state carried the edge —
+so a Buy there does not wait for a push ↑. Hold and Wait change nothing. **The grid is also where
+v9's ▲▼ come from** (above): ▲ when *Buy · capitulation* turns, ▼ on entering *Exit ·
+distribution*.
 
 ---
 
 ## Ranking
 
-Priority is **a TURN on this bar, then stretch**:
+Priority is **a ▲▼ on this bar, then stretch**:
 
 ```
 long side                                   short side
-5 + s   ▲ TURN on this bar                  5 + s'  ▼ TURN on this bar
+5 + s   ▲ on this bar                       5 + s'  ▼ on this bar
 s       every other name, by stretch        s'      every other name, by stretch
 
 s = −trace / 200 ∈ (−½, ½)   (stretched furthest DOWN leads the long side)   s' = −s
@@ -210,6 +222,11 @@ short-term reversal, read through the indicator, and that effect has been weaker
 mid and small caps. The grid, RESUME and the windows are still computed and shown; they describe
 a name, they do not order the list. Reports: `studies/`.
 
+**Re-checked in v9** without look-ahead (that study removed each name's drift inside the era): the
+cross-sectional rank IC of the stretch agrees with reading it as reversion on NSE before 2020
+(t ≈ +2 to +4) and reads about zero since. The band on top is now v9's ▲ — the capitulation turn,
+measured positive in every era.
+
 ---
 
 ## Edge Study — expectancy measured on your universe
@@ -220,17 +237,17 @@ cooldowns — applies to the study by construction. Six slices:
 
 | Slice | What it is |
 |:---|:---|
-| Long · all / Short · all | the screen's two sides, TURN and RESUME pooled |
-| ▲ TURN / ▼ TURN | the declarations alone |
+| Long · all / Short · all | the screen's two sides, ▲▼ and ◆ pooled |
+| ▲ capitulation / ▼ distribution | v9's events alone |
 | ◆ RESUME ↑ / ↓ | continuation alone |
 
-The method is unchanged from v7 and each step kills one way of fooling yourself:
+Each step kills one way of fooling yourself (step 2 changed in v9):
 
 | # | Step | The failure it prevents |
 |:--|:---|:---|
 | 1 | Event study at the declared horizon (enter the bar after the signal, hold 10) | Measuring a continuous form nobody trades |
-| 2 | **Drift removal, within era** | Every long signal in a bull market prints a profit — beta, not edge |
-| 3 | Vol normalisation by the symbol's own σ | FX, bond ETFs and small-caps on incomparable scales |
+| 2 | **Drift removal, causal**: the symbol's mean h-bar return over the 500 returns realised before the event | Every long signal in a bull market prints a profit — beta, not edge. (Up to v8.4 the mean was taken inside the era — a look-ahead that flatters reversal events) |
+| 3 | Vol normalisation by the symbol's own trailing σ | FX, bond ETFs and small-caps on incomparable scales |
 | 4 | Sign folding | The two sides on opposite conventions |
 | 5 | **Block bootstrap over dates** | Overlapping returns and a correlated cross-section inflating significance |
 | 6 | Cost in the same vol units (`bps/1e4 ÷ σ_h`) | The same bps costing 4× more on a low-vol name |
@@ -238,9 +255,8 @@ The method is unchanged from v7 and each step kills one way of fooling yourself:
 
 Verdicts: `CONFIRMED` · `GROSS ONLY` · `DISCOVERY ONLY` · `NO EDGE` · `ANTI-PREDICTS` ·
 `UNDERPOWERED` (the MDE exceeds 0.036, the largest effect this indicator family has shown
-anywhere). **Expect UNDERPOWERED often, especially for the TURN slices**: every layer must confirm
-on one bar, so TURNs are far rarer than Siddhi's crossings were, and the app says "we could not
-tell" rather than "there is no edge".
+anywhere). **Expect UNDERPOWERED often**: the ▲ is worth about +0.05σ, which one universe's
+history can rarely resolve, and the app says "we could not tell" rather than "there is no edge".
 
 It fetches ~15 years once a day per universe (80-symbol fixed-seed sample above that), streams
 in chunks of 20, and reuses the measurement until the date rolls.
@@ -274,20 +290,20 @@ Per symbol, on each run:
 | Column | Meaning |
 |:---|:---|
 | `turn_buy` / `turn_sell`, `resume_long` / `resume_short` | the four events on this bar |
-| `BUY_*` / `SELL_*` | the long / short event by age — ▲▼ a TURN, ◆ a RESUME, — none |
+| `BUY_*` / `SELL_*` | the long / short event by age — ▲ capitulation / ▼ distribution, ◆ a RESUME, — none |
 | `Side` / `Signal_Kind` / `PRG_Event` | an event on this bar, and which |
-| `PRG_Armed` / `PRG_Armed_Age` | an open TURN window (the watchlist) and bars used of 5 |
+| `PRG_Armed` / `PRG_Armed_Age` | the watchlist — in capitulation with value still cheapening — and bars in the cell |
 | `PRG_Decl` / `PRG_Decl_Age` | the standing ▲/▼ declaration |
 | `PRG_Trace` (`Signal`) | the trace, ±100 |
 | `PRG_Hist` / `PRG_Hist_Z` / `PRG_Push` | the histogram, in its own σ, and in five push levels |
 | `PRG_CTape` / `PRG_VTape` | the two MTF tapes — the grid's axes |
 | `PRG_Conv` / `PRG_Value` | the trace's two ingredients on this chart |
 | `PRG_Hedge` / `PRG_Drivers` | the macro hedge applied and the drivers selected |
-| `PRG_Div_Seen_*` / `PRG_Abs_Seen` | TURN evidence inside the dislocation window |
+| `PRG_Div_Seen_*` / `PRG_Abs_Seen` | divergence / absorption inside the dislocation window (context; the legacy TURN reads absorption) |
 | `PRG_Split` / `PRG_Quiet` / `PRG_Settling` | read-with-caution qualifiers |
 | `PRG_Stack_OK` / `PRG_Why` | whether the signal set can judge, and if not why |
 | `CVG_Action` / `CVG_Why` / `CVG_Units` / `CVG_Held` / `CVG_Lead` | the grid state |
-| `Priority_Long` / `Priority_Short` | the ranking keys — a TURN on this bar, then stretch |
+| `Priority_Long` / `Priority_Short` | the ranking keys — a ▲▼ on this bar, then stretch |
 | `Signal_Reason` | a plain-language read of the row |
 | Risk / flow context | `Vol_Regime`, `Regime_Confidence`, `Change_Point`, `Bar_Delta`, `CVD`, `Delta_Z`, `Buy_Share`, `Absorption_Score` — displayed, never an input |
 
@@ -298,16 +314,17 @@ Per symbol, on each run:
 ```
 sanket.py            ← Streamlit entry point: UI, data + macro-driver fetch, screen routing
 engine.py            ← settings, per-symbol features, the snapshot row, ranking, cost gate
-pragati.py           ← pragati.pine v8: conviction, ladders, trace, histogram, TURN / RESUME
+pragati.py           ← pragati.pine v9: conviction, ladders, trace, histogram, ◆, legacy TURN, v9_signals (the ▲▼)
 samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
-cvgrid.py            ← the 3 × 3 conviction-value grid (v8): names, units, tones, classify
+cvgrid.py            ← the 3 × 3 conviction-value grid: names, units, tones, classify — the ▲▼'s source
 pine_v5.py           ← the v5/v8 Pine's own logic: ▲▼ ◆, R / H, the graded grid and phases, OI quadrant
 cvgrid4.py           ← v7's 4 × 4 grid, kept so the audit can reproduce the comparison
-pragati.pine         ← the indicator itself, v8 — the Pine the port mirrors (archive/: v5, v7)
-pine_audit.py        ← from-scratch multi-asset audit of the indicator (baseline, sweep, experiments, OI)
+pragati.pine         ← the indicator itself, v9 — the Pine the port mirrors (archive/: v5, v7, v8)
+pine_audit.py        ← the v7/v8 audit harness (baseline, sweep, experiments, OI) — its scorer is biased, see v9
+studies/v9_lab/      ← the v9 audit: look-ahead-free scorers, feature caches, every experiment
 charts.py            ← chart builders: the conviction-value map, tone history, correlation heatmap
 trace_study.py       ← backtest: the screener under all three trace settings, paired, holdout-sealed
-edge.py              ← measured expectancy: event study, drift removal, block bootstrap, power
+edge.py              ← measured expectancy: event study, causal drift removal, block bootstrap, power
 research.py          ← LEGACY harness from an older momentum engine; validates nothing here
 logger.py            ← structured terminal logging
 ARCHITECTURE.md      ← the stack, the evidence, and the design rationale
@@ -322,9 +339,9 @@ volume profile, absorption) are unchanged and remain context only.
 ## Analysis Modes
 
 1. **Single Date Screener** — Action Dashboard (events by age, each with its grid state, push,
-   tapes and evidence) · **Grid** (the 3 × 3 census, the watchlist of open TURN windows, names by
+   tapes and evidence) · **Grid** (the 3 × 3 census, the watchlist of capitulations not yet turned, names by
    action) · Signal Strength (the ranking) · System Data (exports, raw frame, Edge Study).
-2. **Historical Range** — event breadth by kind, open TURN windows, grid breadth (build vs cut),
+2. **Historical Range** — event breadth by kind, the watchlist's size, grid breadth (build vs cut),
    the universe-mean tapes, regime context, forward-return labels, Excel export.
 3. **Correlation Analysis** — cross-asset correlation, with confluence = |correlation| × the
    normalised Pragati priority.
@@ -425,7 +442,7 @@ Charts, tables and embedded iframes all go through the same panel: header (title
 meta · chip) · body · footer. There is no bare `st.dataframe`, `st.error`, `st.warning`,
 `st.info` or `st.caption` anywhere in the app — each brings its own typeface, radius and ink
 that the stylesheet cannot reach, and three of them on a page read as three different products.
-Sanket's screener tables stay bespoke, because per-cell glyphs (▲▼ TURN / ◆ RESUME), grid
+Sanket's screener tables stay bespoke, because per-cell glyphs (▲ capitulation / ▼ distribution / ◆), grid
 states, push levels and hold counters are not expressible as a DataFrame — but they draw their typeface,
 row height, header and tokens from `ui.components.table_shell_css`, so the only thing that
 differs from a generic table is the content of a cell.
@@ -451,6 +468,24 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 ---
 
 ## What Changed
+
+**v9.0.0 — Pragati v9: a fresh audit, the measuring stick fixed, the signals moved to the edge.**
+Everything in the indicator was re-audited from scratch — 380 instruments, three eras, daily and
+weekly — with a rule that a change must hold in all three eras
+([`studies/pragati_v9_audit.md`](studies/pragati_v9_audit.md)).
+
+- **The v8 measuring stick was biased.** Demeaning returns by the era's own mean makes random-walk
+  momentum score as reversion (up to −0.04σ at 40 bars) and flatters events that cluster in names
+  whose era went badly. v9 scores causally — and so does the app's Edge Study now.
+- **The readings describe; they barely forecast.** Conviction, value, the trace, its histogram and
+  both tapes carry almost no timing information of their own. **The capitulation state carries the
+  one robust edge** (+0.06 to +0.08σ over 10–20 bars, every era, daily and weekly, every engine
+  variation tried).
+- **▲ is now the capitulation turn; ▼ distribution** — both read from the grid. v8's TURN had
+  faded to nothing after 2020, was negative on weekly bars and worked only after a capitulation;
+  it stays as `signal_source="turn"`. **R divergence off by default.**
+- Every claim in the Pine, the app and the docs rewritten to what was measured; nothing tuned —
+  nine engine ablations kept the defaults.
 
 **v8.4.0 — Pragati v8, the final version: v5's grid with measured units.** The user's v5 Pine
 was audited the same way v7 was and the two compared head to head. Their signals tie; v5's
@@ -815,4 +850,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v8.4.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v9.0.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

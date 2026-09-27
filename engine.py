@@ -15,9 +15,10 @@ THE STACK, bottom to top
                    explain (Samanvaya's unified z), on the chart and its parent
     pragati.py     CONVICTION — who controls, how firmly, on the chart and its
                    ladder; the TRACE (conviction × value) and its HISTOGRAM;
-                   divergence evidence; the ▲▼ TURN and ◆ RESUME signal set
-    cvgrid.py      THE GRID — the 4 × 4 state the two tapes place a name in,
-                   named as an action with Pragyam's seed units
+                   divergence evidence; the ◆ RESUME and the legacy TURN, and
+                   v9_signals — the ▲▼ read from the grid
+    cvgrid.py      THE GRID — the 3 × 3 state the two tapes place a name in,
+                   named as an action with its measured units
     engine.py      THIS FILE — the Sanket-facing layer: settings, per-symbol
                    features on an OHLCV frame, the snapshot row, and the
                    cross-sectional ranking
@@ -25,26 +26,27 @@ THE STACK, bottom to top
 
 THREE KINDS OF OUTPUT, AND WHAT EACH CLAIMS
 ───────────────────────────────────────────
-    EVENTS    ▲ TURN / ▼ TURN — a stretch releasing, the push that made it
-              failed. A DECLARATION; stands until the opposite one.
-              ◆ RESUME — a trend resuming from inside the zone.
-              These are what fires. Each needs EVERY layer on one closed bar.
-    WATCH     a TURN window open — the trace has crossed back through θ and the
-              ingredients have up to 5 bars to confirm. Half a signal.
-    STATE     the grid cell — Buy / Add / Accumulate / Hold / Wait / Watch /
-              Trim / Reduce / Exit — where the name stands BETWEEN signals.
-              Every name has one. Neither signals nor state read each other.
+    EVENTS    ▲ CAPITULATION — the grid's Buy · capitulation turning: sellers in
+              control across the ladder at a price cheap past θ, and value
+              momentum already reverting. ▼ DISTRIBUTION — sellers taking control
+              of a price rich past θ. v9's events, read from the grid (the Pine's
+              section 8b); the last one stands as the DECLARATION. ◆ RESUME is off
+              by default. p.signal_source = "turn" restores v8's TURN.
+    WATCH     a name in capitulation whose value is still cheapening — the ▲
+              comes when it turns.
+    STATE     the grid cell — Buy / Accumulate / Hold / Wait / Trim / Exit —
+              where the name stands between events. Every name has one.
 
 RANKING IS BY STRETCH, read as REVERSION — measured, not inherited:
 
     long side                              short side
-    5 + s   ▲ TURN on this bar              5 + s'  ▼ TURN on this bar
+    5 + s   ▲ on this bar                   5 + s'  ▼ on this bar
     s       everything else                 s'      everything else
 
 s = −trace / 200 ∈ (−½, ½): the name stretched furthest DOWN (sellers in control,
 priced cheap) leads the long side; s' = −s, so the most stretched UP leads the
-short side. A ▲▼ TURN on this bar — the indicator's own declaration that a stretch
-is releasing — stays on top of its side.
+short side. A ▲▼ on this bar — v9: a capitulation turning, or distribution —
+stays on top of its side.
 
 Why not the grid's weight (v8.0.0 ranked by it, banded TURN > RESUME > hold >
 open window > grid state): trace_study.py measured it on five NSE universes over
@@ -61,8 +63,9 @@ stretch ranking beat the grid's on average (daily −0.007σ vs −0.043σ, week
 the trace carries ~0 information — on NSE equities this ranking IS short-term
 reversal, read through the indicator.
 
-The grid, RESUME, the hold and the TURN window are still computed and shown — they
-describe a name; they do not order the list.
+The grid, RESUME, the hold and the watchlist are still computed and shown — they
+describe a name; they do not order the list. (That study measured v8's TURN on top;
+v9's ▲ is the capitulation turn, measured separately in studies/pragati_v9_audit.md.)
 
 WHAT IS NOT CLAIMED
 ───────────────────
@@ -71,11 +74,12 @@ divergence RANKED first (not established); participation weighting earns its
 place; the scaling is calibrated. The chart-only reversal trigger had no edge
 (+0.0003R); hidden divergence none; continuation changed sign off its primaries
 (+0.036R / −0.016R). NOTHING reaches significance once overlapping windows are
-accounted for (best t = 1.9 of 48 cells). The TURN / RESUME set, the trace, its
-histogram and the grid are UNMEASURED in the source. Pragyam measured the grid's
-3 × 3 seed as an allocator: within half a percent a year of equal weight, never
-above it. So the number that applies to your screen is the one edge.py measures
-on your symbols — reported, never applied.
+accounted for (best t = 1.9 of 48 cells). The stack itself was measured by the
+v8 and v9 audits (studies/): the readings carry almost no timing information of
+their own; the capitulation state and its turn carry the one robust edge (+0.05 to
++0.08σ over 10-20 bars in each era outside crypto). So the number that applies to
+YOUR screen is still the one edge.py measures on your symbols — reported, never
+applied.
 
 Bar convention: signals are committed on the close of the bar that produced
 them (the Pine's barstate.isconfirmed); entry is the next session's open. A
@@ -202,11 +206,11 @@ class EngineSettings:
     @property
     def trigger_label(self) -> str:
         """How the signal set reads in prose — the one place it is worded."""
-        return "▲▼ TURN · ◆ RESUME"
+        return "▲ capitulation · ▼ distribution · ◆ RESUME"
 
     @property
     def trigger_short(self) -> str:
-        return f"TURN · RESUME · {self.horizon}b"
+        return f"▲▼ · ◆ · {self.horizon}b"
 
     @property
     def min_bars(self) -> int:
@@ -289,7 +293,7 @@ def cost_in_vol_units(cost_bps: float, sigma_h: float) -> float:
 # PER-SYMBOL FEATURES  (time-series; one name, every bar)
 # ════════════════════════════════════════════════════════════════════════════════════════
 KIND_GLYPH = {"turn": "▲", "resume": "◆"}          # per side: ▲/▼ TURN, ◆ RESUME
-EVENT_LABEL = {("turn", 1): "▲ TURN", ("turn", -1): "▼ TURN",
+EVENT_LABEL = {("turn", 1): "▲ CAPITULATION", ("turn", -1): "▼ DISTRIBUTION",
                ("resume", 1): "◆ RESUME ↑", ("resume", -1): "◆ RESUME ↓"}
 
 
@@ -344,6 +348,9 @@ def compute_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
     ch = pg.chart_conviction(lo, p)
     cv_ready = np.cumsum(ch["sd_ok"].to_numpy(bool)) > p.norm + p.smooth + p.signal
     grid = cg.classify(out, ch["osc"], ch["raw_sd"], cv_ready, p)
+    # v9: the ▲▼ are read from the grid (the Pine's section 8b) — the capitulation
+    # turn and distribution; p.signal_source = "turn" keeps v8's TURN.
+    out = pg.v9_signals(out, grid, p)
     extra = val[["rv_z", "breadth_z", "legs_split", "hedge", "drivers", "n_obs", "enough",
                  "basket_warm", "bars_since_rot"]]
     return pd.concat([out, grid, extra], axis=1)
@@ -375,13 +382,13 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
       turn_buy / turn_sell / resume_long / resume_short     the four signals
       long_cond / short_cond                                either kind, per side
       PRG_Event                  the label of the event on this bar, else ''
-      PRG_Armed / PRG_Armed_Age  an open TURN window (+1 ▲ / −1 ▼) and bars used of 5
+      PRG_Armed / PRG_Armed_Age  in capitulation, value still cheapening (+1) and bars in the cell
       PRG_Decl / PRG_Decl_Age    the standing declaration (+1 ▲ / −1 ▼) and its age
       PRG_Hold_Dir / PRG_Hold_Age / PRG_Hold_Kind   the latest event inside its horizon
     STATE
       CVG_Cell / CVG_Action / CVG_Why / CVG_Units / CVG_Side / CVG_Held / CVG_Bars /
       CVG_From / CVG_Chart / CVG_Lead
-      PRG_State                  WARMING UP / PAUSED / TURN ▲ … / ARMED ▲ … / NEUTRAL
+      PRG_State                  WARMING UP / PAUSED / ▲ … / WATCH ▲ … / NEUTRAL
       Signal_Score               the trace — what the level views sort on
     """
     settings = settings or settings_for(None, None, "Daily")
@@ -451,7 +458,7 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     # ── the hold window: the latest event, while it is inside the declared horizon ──
     fires = long_c | short_c
     fire_dir = np.where(long_c, 1.0, np.where(short_c, -1.0, np.nan))
-    fire_kind = np.where(tb | ts, "TURN", np.where(rl | rs, "RESUME", None))
+    fire_kind = np.where(tb, "▲ capitulation", np.where(ts, "▼ distribution", np.where(rl | rs, "◆ RESUME", None)))
     last_fire = pd.Series(np.where(fires, pos.astype(float), np.nan)).ffill().to_numpy()
     held_dir = pd.Series(fire_dir).ffill().to_numpy()
     held_kind = pd.Series(fire_kind, dtype=object).ffill().to_numpy()
@@ -482,7 +489,7 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     hist_ready = b("hist_ready")
     df["PRG_State"] = np.select(
         [~hist_ready, ~stack, tb, ts, rl, rs, armed > 0, armed < 0],
-        ["WARMING UP", "PAUSED", "TURN ▲", "TURN ▼", "RESUME ◆↑", "RESUME ◆↓", "ARMED ▲", "ARMED ▼"],
+        ["WARMING UP", "PAUSED", "CAPITULATION ▲", "DISTRIBUTION ▼", "RESUME ◆↑", "RESUME ◆↓", "WATCH ▲", "WATCH ▼"],
         default="NEUTRAL")
     df["Signal_Score"] = df["PRG_Trace"]
     return df
@@ -518,7 +525,7 @@ def _clean(v):
 def snapshot(df: pd.DataFrame, idx_pos: int, settings: EngineSettings) -> dict:
     """The engine's fields for one bar, plus the per-age event history the tables bucket.
 
-    ``BUY_Today … BUY_5d`` carry the long event's glyph at that age (▲ TURN, ◆ RESUME)
+    ``BUY_Today … BUY_5d`` carry the long event's glyph at that age (▲ capitulation, ◆ RESUME)
     or '—'; ``SELL_*`` the short side's. ``Kind_Hist`` / ``Trace_Hist`` / ``Close_Hist``
     are [today, 1 back, …, 4 back] so an aged row can report the bar that fired it.
     """
@@ -566,7 +573,7 @@ def grid_weight(units, side: int = 1):
 def priorities(tb, ts, trace, ready) -> tuple:
     """(long, short) priority on plain arrays of any shape (÷100 of the column).
 
-    ▲ / ▼ TURN on this bar ranks first on its side (5 + s); every other name by its
+    ▲ / ▼ on this bar ranks first on its side (5 + s); every other name by its
     stretch, s = −trace/200 for the long side and +trace/200 for the short side. See
     the module docstring for the measurement behind this. Shared by
     :func:`compute_ranking` and trace_study.py, so the study ranks exactly as the screen.
@@ -598,7 +605,6 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
         return df
     idx = df.index
     horizon = float(max(int(settings.horizon), 1))
-    confirm = float(max(int(settings.params.confirm), 1))
 
     def _b(c):
         return (df[c].fillna(False).astype(bool).to_numpy() if c in df.columns
@@ -667,11 +673,10 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
             kind = "turn" if (tb[i] or ts[i]) else "resume"
             lab = EVENT_LABEL[(kind, 1 if side_key == "buy" else -1)]
             if kind == "turn":
-                why = ["effort absorbed"] if bool(rd.get("PRG_Abs_Seen")) else []
-                if bool(rd.get("PRG_Div_Seen_Bull" if side_key == "buy" else "PRG_Div_Seen_Bear")):
-                    why.append(("bullish" if side_key == "buy" else "bearish") + " divergence seen")
-                ev = (f"{lab} · the stretch released, the push that made it failed"
-                      + (f" ({' + '.join(why)})" if why else "") + f" · {notes[side_key]}")
+                ev = (f"{lab} · " + ("sellers in control of a cheap price, and value has turned "
+                                     "back toward fair" if side_key == "buy" else
+                                     "sellers have taken control of a rich price")
+                      + f" · {notes[side_key]}")
             else:
                 ev = (f"{lab} · a trend resuming from inside the zone, control held · "
                       f"{notes[side_key]}")
@@ -679,8 +684,8 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
             continue
         a = int(armed[i]) if np.isfinite(armed[i]) else 0
         if a != 0:
-            reasons.append(f"{_stretch(trace[i])} · the trace turned {'▲' if a > 0 else '▼'} — "
-                           f"TURN window {int(a_age[i])}/{int(confirm)}, awaiting its ingredients · {grid}")
+            reasons.append(f"{_stretch(trace[i])} · in capitulation {int(a_age[i])} bars, value still "
+                           f"cheapening — the ▲ comes when it turns · {grid}")
             continue
         hd = int(h_dir[i]) if np.isfinite(h_dir[i]) else 0
         if hd != 0 and np.isfinite(h_age[i]):
