@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v9.0.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v9.1.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -157,7 +157,7 @@ The two tapes place every name in a 3 × 3 — conviction at its inner zone (±3
                  CHEAP                     FAIR                      RICH
 buyers           Buy · turned 3            Hold · building 1.5       Trim · paid 0.75
 undecided        Accumulate · basing 1.5   Wait · idle 1             Trim · stalling 0.75
-sellers          Buy · capitulation 3      Accumulate · washout 1.5  Exit · distribution 0.25
+sellers          Buy · capitulation 4      Accumulate · washout 1.5  Exit · distribution 0.25
 ```
 
 **Grid v8 — Pragati v5's grid, with four cells measured.** `pine_audit.py` ran the port on 380
@@ -850,4 +850,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v9.0.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v9.1.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
