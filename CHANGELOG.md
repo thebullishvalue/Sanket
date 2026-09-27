@@ -7,6 +7,48 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v8.3.0] · 2026-09-27
+### Pragati v7 — the indicator audited from scratch, and changed only where the data held
+
+`pragati.pine` is now in the repo, and `pine_audit.py` measures it without relying on anything it
+says about itself: its Python port run on **380 instruments in six asset classes** (NSE and US
+stocks, world indices, commodities, FX, crypto), ~20 years of daily bars, every output turned into a
+position and scored on the next bars' drift-free, vol-normalised return, split before / after 2018,
+block-bootstrapped by date. Report: [`studies/pine_audit.md`](studies/pine_audit.md).
+
+**What it found.**
+- The readings (trace, conviction, value, both tapes) track plain 20-bar momentum, and their sign
+  **flipped** between eras on US stocks, indices and FX. The ▲▼ declaration held to its opposite is ≈ 0.
+- **Tuning does not transfer.** 161 random parameter sets: discovery-vs-holdout ρ = +0.10; picking the
+  best tenth on discovery did *worse* on the holdout than a typical set. **Every default is kept.**
+- ▲▼ TURN's four gates earn their place (the full rule beats every reduced one where TURN works).
+- **The robust finding — capitulation.** Sellers *firmly* in control at a *cheap or below-fair* price
+  was followed by gains in **both eras on every class but crypto** (+0.10 to +0.35σ after 2018 over
+  10–20 bars, significant on US, indices, commodities, FX). It beats plain oversold; oversold names
+  outside those cells lagged; the grid's push-gated row matters; the push's direction does not.
+- **Open interest** (240 NSE F&O stocks, 2019–2026, from the exchange's bhavcopy): no OI character
+  and not "crowded" kept its sign across eras; pushes made by exits continued like any other.
+
+**What v7 changed** (Pine and port, in parity):
+
+| Cell | v6 | v7 |
+|---|---|---|
+| sellers firm · cheap | Watch · still falling 1u | **Buy · capitulation 3u** |
+| sellers firm · below fair | Reduce · downtrend ½u | **Accumulate · washout 1½u** |
+| buyers firm · above fair | Add · strong trend 3u | **Hold · extended 1½u** |
+
+and one rule: the OI gold cast no longer vetoes a push from moving the grid's row (Pine only —
+Sanket reads no OI). The grid read as a position goes from significantly negative after 2018 (US,
+FX) to ≈ 0 outside crypto. **Crypto is the stated limit** — it trends, and v7's grid side reads
+−0.043σ there after 2018.
+
+Also: the value and conviction engines now drop non-positive closes together (the port crashed on
+CL=F, 20 April 2020); `pragati.Params` gains three TURN gate switches (default on, output identical).
+The screener's ranking is unchanged — it already read the stretch as reversion; on real NIFTY 50 data
+its top long now sits in *Buy · capitulation* rather than *Watch · still falling*.
+
+---
+
 ## [v8.2.0] · 2026-09-27
 ### The ranking, measured — stretch read as reversion
 

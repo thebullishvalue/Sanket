@@ -4,8 +4,9 @@
 //  "Is the push paid for - and at what price?"
 //
 //  ═══ v7 · WHAT CHANGED, AND THE MEASUREMENT BEHIND IT ════════════════════════
-//  v7 changes THREE CELLS of the conviction-value grid and nothing else. Every
-//  engine, signal, input and default is v6's.
+//  v7 changes THREE CELLS of the conviction-value grid and ONE RULE - the OI
+//  gold cast no longer vetoes a push. Every engine, signal, input and default is
+//  v6's.
 //
 //  HOW IT WAS MEASURED. A from-scratch audit (pine_audit.py in the Sanket repo),
 //  not this script's own claims: the Python port - bar for bar with this script -
@@ -37,6 +38,12 @@
 //      buyers firm  · above fair   Add · strong trend     3   →  Hold · extended       1½
 //  The third because adding there earned nothing in either era. Crypto trends and
 //  is the exception: the capitulation cells carried nothing there.
+//
+//  AND ONE RULE. The OI gold cast no longer vetoes the push. Measured on 240 NSE
+//  F&O stocks from the exchange's daily bhavcopy, 2019-2026: a push made mostly by
+//  exits continued exactly as any other push did, and no OI character - long or
+//  short build-up, covering, unwinding, crowded - kept its sign from 2019-22 to
+//  2023-26. The OI readout and the cast stay, as descriptions.
 //
 //  ONE TRACE, ITS PUSH, AND ITS TWO INGREDIENTS ACROSS HORIZONS:
 //
@@ -469,7 +476,7 @@
 //  THE PUSH, in five levels - the histogram read as it is drawn:
 //      impulse ↑   growing past its impulse gate
 //      push ↑      above zero, pressing or decelerating
-//      no push     a pale (turning), grey (quiet) or gold (exits) column
+//      no push     a pale (turning) or grey (quiet) column
 //      push ↓ · impulse ↓
 //
 //  HOW A NAME MOVES. Columns move freely - price is where it is. Rows are a
@@ -3481,7 +3488,7 @@ var string G_OI = "10 · Open interest · price chart"
 bool   inpOi     = input.bool(false, "Open interest", group=G_OI, tooltip="The OI row of the price-chart readout: Long build-up, Short build-up, Short covering or Long unwinding over the window, plus 'crowded' when open interest sits in the top tenth of its last year. The grid's row sits under it.\n\nNeeds a symbol TradingView publishes open interest for (listed futures). Anything else leaves only the grid's row.", display=display.none)
 int    inpOiLen  = input.int(10, "    Window (days)", minval=3, maxval=100, group=G_OI, tooltip="How many OI periods the reading covers - days on an intraday or daily chart, the chart's own bars above daily.", display=display.none)
 string inpOiPos  = input.string("Bottom right", "Readout position", options=["Top right", "Bottom right", "Bottom left", "Top left"], group=G_OI, tooltip="Where the price-chart readout sits. It is one table - a row per layer (OI, then CVG), a column per question: state, why, push, chart, span - each row shown by its own switch ('Open interest' here, 'Grid readout' in 6 · Conviction-value grid).", display=display.none)
-bool   inpOiCast = input.bool(true, "    Gold cast on the histogram", group=G_OI, tooltip="Casts the histogram's columns toward gold while the push they show is made mostly by exits: an up-push that is mostly short covering, a down-push that is mostly long unwinding. The hue is kept - the direction is still the direction; the caution is added.", display=display.none)
+bool   inpOiCast = input.bool(true, "    Gold cast on the histogram", group=G_OI, tooltip="Casts the histogram's columns toward gold while the push they show is made mostly by exits: an up-push that is mostly short covering, a down-push that is mostly long unwinding. The hue is kept - the direction is still the direction.\n\nDESCRIPTIVE ONLY since v7: measured on 240 NSE F&O stocks, pushes made mostly by exits continued exactly as other pushes did, so the cast no longer stops a push from moving the grid's row.", display=display.none)
 
 float OI_JUMP  = 4.0        // σ of |ΔOI| beyond which a change is a roll, not trade
 int   OI_SDLEN = 100        // OI periods that σ is measured over
@@ -3539,11 +3546,14 @@ color  oiCol    = oiTot <= 0.0 ? C_SOFT : oiChar == "Long build-up" ? C_BULL : o
 // is read (section 10): OI first, the grid second.
 string oiLeft = "OI · " + str.tostring(inpOiLen) + (oiTf == "D" ? "d" : " bars")
 string oiLine = oiChar + (oiCrowd ? " · crowded" : "")
-string oiTip  = "Long build-up: new longs funding the rise. Short build-up: new shorts funding the fall. Short covering: a rally made of exits. Long unwinding: a fall made of exits. The last two are gold - self-limiting flow.\n\nCrowded: open interest in the top tenth of its last year - many positions that may have to be closed."
+string oiTip  = "Long build-up: new longs funding the rise. Short build-up: new shorts funding the fall. Short covering: a rally made of exits. Long unwinding: a fall made of exits. The last two are gold.\n\nCrowded: open interest in the top tenth of its last year.\n\nMEASURED (v7 audit, 240 NSE F&O stocks, 2019-2026): no character and not 'crowded' kept the same sign from 2019-22 to 2023-26. A description of who is trading, not a forecast."
 
 // ── the gold cast: the histogram's push is being made by exits ────────────────
-// Read here, ahead of the grid and the pane, because both use it: the columns
-// are cast gold, and a gold push cannot confirm a grid row change.
+// DESCRIPTIVE since v7. v6 also let it veto the push, so a gold push could not
+// move a grid row. Measured on 240 NSE F&O stocks, 2019-2026: pushes made mostly
+// by exits continued exactly as other pushes did (−0.035σ vs −0.036σ at 10 bars
+// after 2023, +0.037 vs +0.025 before) - the veto had nothing to stand on, so the
+// cast now only colours the columns.
 bool  oiCast  = inpOiCast and oiSelf and ready and (hAbove ? oiSC > oiLU : oiLU > oiSC)
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3565,9 +3575,9 @@ bool  oiCast  = inpOiCast and oiSelf and ready and (hAbove ? oiSC > oiLU : oiLU 
 //  HOW A NAME MOVES. Columns move freely - price is where it is. Rows are a
 //  claim about control, and the push must stand behind it in proportion: a
 //  push moves the row one step toward the tape, an impulse all the way, no
-//  push holds it - a HELD row. 'No push' is a pale (turning), grey (quiet) or
-//  gold (exits) column. Before the histogram is calibrated the row follows the
-//  tape.
+//  push holds it - a HELD row. 'No push' is a pale (turning) or grey (quiet)
+//  column; a gold (exits) column still counts - see v7. Before the histogram is
+//  calibrated the row follows the tape.
 //
 //  WHAT EACH CELL SAYS TO DO. The seed's nine states become nine ACTIONS, each
 //  keeping its seed units - Buy 3 · Add 3 · Hold 1.5 · Accumulate 1.5 · Wait 1
@@ -3632,7 +3642,7 @@ f_gRow(float c) => c >= inpZ1 ? 3 : c >= 0.0 ? 2 : c > -inpZ1 ? 1 : 0
 f_gCol(float v) => v <= -osc_entry ? 0 : v < 0.0 ? 1 : v < osc_entry ? 2 : 3
 
 // ── HISTOGRAM · the push, in five levels, read from the column as drawn ─────
-bool gLive = ready and (hExpand or (useSlope and trWith)) and not quietReg and not oiCast
+bool gLive = ready and (hExpand or (useSlope and trWith)) and not quietReg
 int  gPush = not gLive ? 0 : hAbove ? (hExpand and hImp ? 2 : 1) : (hExpand and hImp ? -2 : -1)
 string gPushTxt = gPush == 2 ? "impulse ↑" : gPush == 1 ? "push ↑" : gPush == -1 ? "push ↓" : gPush == -2 ? "impulse ↓" : "no push"
 
