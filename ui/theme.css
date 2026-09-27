@@ -2565,3 +2565,71 @@
     .hero-signal, .metric-card .value, .metric-card h2,
     .command-bar .cb-instrument .sym, .command-bar .cb-quote .px { color: #000; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CARRIED FROM PRAGYAM — the sibling terminal's prose note, settings readout
+   and ink helpers, so a reader moving between the two reads one grammar.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── The note — commentary under a chart or table ─────────────────────────
+   Chart and table footnotes used the control-hint tier: 10px mono, which is a
+   DATUM face. A note is prose — "how to read this" — and takes the prose
+   treatment, so data and commentary stay distinguishable with the page out of
+   focus. PROXIMITY: a note explains the panel ABOVE it and sits nearer to that
+   panel than to whatever follows. */
+.note {
+    font-family: var(--sans); font-size: var(--fs-sm); line-height: 1.65;
+    color: var(--ink-tertiary);
+    margin: var(--s2) 0 var(--s6);
+}
+.note strong { color: var(--ink-secondary); font-weight: 650; }
+.note em { font-style: italic; }
+.note code {
+    font-family: var(--mono); font-size: var(--fs-xs);
+    background: var(--surface-3); border: 1px solid var(--line-faint);
+    border-radius: var(--r-sm); padding: 1px 4px;
+}
+
+/* ── Settings readout — read down the value column ──────────────────────── */
+.kv-table-container {
+    margin-bottom: var(--s4);
+    background: var(--surface-1);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+}
+.kv-table { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
+.kv-table .key,
+.kv-table .value {
+    padding: var(--s2) var(--s4);
+    border-bottom: 1px solid var(--line-faint);
+    min-width: 0;
+}
+.kv-table .key {
+    font-family: var(--sans); font-size: var(--fs-xs); font-weight: 550;
+    color: var(--ink-tertiary);
+    border-right: 1px solid var(--line-faint);
+}
+.kv-table .value {
+    font-family: var(--mono); font-size: var(--fs-xs);
+    color: var(--ink); font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+.kv-table .key.hdr,
+.kv-table .value.hdr {
+    background: var(--surface-2);
+    font-family: var(--sans); font-size: var(--fs-3xs); font-weight: 650;
+    letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--ink-quaternary);
+    border-bottom: 1px solid var(--line);
+}
+.kv-table .key:nth-last-child(2),
+.kv-table .value:last-child { border-bottom: 0; }
+
+/* ── Ink helpers — a word that carries a claim, inside prose ─────────────── */
+.ink-accent  { color: var(--accent);  font-weight: 600; }
+.ink-long    { color: var(--long);    font-weight: 600; }
+.ink-short   { color: var(--short);   font-weight: 600; }
+.ink-violet  { color: var(--violet);  font-weight: 600; }
+.ink-system  { color: var(--system);  font-weight: 600; }
+.ink-caution { color: var(--caution); font-weight: 600; }

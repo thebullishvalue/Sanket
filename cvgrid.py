@@ -98,6 +98,30 @@ MEANING = (
     "buyers firmly in control of a rich price - hold it, do not add",
     "a tape not yet calibrated, or switched off",
 )
+# ── TONES — Pragyam's inference, one mapping for every surface ────────────────
+# Pragyam colours a grid state by what it means, not by the side it trades
+# (ui/shared.py · CVG_TONE), and a state is the same colour everywhere it appears —
+# the map, the census, the tables. Each tone keeps its app-wide meaning:
+#   emerald  the favourable end — buyers firmly in control below a rich price
+#   amber    CAUTION — a price already rich, the move stalling or topping
+#   cyan     information — a cheap name being watched for its turn
+#   slate    unclaimed — no edge either way, or unread
+#   rose     the unfavourable end — sellers in control, breaking down or distributing
+TONES = (
+    "cyan",    "rose",    "rose",    "rose",       # sellers firm: watch · reduce · reduce · exit
+    "cyan",    "slate",   "rose",    "amber",      # sellers edge: accumulate · wait · trim·rolling · trim·topping
+    "cyan",    "cyan",    "slate",   "amber",      # buyers edge: accumulate · accumulate · wait · trim·stalling
+    "emerald", "emerald", "emerald", "amber",      # buyers firm: buy · add · add · hold
+    "slate",                                        # unread
+)
+#: The same, in render_chip / render_metric_card's vocabulary.
+TONE_CHIP = {"emerald": "success", "amber": "warning", "cyan": "info",
+             "slate": "neutral", "rose": "danger"}
+#: Actions in the order a book reads them — build, hold, cut — with their tone.
+ACTION_TONE = {"Buy": "emerald", "Add": "emerald", "Accumulate": "cyan", "Hold": "amber",
+               "Wait": "slate", "Watch": "cyan", "Trim": "amber", "Reduce": "rose",
+               "Exit": "rose", "Unread": "slate"}
+
 ROW_LABELS = ("sellers firm", "sellers edge", "buyers edge", "buyers firm")
 COL_LABELS = ("cheap", "below fair", "above fair", "rich")
 ACTIONS = ("Buy", "Add", "Accumulate", "Hold", "Wait", "Watch", "Trim", "Reduce", "Exit")
@@ -223,7 +247,7 @@ def tooltip(cell: int, units: float, bars: int, frm: int, chart: int, lead: int,
 
 
 __all__ = [
-    "ACTIONS", "ACTION_UNITS", "COLUMNS", "COL_LABELS", "MEANING", "NAMES", "PUSH_GLYPH",
-    "PUSH_TEXT", "READ_THE_PUSH", "ROW_LABELS", "SIDES", "UNITS", "UNREAD",
+    "ACTIONS", "ACTION_TONE", "ACTION_UNITS", "COLUMNS", "COL_LABELS", "MEANING", "NAMES", "PUSH_GLYPH",
+    "PUSH_TEXT", "READ_THE_PUSH", "ROW_LABELS", "SIDES", "TONES", "TONE_CHIP", "UNITS", "UNREAD",
     "action", "classify", "col_of", "reason", "row_of", "tooltip",
 ]

@@ -263,6 +263,23 @@ def panel_bg() -> str:
     return "#FFFFFF" if _active_theme() == "light" else "#0F1217"
 
 
+def rgba(name: str, alpha) -> str:
+    """Semantic chart colour for the active theme -> ``rgba()`` string (Pragyam's name)."""
+    return chart_rgba(name, alpha)
+
+
+def diverging_scale(low: str = "rose", high: str = "emerald") -> list:
+    """The app's one diverging colourscale, resolved for the ACTIVE theme (from Pragyam).
+
+    THE MIDPOINT IS THE PANEL, not a colour. A cell at zero has nothing to say,
+    and the honest way to draw nothing is to let the panel show through — so zero
+    disappears and only the cells carrying a claim have ink. NO ALPHA IN THE RAMP:
+    both stops are opaque semantic colours; the panel supplies the middle, so the
+    scale does not change character with the surface behind it.
+    """
+    return [[0.0, chart_color(low)], [0.5, panel_bg()], [1.0, chart_color(high)]]
+
+
 def grid_rgba(alpha: float = 1.0) -> str:
     """A hairline colour that works on BOTH grounds.
 

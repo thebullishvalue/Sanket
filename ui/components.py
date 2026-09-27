@@ -34,6 +34,7 @@ import html as html_mod
 import re as _re
 from contextlib import contextmanager as _contextmanager
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit.components.v1 import html as _components_html
@@ -171,16 +172,28 @@ def render_control_hint(text: str) -> None:
                 unsafe_allow_html=True)
 
 
-def render_note(text: str) -> None:
-    """The one caption tier — a note under a chart, table or control.
+#: `**bold**` and `*italic*`, in that order — the two-star form must match
+#: first or the single-star pattern eats one of its stars.
+_EMPHASIS = ((_re.compile(r"\*\*(.+?)\*\*", _re.S), r"<strong>\1</strong>"),
+             (_re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", _re.S), r"<em>\1</em>"))
 
-    Replaces bare ``st.caption`` everywhere. Streamlit's caption renders in its
-    own sans face at its own size with its own margin, so eight of them
-    scattered across a file read as eight different kinds of aside. Same object
-    as ``render_control_hint``, named for its other use, so a reader does not
-    have to know that "control hint" also means "chart footnote". HTML allowed.
+
+def render_note(text: str) -> None:
+    """The note under a chart or table — commentary, in the prose face (from Pragyam).
+
+    It used to reuse the control-hint tier: 10px mono, which is a DATUM face, so
+    a paragraph on how to read a chart looked like a number that had lost its
+    column. A note is commentary and takes the prose treatment, the same as every
+    panel body — data and commentary stay distinguishable with the page out of
+    focus. `render_control_hint` keeps the mono tier for terse data under a control.
+
+    EMPHASIS IS TRANSLATED. Wrapped in a ``<div>``, markdown stops being parsed,
+    so ``**term**`` would reach the screen literally; it is converted here. HTML
+    is also allowed.
     """
-    st.markdown(f'<div class="control-hint">{text}</div>', unsafe_allow_html=True)
+    for pattern, repl in _EMPHASIS:
+        text = pattern.sub(repl, text)
+    st.markdown(f'<div class="note">{text}</div>', unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -687,6 +700,7 @@ _TABLE_TOKENS_DARK = {
     "cyan":          "#4E9FC4",   # --system
     "violet":        "#9B8FD4",   # --violet
     "slate":         "#7E8797",   # --neutral
+    "long_fill":     "rgba(44, 163, 107, 0.10)",   # --long-fill
     "accent_border": "rgba(76, 125, 240, 0.34)",
     "accent_hover":  "rgba(76, 125, 240, 0.10)",
     "row_odd":       "rgba(255, 255, 255, 0.015)",
@@ -710,6 +724,7 @@ _TABLE_TOKENS_LIGHT = {
     "cyan":          "#15708C",
     "violet":        "#6A4BC0",
     "slate":         "#5A6472",
+    "long_fill":     "rgba(15, 122, 84, 0.08)",
     "accent_border": "rgba(43, 95, 217, 0.32)",
     "accent_hover":  "rgba(43, 95, 217, 0.07)",
     "row_odd":       "rgba(15, 23, 42, 0.022)",
@@ -774,8 +789,14 @@ MONO_STACK = "'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace"
 
 #: Row and header geometry, shared by ``render_data_table`` and the bespoke
 #: tables so a Sanket screener table and a Tattva DataFrame are the same object.
-TABLE_ROW_H = 27
-TABLE_HEADER_H = 30
+#:
+#: MEASURED, not estimated (Pragyam found this first): a body row is 0.6875rem at
+#: line-height 1.5 (16.5px) + 0.4rem padding top and bottom (12.8px) + a 1px rule
+#: = 30.3px. The old constant said 27, and because an iframe does not grow to its
+#: content, every table was 3px a row short — invisible on a long table, and the
+#: bottom row cut off on a short one. The header is ~29px plus the scroller's 2px.
+TABLE_ROW_H = 31
+TABLE_HEADER_H = 31
 
 
 def table_shell_css(*, max_height: int = 520) -> str:
@@ -820,6 +841,7 @@ def table_shell_css(*, max_height: int = 520) -> str:
     tbody td.symbol, tbody td.lbl {{ font-weight:600; color:{t['ink_primary']}; }}
     tbody td.txt {{ color:{t['ink_tertiary']}; }}
     tbody td.currency {{ text-align:right; color:{t['ink_secondary']}; }}
+    tbody td.best {{ box-shadow:inset 2px 0 0 {t['emerald']}; background:{t['long_fill']}; }}
     .sect {{ background:{t['header_a']}; color:{t['ink_secondary']};
              font-size:{FS['2xs']}; font-weight:600; text-transform:uppercase;
              letter-spacing:0.12em; padding:0.5rem 0.75rem;
@@ -831,7 +853,7 @@ def table_shell_css(*, max_height: int = 520) -> str:
 
 def table_iframe_height(n_rows: int, *, extra_rows: int = 0, max_height: int = 520) -> int:
     """Pixel height for a bespoke table iframe — one geometry, one formula."""
-    content = TABLE_HEADER_H + (n_rows + extra_rows) * TABLE_ROW_H + 6
+    content = TABLE_HEADER_H + (n_rows + extra_rows) * TABLE_ROW_H + 4
     return int(min(content, max_height))
 
 
@@ -905,6 +927,8 @@ def render_data_table(
     precision: int = 2,
     col_precision: "dict[str, int] | None" = None,
     sign_color_cols: "set[str] | None" = None,
+    lower_is_better_cols: "set[str] | None" = None,
+    best_in_row: "list[bool] | None" = None,
     label_col: str | None = None,
     col_labels: "dict[str, str] | None" = None,
     max_height: int = 520,
@@ -924,6 +948,13 @@ def render_data_table(
 
     Wrap it in ``render_table_panel`` rather than calling it directly, so the
     table gets the same header anatomy as every chart.
+
+    Two readings carried from Pragyam:
+    ``lower_is_better_cols`` — sign-coloured columns where NEGATIVE is the good
+        outcome. Colour follows the outcome, never the sign of the arithmetic.
+    ``best_in_row`` — marks the winning cell in each ROW of a comparison read
+        horizontally, one bool per row (True where higher wins), because a table
+        like that mixes quantities whose polarity differs by row.
     """
     if df is None or getattr(df, "empty", True):
         st.markdown('<div class="panel-state">No rows to display.</div>',
@@ -944,7 +975,8 @@ def render_data_table(
 
     cols = list(view.columns)
     numeric_cols = {c for c in cols if pd.api.types.is_numeric_dtype(view[c])}
-    sign_cols = (sign_color_cols or set()) & numeric_cols
+    lower_better = (lower_is_better_cols or set()) & numeric_cols
+    sign_cols = ((sign_color_cols or set()) & numeric_cols) | lower_better
     col_precision = col_precision or {}
     if label_col is None:
         label_col = "__index__" if show_index else (cols[0] if cols else None)
@@ -966,6 +998,8 @@ def render_data_table(
         if c in sign_cols and text != "—":
             try:
                 fv = float(val)
+                if c in lower_better:
+                    fv = -fv
                 color = (t["emerald"] if fv > 1e-12 else t["rose"] if fv < -1e-12
                          else t["ink_tertiary"])
                 return f'<span style="color:{color};font-weight:600;">{text}</span>'
@@ -973,19 +1007,38 @@ def render_data_table(
                 pass
         return text
 
+    def _winner(row, higher_wins: bool) -> "str | None":
+        live = {}
+        for c in cols:
+            if c not in numeric_cols or c == label_col:
+                continue
+            try:
+                v = float(row[c])
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(v):
+                live[c] = v
+        if len(live) < 2:
+            return None
+        return max(live, key=live.get) if higher_wins else min(live, key=live.get)
+
     body_rows = []
-    for idx, row in view.iterrows():
+    for r_i, (idx, row) in enumerate(view.iterrows()):
+        win = (_winner(row, best_in_row[r_i])
+               if best_in_row is not None and r_i < len(best_in_row) else None)
         tds = []
         if show_index:
             tds.append(f'<td class="lbl">{_fmt_cell(idx, precision)}</td>')
         for c in cols:
             cls = "num" if c in numeric_cols and c != label_col else "lbl" if c == label_col else "txt"
+            if c == win:
+                cls += " best"
             tds.append(f'<td class="{cls}">{_value_html(c, row[c])}</td>')
         body_rows.append(f"<tr>{''.join(tds)}</tr>")
 
     iframe_h = table_iframe_height(len(view), max_height=max_height)
     if row_height != TABLE_ROW_H:
-        iframe_h = int(min(TABLE_HEADER_H + len(view) * row_height + 6, max_height))
+        iframe_h = int(min(TABLE_HEADER_H + len(view) * row_height + 4, max_height))
 
     table_html = (
         '<!DOCTYPE html><html><head><meta charset="utf-8"><style>'
@@ -996,3 +1049,23 @@ def render_data_table(
         + "</table></div></body></html>"
     )
     _components_html(table_html, height=iframe_h, scrolling=False)
+
+
+def render_kv_table(data: dict, header_left: str = "Setting",
+                    header_right: str = "Value") -> None:
+    """A run's settings as a two-column readout (from Pragyam).
+
+    A grid rather than ``render_data_table`` because these rows are read DOWN the
+    value column — "what was this screen run under?" — not scanned or sorted.
+    Values are mono: several are numbers.
+    """
+    if not data:
+        render_empty_state("No settings recorded", "Run an analysis to freeze a configuration.")
+        return
+    cells = (f'<div class="key hdr">{html_mod.escape(header_left)}</div>'
+             f'<div class="value hdr">{html_mod.escape(header_right)}</div>')
+    for k, v in data.items():
+        cells += (f'<div class="key">{html_mod.escape(str(k))}</div>'
+                  f'<div class="value">{html_mod.escape(str(v))}</div>')
+    st.markdown(f'<div class="kv-table-container"><div class="kv-table">{cells}</div></div>',
+                unsafe_allow_html=True)

@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v8.0.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v8.1.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -275,6 +275,7 @@ engine.py            ← settings, per-symbol features, the snapshot row, banded
 pragati.py           ← pragati.pine v6: conviction, ladders, trace, histogram, TURN / RESUME
 samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
 cvgrid.py            ← the 4 × 4 conviction-value grid
+charts.py            ← chart builders: the conviction-value map, tone history, correlation heatmap
 edge.py              ← measured expectancy: event study, drift removal, block bootstrap, power
 research.py          ← LEGACY harness from an older momentum engine; validates nothing here
 logger.py            ← structured terminal logging
@@ -776,4 +777,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v8.0.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v8.1.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
