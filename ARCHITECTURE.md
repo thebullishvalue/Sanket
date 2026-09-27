@@ -154,7 +154,9 @@ exposed in the UI.
 The conviction tape is the row (±30 and 0), the value tape the column (±θ and 0). The histogram's
 push decides when a row may change — one step on a push, all the way on an impulse, held otherwise.
 Each cell is named as an action with its seed units: Buy 3 · Add 3 · Hold 1.5 · Accumulate 1.5 ·
-Wait 1 · Watch 1 · Trim 0.75 · Reduce 0.5 · Exit 0.25.
+Wait 1 · Trim 0.75 · Reduce 0.5 · Exit 0.25. **Grid v7** moved three cells by measurement
+(`studies/pine_audit.md`): sellers firm × cheap → Buy · capitulation 3, sellers firm × below fair →
+Accumulate · washout 1.5, buyers firm × above fair → Hold · extended 1.5.
 
 Pragyam measured the 3 × 3 seed through a real allocator — monthly rebalances, every name held —
 on its ETF book, Nifty 50 and Dow 30:

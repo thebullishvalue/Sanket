@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v8.2.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v8.3.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -144,14 +144,22 @@ The two tapes place every name in a 4 × 4, each split at its knee and at zero:
 
 ```
                  CHEAP              BELOW FAIR          ABOVE FAIR          RICH
-buyers firm      Buy · turn 3       Add · trend 3       Add · strong 3      Hold · don't add 1.5
+buyers firm      Buy · turn 3       Add · trend 3       Hold · extended 1.5 Hold · don't add 1.5
 buyers edge      Accumulate ·       Accumulate ·        Wait · drifting 1   Trim · stalling 0.75
                  basing 1.5         early turn 1.5
 sellers edge     Accumulate ·       Wait · no edge 1    Trim · rolling      Trim · topping 0.75
                  deep value 1.5                         over 0.75
-sellers firm     Watch · still      Reduce ·            Reduce ·            Exit · distribution
-                 falling 1          downtrend 0.5       breakdown 0.5       0.25
+sellers firm     Buy ·              Accumulate ·        Reduce ·            Exit · distribution
+                 capitulation 3     washout 1.5         breakdown 0.5       0.25
 ```
+
+**Grid v7 — three cells measured, not chosen.** `pine_audit.py` ran the indicator's port on 380
+instruments in six asset classes over ~20 years, split before / after 2018. Sellers firmly in
+control at a cheap or below-fair price was followed by gains in *both* eras on every class but
+crypto (+0.10 to +0.35σ after 2018, significant on US, indices, commodities, FX), and it adds to
+plain oversold. So v6's *Watch · still falling* and *Reduce · downtrend* are now *Buy ·
+capitulation* and *Accumulate · washout*, and *Add · strong trend* — which earned nothing in either
+era — is *Hold · extended*. Full report: [`studies/pine_audit.md`](studies/pine_audit.md).
 
 **The histogram runs the rows.** Columns move freely — price is where it is. A row moves only
 with the push behind it: a push moves it one step toward the tape, an impulse all the way, no push
@@ -283,7 +291,9 @@ sanket.py            ← Streamlit entry point: UI, data + macro-driver fetch, s
 engine.py            ← settings, per-symbol features, the snapshot row, ranking, cost gate
 pragati.py           ← pragati.pine v6: conviction, ladders, trace, histogram, TURN / RESUME
 samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
-cvgrid.py            ← the 4 × 4 conviction-value grid
+cvgrid.py            ← the 4 × 4 conviction-value grid (v7)
+pragati.pine         ← the indicator itself, v7 — the Pine the port mirrors
+pine_audit.py        ← from-scratch multi-asset audit of the indicator (baseline, sweep, experiments, OI)
 charts.py            ← chart builders: the conviction-value map, tone history, correlation heatmap
 trace_study.py       ← backtest: the screener under all three trace settings, paired, holdout-sealed
 edge.py              ← measured expectancy: event study, drift removal, block bootstrap, power
@@ -787,4 +797,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v8.2.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v8.3.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

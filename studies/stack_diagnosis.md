@@ -1,5 +1,7 @@
 # Stack diagnosis · why the v8.0.0 ranking ran backwards, and what replaced it
 
+*Cell names below are grid v6 (Sanket v8.2). Grid v7 renamed three of them by measurement — see `pine_audit.md`: Watch · still falling → Buy · capitulation, Reduce · downtrend → Accumulate · washout, Add · strong trend → Hold · extended.*
+
 Five NSE universes (fixed-seed sample of ≤ 80 names each), Daily, ~15 years of Yahoo Finance prices with the macro drivers on. Discovery = before 2020-10-22; holdout = after, sealed until the design was chosen. Scores are each name's forward return, drift removed and divided by its own σ inside the era. `*` = 95% block-bootstrap interval excludes zero.
 
 ## 1 · Every component points the same way — negative

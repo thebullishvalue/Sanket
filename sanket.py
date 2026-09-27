@@ -88,7 +88,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v8.2.0"
+VERSION = "v8.3.0"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
