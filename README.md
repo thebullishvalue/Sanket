@@ -3,7 +3,7 @@
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
-Sanket screens a universe with **Pragati** (`pragati.pine` v9) — the indicator Pragyam's
+Sanket screens a universe with **Pragati** (`pragati.pine` v9.1) — the indicator Pragyam's
 Conviction-Value Grid already reads — and asks of every name the indicator's own question:
 **is the push paid for, and at what price?**
 
@@ -270,8 +270,8 @@ where it applies:
 
 | Adaptation | Why |
 |:---|:---|
-| **Conviction ladder on Daily is W · D (Ladder up)**; the Pine's default is Ladder down (1m … 4h) | No free feed carries intraday history at depth. The Pine's own FALLBACK reads the other direction when one has no frames; Pragyam made the same choice |
-| **The daily chart's W conviction rung normalises over 52 weeks**, not 200 | At 200 it needs four years of weekly history (Pragyam's adaptation) |
+| **Conviction ladder is Ladder down from yfinance's intraday history** (1m 7 d · 5m/15m/30m 60 d · 1h ≈ 730 d; 3m and 4h built), falling back to W · D (↺) on bars older than it | The Pine reads 1m … 4h intrabars at whatever depth TradingView carries; the free feed carries these depths. Each rung joins where it has calibrated, as in the Pine; `PRG_Ladder` says which ladder a bar read |
+| **The daily chart's W conviction rung** (the ↺ fallback) **normalises over 52 weeks**, not 200 | At 200 it needs four years of weekly history (Pragyam's adaptation) |
 | **Weekly runs a 60-bar normalization window**, not 200 | Calibration costs two windows; at 200 a weekly name needs 8.7 years. Weekly's conviction ladder is the daily bars *inside* each week (Ladder down, the Pine's own fallback on Weekly) and its value ladder is M · W |
 | **The quiet-regime test ranks over the history available** (≥ one normalization window) where the Pine asks for four | The panel cannot supply 800 bars of σ history |
 | **A volume-less name's reconstructed parent rung calibrates on true range** | The Pine requires a volume baseline there, so on index spot or FX with Ladder up the conviction tape would never calibrate and every signal would stay paused |
@@ -314,12 +314,13 @@ Per symbol, on each run:
 ```
 sanket.py            ← Streamlit entry point: UI, data + macro-driver fetch, screen routing
 engine.py            ← settings, per-symbol features, the snapshot row, ranking, cost gate
-pragati.py           ← pragati.pine v9: conviction, ladders, trace, histogram, ◆, legacy TURN, v9_signals (the ▲▼)
+pragati.py           ← pragati.pine v9.1: conviction, ladders, trace, histogram, ◆, legacy TURN, v9_signals (the ▲▼)
 samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
 cvgrid.py            ← the 3 × 3 conviction-value grid: names, units, tones, classify — the ▲▼'s source
 pine_v5.py           ← the v5/v8 Pine's own logic: ▲▼ ◆, R / H, the graded grid and phases, OI quadrant
 cvgrid4.py           ← v7's 4 × 4 grid, kept so the audit can reproduce the comparison
-pragati.pine         ← the indicator itself, v9 — the Pine the port mirrors (archive/: v5, v7, v8)
+pragati.pine         ← the indicator itself, v9.1 — the Pine the port mirrors (archive/: v5, v7, v8)
+intraday.py          ← the conviction ladder's lower frames from yfinance (1m … 4h), batched and cached
 pine_audit.py        ← the v7/v8 audit harness (baseline, sweep, experiments, OI) — its scorer is biased, see v9
 studies/v9_lab/      ← the v9 audit: look-ahead-free scorers, feature caches, every experiment
 charts.py            ← chart builders: the conviction-value map, tone history, correlation heatmap
@@ -468,6 +469,16 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 ---
 
 ## What Changed
+
+**v9.1.0 — the conviction ladder reads DOWN everywhere; Buy · capitulation 4 units.** Measured
+head to head on the same daily charts (377 instruments, Nov 2024 – Sep 2026, 1h + 4h rungs): the
+grid tied; the ▲ was as good or better on Ladder down in every non-crypto class, significantly on
+indices, commodities and FX; tied on stocks. The Pine now defaults to Ladder down, and Sanket and
+Pragyam read it from yfinance's intraday history (`intraday.py`), falling back to W · D (↺) on bars
+older than it. A walkthrough of the grid on real data: Buy · capitulation and Exit · distribution
+hold as stated in every era, the other cells read ≈ 0; a 200-day trend axis and neutralised units
+were tested and rejected; **Buy · capitulation 3 → 4** beat 3 in every era in Pragyam's allocator
+and in the lab, and is adopted. The weekly grid's momentum sign now follows its ladder.
 
 **v9.0.0 — Pragati v9: a fresh audit, the measuring stick fixed, the signals moved to the edge.**
 Everything in the indicator was re-audited from scratch — 380 instruments, three eras, daily and
