@@ -1,304 +1,251 @@
 """
-Sanket Signal Engine — SIDDHI CONVICTION OSCILLATOR.
+Sanket Signal Engine — PRAGATI · Conviction × Value.
 
-Ported from ``siddhi.pine`` (Siddhi · Conviction Oscillator v3). It replaces the
-close-location reversal (CLR) engine that shipped through v6.x: that engine measured
-*where a bar closed inside its own range* and faded it. This one measures *how much of
-the market's effort converted into displacement*, and trades the turn in that quantity.
+The screener's logical stack, rebuilt on pragati.pine v6 and on the inference
+Pragyam already carries for it. It replaces the Siddhi zero-crossing engine that
+shipped through v7.x: Siddhi fired whenever conviction crossed its own signal
+line — ~113 times per 1000 bars, its source's weakest tested configuration
+(+0.0015R, t = 0.2, held out). Pragati keeps Siddhi's measurement at its root
+(c = ΔC / TR, participation-weighted) and asks the other half of the question
+on the same bar: progress, and the PRICE it was made at.
 
-What this is
-------------
-A bounded oscillator and its own signal line. The screening condition is the sign of the
-gap between them.
+THE STACK, bottom to top
+────────────────────────
+    samanvaya.py   VALUE — rich or cheap against what the macro drivers
+                   explain (Samanvaya's unified z), on the chart and its parent
+    pragati.py     CONVICTION — who controls, how firmly, on the chart and its
+                   ladder; the TRACE (conviction × value) and its HISTOGRAM;
+                   divergence evidence; the ▲▼ TURN and ◆ RESUME signal set
+    cvgrid.py      THE GRID — the 4 × 4 state the two tapes place a name in,
+                   named as an action with Pragyam's seed units
+    engine.py      THIS FILE — the Sanket-facing layer: settings, per-symbol
+                   features on an OHLCV frame, the snapshot row, and the
+                   cross-sectional ranking
+    edge.py        the measured expectancy of the signal set on YOUR universe
 
-    conviction     c = (close - close[1]) / TR                bounded -1 … +1
-    participation  w = min(volume / EMA(volume, vn), cap)     range fallback where no volume
-    raw            = 100 · SMA(c·w, len) / SMA(|c|·w, len)
-    scaled         = 100 · tanh( raw / 3σ(raw, norm) )        adaptive, and not optional
-    osc            = EMA(scaled, smooth)
-    sig            = EMA(osc, signal)
-    hist           = osc - sig
+THREE KINDS OF OUTPUT, AND WHAT EACH CLAIMS
+───────────────────────────────────────────
+    EVENTS    ▲ TURN / ▼ TURN — a stretch releasing, the push that made it
+              failed. A DECLARATION; stands until the opposite one.
+              ◆ RESUME — a trend resuming from inside the zone.
+              These are what fires. Each needs EVERY layer on one closed bar.
+    WATCH     a TURN window open — the trace has crossed back through θ and the
+              ingredients have up to 5 bars to confirm. Half a signal.
+    STATE     the grid cell — Buy / Add / Accumulate / Hold / Wait / Watch /
+              Trim / Reduce / Exit — where the name stands BETWEEN signals.
+              Every name has one. Neither signals nor state read each other.
 
-``conv`` is signed by direction and normalised by true range, so gaps count and a wide
-violent bar that closes where it opened scores zero — nothing was accomplished. ``w``
-weights each bar by how much of the market showed up for it, capped so one expiry print
-cannot own the window. The ratio is therefore *the participation-weighted share of effort
-that went somewhere*, and the adaptive rescaling exists because that raw share cannot
-reach its own bounds (it lives inside roughly ±15 intraday), which makes fixed thresholds
-against ±100 thresholds that never fire.
+RANKING IS BANDED, because the events are rare and the state is universal:
 
-Signals (the two events the screener fires)
--------------------------------------------
-* **BUY — green triangle** (``buy_cond``): ``hist`` crosses **above** zero. The
-  oscillator has pulled above its own signal line: conviction is turning up.
-* **SELL — yellow diamond** (``sell_cond``): ``hist`` crosses **below** zero. The
-  oscillator has dropped under its signal line: conviction is turning down.
+    long side                              short side
+    5 + g   ▲ TURN on this bar              5 + g'  ▼ TURN on this bar
+    4 + g   ◆ RESUME ↑ on this bar          4 + g'  ◆ RESUME ↓ on this bar
+    3 + r   a long event inside its hold    3 + r   a short event inside its hold
+    2 + a   a ▲ TURN window open            2 + a   a ▼ TURN window open
+    g − ½   the grid state alone            g' − ½  the grid state alone
 
-That is the entire screening condition. It is a *state change*, not a level: nothing
-fires while the histogram merely sits on one side of zero, and both events are symmetric
-— unlike the CLR engine this replaces, where the two sides meant different things and
-only one of them survived its own holdout.
+g is the name's grid weight, (units − ¼) / 2¾ ∈ [0, 1) — Pragyam's inference: the
+state IS the weight, so among names that fired the same event, the one the grid
+calls Buy · turn ranks above the one it calls Watch · still falling. g' mirrors
+it for the short side ((3 − units) / 2¾). r is the fraction of the hold left, a
+the fraction of the confirmation window left. Bands cannot overlap.
 
-The magnitude gate, and why it defaults to off
-----------------------------------------------
-:data:`SID_K` scales an optional magnitude requirement — the histogram must cross
-``± k·σ(hist)`` rather than ``± 0``. **The default is 0.0, which is exactly the plain
-zero-crossing described above.** The knob exists because the source indicator's own
-measurement is that a bare crossover is its weakest configuration (it fires ~113 times
-per 1000 bars for +0.0205R on the instruments it was fitted to and +0.0015R, t=0.2, on
-held-out ones). Raising ``k`` trades signal count for separation. The plumbing carries it
-so the parameter can be measured by ``edge.py`` on a real universe rather than argued
-about; nothing in the shipped default path uses a non-zero value.
+WHAT IS NOT CLAIMED
+───────────────────
+The source indicator's own evidence section, stated as it states it: regular
+divergence RANKED first (not established); participation weighting earns its
+place; the scaling is calibrated. The chart-only reversal trigger had no edge
+(+0.0003R); hidden divergence none; continuation changed sign off its primaries
+(+0.036R / −0.016R). NOTHING reaches significance once overlapping windows are
+accounted for (best t = 1.9 of 48 cells). The TURN / RESUME set, the trace, its
+histogram and the grid are UNMEASURED in the source. Pragyam measured the grid's
+3 × 3 seed as an allocator: within half a percent a year of equal weight, never
+above it. So the number that applies to your screen is the one edge.py measures
+on your symbols — reported, never applied.
 
-Why the event form (and not a continuous position)
---------------------------------------------------
-Same reason as every version of this app: a continuous position on an oscillator turns
-over every time the two lines touch, and near zero they touch constantly. Firing on the
-crossing and holding :data:`SID_HORIZON` bars is what makes the rule costable at all.
-``edge.py`` measures whether that survives on the universe actually on screen.
-
-What is NOT claimed
--------------------
-The source indicator publishes its own measurements and they are modest and honest:
-nothing in it reaches statistical significance once overlapping forward windows are
-accounted for (best case t = 1.9 across 48 horizon/bracket cells), the correlation between
-a configuration's fitted edge and its edge on unseen instruments is approximately zero,
-and on 5-minute bars the round-trip cost is roughly double anything the indicator has been
-shown to produce. Read every published number as a ranking, not a promise — and read the
-number ``edge.py`` measures on the user's own universe as the one that applies here.
-
-Horizon
--------
-Bar-scale, following the lookback: a 20-bar window is a swing instrument on daily bars.
-Entry is the next session's open after the signal bar closes. There is no intraday claim.
-
-Bar convention (one deliberate difference from the Pine)
--------------------------------------------------------
-The Pine gates every discrete object on ``barstate.isconfirmed`` so nothing is drawn on a
-forming bar and then withdrawn. Sanket evaluates completed daily (or weekly) bars
-directly, so that gate is structural here rather than explicit: a signal fires on the bar
-whose close produced it, and entry is the next session's open. The one carry-over: a
+Bar convention: signals are committed on the close of the bar that produced
+them (the Pine's barstate.isconfirmed); entry is the next session's open. A
 signal on a session that has not closed yet is provisional until it does.
-
-Numerical fidelity to the Pine
-------------------------------
-``ta.ema`` seeds on its first value and uses ``alpha = 2/(n+1)`` — that is
-``ewm(span=n, adjust=False)``. ``ta.stdev`` is the POPULATION standard deviation, so
-``ddof=0`` throughout. ``ta.tr(true)`` includes the gap and falls back to ``high-low`` on
-the first bar. The hollow-bar volume carry (``volLast``) is reproduced: a holiday or thin
-overnight print must not kill the participation baseline for a whole averaging window.
-
-Output column contract (``compute_ranking``)
---------------------------------------------
-  SID_Score, SID_Rank_Pct, Signal_Score, Conviction, Side,
-  Priority_Long, Priority_Short, Priority_Long_pct, Priority_Short_pct,
-  Signal_Reason
 """
 from __future__ import annotations
+
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
 
-# ── The source indicator's inputs, as shipped defaults ───────────────────────────────────
-# Every value below is siddhi.pine's own default. They are NOT fitted here and must not be
-# tuned to a backtest: the source's 900-configuration search found the correlation between
-# a setting's fitted edge and its edge on unseen instruments to be approximately zero
-# (-0.07 to +0.11). The only two preferences that held across every architecture tested
-# were a lookback at or above 20 and an inner zone at or below 40 — both respected here.
+import cvgrid as cg
+import pragati as pg
+import samanvaya as sv
 
-# Lookback: how many bars of effort the oscillator accounts for. This is the horizon of the
-# whole instrument, and the same bar count on either timeframe — 20 daily bars is a swing
-# read, 20 weekly bars is a positional one.
-SID_LENGTH = 20
+# ── Declared parameters ──────────────────────────────────────────────────────────────────
+# Every indicator input is pragati.pine's own default (pragati.Params). None is fitted here
+# and none is exposed in the UI: the source's 900-configuration search found fitted and
+# out-of-sample edge uncorrelated. Two numbers are Sanket's, and both are disclosed:
 
-# Final EMA on the oscillator. Its real job is to keep the series from being jagged; 1
-# disables it, above ~5 the turns arrive materially late.
-SID_SMOOTH = 3
+# WEEKLY NORMALIZATION — Sanket's number, not the source's. Warm-up costs two
+# normalization windows; at 200 a weekly symbol needs 8.7 years before its histogram is
+# calibrated. 60 weeks is ~14 months of context, the closest wall-clock analogue to what
+# 200 daily bars give the daily screen, and well above the source's minimum of 30.
+PRG_NORM = pg.DEFAULT.norm
+PRG_NORM_WEEKLY = 60
 
-# The signal line the histogram is measured against.
-SID_SIGNAL = 9
-
-# Sample used for the adaptive scaling σ and for the (default-off) magnitude threshold.
-# Longer is stabler and slower to acknowledge that the instrument has changed character.
-SID_NORM = 200
-
-# WEEKLY IS NOT THE SOURCE'S NUMBER — it is Sanket's, and it exists because warmup costs
-# TWO normalization windows (see `warmup_bars`). At norm = 200 a weekly symbol needs 452
-# weekly bars before it can carry a signal: 8.7 years of history per symbol, for every
-# symbol in the universe, before the screen shows anything at all. No fetch this app can
-# make on a shared container supplies that.
-#
-# 60 weeks is ~14 months of context, which is the closest wall-clock analogue to what 200
-# daily bars (~10 months) gives the daily screen, and it keeps the σ sample well above the
-# source's own minimum of 30. Warmup falls to 172 weekly bars. It is flagged in the UI as a
-# Sanket adaptation rather than a measured plateau, because that is what it is.
-SID_NORM_WEEKLY = 60
-
-# Averaging length for the volume (or true-range) participation baseline.
-SID_VOL_N = 20
-
-# Ceiling on the participation weight. Expiry days, index rebalances and block prints
-# generate volume many multiples of normal; uncapped, one print would dominate the whole
-# window for its full length and the oscillator would be reporting that single bar.
-SID_CAP = 3.0
-
-# What weights each bar's conviction. "Auto" uses volume where the symbol has it and
-# relative true range where it does not, so index spot works without configuration.
-SID_PARTICIPATION = "Auto"
-PARTICIPATION_MODES = ("Auto", "Volume", "True range", "Off")
-
-# NOTE: there is no scaling MODE any more. The source indicator removed its "Raw share"
-# option, and the removal is a fix rather than a simplification: selecting it left the
-# zones at ±30/±60 on a series that lives inside roughly ±15, so nothing ever armed, no
-# gated divergence passed, and the reversal trigger could not fire. A setting whose only
-# effect is to break the engine is a trap, not a choice. The raw share is still computed
-# and still exported as ``SID_Raw``, which is what it was ever wanted for.
-
-# Magnitude gate in σ of the histogram's own distribution. 0.0 == the plain zero-crossing,
-# which is the shipped screening condition. See the module docstring.
-SID_K = 0.0
-
-# Hold horizon in bars. Entry next open, exit `horizon` bars later.
-SID_HORIZON = 10
-
-# Zones, in the oscillator's own scaled units. Under adaptive scaling the inner zone is
-# occupied roughly a third of the time and the outer about 4% (measured 3.2-4.3%). These
-# are DISPLAY context — they classify how one-sided the window is. Nothing gates on them.
-SID_ZONE_INNER = 30.0
-SID_ZONE_OUTER = 60.0
-
-# Degenerate-window guard. When an instrument's raw conviction share stops varying — an
-# illiquid or range-collapsed stretch — the adaptive σ collapses and the tanh rescaling
-# amplifies arithmetic noise into a full-scale reading. The Pine handles this by emitting
-# zero; here the bar is marked DEGENERATE and suppressed so it cannot fire or rank, which
-# is the same posture the previous engine took toward a collapsed CLV sigma.
-SID_MIN_RAW_SIGMA = 1e-6
+# Hold horizon in bars — how long an event stays "open" in the tables, and the forward
+# window the edge study measures. The Pine's own evidence used a 20-bar bracket; Sanket
+# has always declared 10, and a declared horizon is not re-chosen after the fact.
+HORIZON = 10
 
 # Round-trip cost assumption for the cost gate.
-SID_COST_BPS = 3.0
+COST_BPS = 3.0
 
 # Forward horizons the Historical Range harvest attaches as Ret_*b labels.
 HOLD_HORIZONS = [1, 5, 10, 21]
 
+# The largest edge the source family has found on any instrument group (+0.036R, the
+# primary futures on the continuation architecture). Used as a CEILING, not a forecast: a
+# cost above it cannot be survived by any plausible version of the edge (the cost gate),
+# and a test whose minimum detectable effect exceeds it cannot resolve anything (edge.py).
+LARGEST_KNOWN_EFFECT = 0.036
 
-# ════════════════════════════════════════════════════════════════════════════════════════
-# INSTRUMENT CLASS  (wired to Sanket's universe)
-# ════════════════════════════════════════════════════════════════════════════════════════
-# ⚠ REFERENCE PRIOR ONLY — NOT USED TO COMPUTE ANYTHING.
-#
-# These are the SOURCE INDICATOR's published per-class results, converted from its R units
-# (2 ATR target / 1 ATR stop, 20 bars max, entry next open, measured against a matched
-# random-entry baseline over the same bracket) into the vol units this app reports in.
-# `established` is false everywhere, because the source's own headline is that nothing it
-# measured reaches significance once overlapping forward windows are accounted for.
-#
-# They were never wired into conviction and must not be: frozen constants from someone
-# else's eleven instruments cannot cover a universe the study never touched. Expectancy is
-# MEASURED per universe by `edge.py`, from the user's own symbols, at these same
-# pre-declared parameters. What remains here is a labelled comparison line.
+# Cost-gate fallback in bps before a study has measured this universe's own cost charge.
+POOLED_BREAKEVEN_BPS = 7.0
+
+# Instrument class — a DISPLAY LABEL only, naming the kind of universe on screen. The
+# Siddhi-era per-class expectancy priors are gone: the Pragati signal set is unmeasured in
+# its source, so there is no prior to quote.
 INSTRUMENT_CLASSES = [
     "US index / ETF", "US sector ETF", "India index", "International equity",
     "Commodity", "FX", "Rates / Credit", "Other / unknown",
 ]
-
-# Source-indicator R-edge by the nearest instrument group it actually tested. Gold, silver
-# and crude were the primary futures it was calibrated on (+0.036R on the continuation
-# architecture); the eight held-out instruments — ES, SPY, QQQ, TLT, 6E, HG, NG, BTC — came
-# in at -0.016R, i.e. the sign flips off the primaries. Both are reported at face value.
-CLASS_EDGE = {
-    "US index / ETF":       -0.016,
-    "US sector ETF":        -0.016,
-    "India index":           0.000,   # never tested by the source
-    "International equity":  0.000,   # never tested by the source
-    "Commodity":             0.036,
-    "FX":                   -0.016,
-    "Rates / Credit":       -0.016,
-    "Other / unknown":       0.000,
-}
-
-CLASS_HIT = {
-    "US index / ETF":       50.0,
-    "US sector ETF":        50.0,
-    "India index":          50.0,
-    "International equity": 50.0,
-    "Commodity":            52.0,
-    "FX":                   50.0,
-    "Rates / Credit":       50.0,
-    "Other / unknown":      50.0,
-}
-
-# The source establishes NO class: its best t-statistic across 48 horizon/bracket cells was
-# 1.9, and it says so itself. Kept as an explicit empty tuple rather than deleted so the
-# reference row can still say "not established by the source" instead of saying nothing.
-ESTABLISHED_CLASSES: tuple[str, ...] = ()
-
-# Cost breakeven fallback, in bps, before a study has measured this universe's actual cost.
-# The source quotes ~0.02R of round-trip cost on daily bars at one ATR of stop against a
-# best-case measured edge near 0.05R; 7bp is the pooled equity-universe analogue this app
-# has always used and remains the conservative fallback.
-POOLED_BREAKEVEN_BPS = 7.0
-
-# The largest edge the source indicator found on any instrument group (+0.036R, the primary
-# futures on the continuation architecture). Used as a CEILING, not a forecast: it is the
-# most this construction has ever been worth anywhere, so a trading cost exceeding it
-# cannot be survived by any plausible version of the edge. That makes it the right yardstick
-# for a cost gate — and, in `edge.py`, for deciding when a test is too underpowered to say
-# anything.
-LARGEST_KNOWN_EFFECT = 0.036
-
-# Sanket universe → instrument class. Used ONLY to select which reference row to display.
 UNIVERSE_CLASS_MAP = {
     "US Indexes":     "US index / ETF",
     "India Indexes":  "India index",
     "Global Indexes": "International equity",
-    "ETF Index":      "India index",        # NSE ETFs track Indian indices / sectors
+    "ETF Index":      "India index",
     "Commodities":    "Commodity",
     "Currency":       "FX",
     "Global Macro":   "Rates / Credit",
-    "Crypto":         "Other / unknown",    # the source covered BTC only, on one architecture
+    "Crypto":         "Other / unknown",
 }
 
 
 def instrument_class(universe: str, selected_index: str | None = None) -> str:
-    """Which reference row to show beside the measured result. Display only.
-
-    ``selected_index`` is accepted so a future sub-universe split can refine the label
-    without changing call sites.
-    """
+    """The display label for a universe. Nothing computes from it."""
     return UNIVERSE_CLASS_MAP.get(universe, "Other / unknown")
 
 
-def class_edge(iclass: str) -> float:
-    """The SOURCE INDICATOR's published edge for a class — a reference prior, not ours."""
-    return CLASS_EDGE.get(iclass, 0.0)
+def chart_of(timeframe: str) -> str:
+    return "W" if str(timeframe) == "Weekly" else "D"
 
 
-def class_hit(iclass: str) -> float:
-    """The SOURCE INDICATOR's published hit rate for a class — a reference prior, not ours."""
-    return CLASS_HIT.get(iclass, 50.0)
+# ════════════════════════════════════════════════════════════════════════════════════════
+# SETTINGS  (one run's configuration)
+# ════════════════════════════════════════════════════════════════════════════════════════
+@dataclass(frozen=True)
+class EngineSettings:
+    """One run's Pragati configuration: the indicator's inputs plus Sanket's own three."""
+    timeframe: str
+    params: pg.Params = field(default_factory=pg.Params)
+    horizon: int = HORIZON
+    cost_bps: float = COST_BPS
+    iclass: str = "Other / unknown"
+
+    @property
+    def chart(self) -> str:
+        return chart_of(self.timeframe)
+
+    @property
+    def norm(self) -> int:
+        return int(self.params.norm)
+
+    @property
+    def params_sig(self) -> tuple:
+        """Everything that changes a per-symbol analysed frame."""
+        p = self.params
+        return (self.chart, p.length, p.smooth, p.norm, p.participation, p.denominator,
+                p.vol_n, float(p.cap), float(p.z1), float(p.z2), float(p.mix), p.signal,
+                p.turn, p.confirm, p.disloc, p.resume, float(p.k), p.pull, p.effort, p.cool,
+                p.pl, p.pr, p.gap_min, p.gap_max, p.zone_gate, p.quiet, p.parent_norm,
+                int(self.horizon), sv.DEFAULT_BASKET)
+
+    @property
+    def study_sig(self) -> tuple:
+        return self.params_sig
+
+    @property
+    def norm_is_adapted(self) -> bool:
+        """True when the normalization window is Sanket's, not the indicator's."""
+        return int(self.params.norm) != PRG_NORM
+
+    @property
+    def ladder_label(self) -> str:
+        return "D inside · W" if self.chart == "W" else "W · D"
+
+    @property
+    def value_ladder_label(self) -> str:
+        return "M · W" if self.chart == "W" else "W · D"
+
+    @property
+    def trigger_label(self) -> str:
+        """How the signal set reads in prose — the one place it is worded."""
+        return "▲▼ TURN · ◆ RESUME"
+
+    @property
+    def trigger_short(self) -> str:
+        return f"TURN · RESUME · {self.horizon}b"
+
+    @property
+    def min_bars(self) -> int:
+        """Bars before the histogram is calibrated — below this a symbol cannot signal."""
+        return pg.warmup_bars(self.params)
+
+    @property
+    def theta(self) -> float:
+        return self.params.theta
+
+    def cost_ok(self, study=None) -> bool:
+        return cost_ok(self.cost_bps, study)
+
+    def cost_basis(self, study=None) -> str:
+        return cost_basis(study)
 
 
-def is_established(iclass: str) -> bool:
-    """Whether the SOURCE established this class. It established none; see the constant."""
-    return iclass in ESTABLISHED_CLASSES
+def settings_for(universe, selected_index, timeframe, overrides: dict | None = None) -> EngineSettings:
+    """Resolve the active settings for a (universe, timeframe) selection.
+
+    Every indicator input is the Pine's default except the normalization window on
+    Weekly (see PRG_NORM_WEEKLY). ``overrides`` may carry any Params field or
+    horizon / cost_bps — for research, never from the UI.
+    """
+    o = dict(overrides or {})
+    pfields = {k: o.pop(k) for k in list(o) if k in pg.Params.__dataclass_fields__}
+    p = pg.Params(norm=PRG_NORM_WEEKLY if str(timeframe) == "Weekly" else PRG_NORM)
+    if pfields:
+        p = replace(p, **pfields)
+    return EngineSettings(timeframe=str(timeframe), params=p,
+                          horizon=int(o.get("horizon", HORIZON)),
+                          cost_bps=float(o.get("cost_bps", COST_BPS)),
+                          iclass=instrument_class(universe, selected_index))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════
+# COST GATE  (a question about cost, never about edge)
+# ════════════════════════════════════════════════════════════════════════════════════════
+def _measured_cost_charge(study) -> float | None:
+    if study is None:
+        return None
+    r = study.get("buy", "holdout") or study.get("buy", "full")
+    if r is None:
+        return None
+    ch = getattr(r, "cost_charge", float("nan"))
+    return float(ch) if np.isfinite(ch) else None
 
 
 def cost_ok(cost_bps: float, study=None) -> bool:
-    """Is this round-trip cost survivable on this universe? A question about COST, not edge.
+    """Is this round-trip cost survivable here? Compared against LARGEST_KNOWN_EFFECT.
 
-    With a measured :class:`edge.EdgeStudy`, the study knows what trading this universe
-    actually costs in the units the edge is measured in: ``cost_bps/1e4 / sigma_h``, averaged
-    over the instruments that fired. The gate asks whether that charge is smaller than
-    :data:`LARGEST_KNOWN_EFFECT` — the most this signal has ever been worth anywhere. If the
-    cost exceeds that ceiling, no plausible version of the edge survives it.
-
-    It deliberately does NOT compare the cost against the *measured* edge. Doing so would fail
-    the gate on any universe that measures no edge, halving its conviction — which would make
-    the measurement a hidden multiplier on the signal, the exact thing this design refuses to
-    do. Expectancy is reported; only cost gates conviction.
-
-    Without a study there is no per-universe cost charge, so it falls back to the pooled
-    breakeven in bps. :func:`cost_basis` reports which basis was used.
+    Never against the MEASURED edge: that would fail the gate on every universe that
+    measures no edge, smuggling the expectancy back in as a hidden multiplier.
     """
     try:
         c = float(cost_bps)
@@ -310,32 +257,13 @@ def cost_ok(cost_bps: float, study=None) -> bool:
     return c <= POOLED_BREAKEVEN_BPS
 
 
-def _measured_cost_charge(study) -> float | None:
-    """This universe's measured trading cost in vol units, or None if not measured."""
-    if study is None:
-        return None
-    r = study.get("buy", "holdout") or study.get("buy", "full")
-    if r is None:
-        return None
-    ch = getattr(r, "cost_charge", float("nan"))
-    return float(ch) if np.isfinite(ch) else None
-
-
 def cost_basis(study=None) -> str:
-    """'measured' when this universe's own cost charge backs the gate, else the pooled prior."""
     if _measured_cost_charge(study) is not None:
         return "measured"
     return f"pooled prior (~{POOLED_BREAKEVEN_BPS:.0f}bp)"
 
 
 def cost_in_vol_units(cost_bps: float, sigma_h: float) -> float:
-    """Convert a round-trip cost in bps to the vol units the edge is reported in.
-
-    ``sigma_h`` is the h-bar forward-return sigma of the instrument (or the universe
-    median). This conversion is why the edge dies on low-volatility instruments: 3bp against
-    a 4% 10-day sigma costs 0.008 vol units, but against a 1% sigma it costs 0.030 — a real
-    drag on an edge of ~0.03. A per-class cost table cannot express that; this can.
-    """
     try:
         s = float(sigma_h)
         return float((float(cost_bps) / 1e4) / s) if s > 0 else float("nan")
@@ -343,428 +271,387 @@ def cost_in_vol_units(cost_bps: float, sigma_h: float) -> float:
         return float("nan")
 
 
-def norm_for(timeframe: str) -> int:
-    """Normalization window for a Sanket timeframe (Daily 200 bars / Weekly 60).
-
-    See :data:`SID_NORM_WEEKLY` for why the two differ: warmup is ``2·norm``, so the
-    source's 200 would demand 8.7 years of weekly history per symbol.
-    """
-    return SID_NORM_WEEKLY if str(timeframe) == "Weekly" else SID_NORM
-
-
-def length_for(timeframe: str) -> int:
-    """Oscillator lookback for a Sanket timeframe.
-
-    The same bar count on both: the lookback IS the horizon, so 20 weekly bars is the
-    positional read and 20 daily bars the swing one. Kept as a function because every call
-    site passes a timeframe and a future split should not have to change them.
-    """
-    return SID_LENGTH
-
-
-def warmup_bars(length: int = SID_LENGTH, norm: int = SID_NORM,
-                vol_n: int = SID_VOL_N, smooth: int = SID_SMOOTH,
-                signal: int = SID_SIGNAL) -> int:
-    """Bars a symbol needs before it can carry a signal (the Pine's ``ready`` gate).
-
-    WARM-UP IS TWO NESTED NORMALIZATIONS, and it is counted rather than guessed::
-
-        raw     pinned until its SMA window and the participation baseline fill
-                                                        →  length + vol_n
-        rawSd   a stdev OF raw, so it needs a window free of those pinned bars
-                                                        →  + norm
-        hist    inherits that, through smooth and signal
-        histSd  a stdev of the HISTOGRAM, so it needs its own full clean window
-                                                        →  + norm + smooth + signal
-
-    which closes to ``2·norm + length + vol_n + smooth + signal`` — **452 bars** on the
-    shipped defaults.
-
-    The previous arithmetic (``norm + length + vol_n + smooth + 2``) covered the first
-    stage only and declared a symbol ready at bar 245, while ``histSd`` was not clean until
-    roughly 440. For those ~200 bars ``histSd`` was averaged across a region where the
-    histogram is pinned near zero — and a deflated sigma matters more here than it does on
-    the chart. The Pine only uses it for the impulse threshold, which at ``k = 0`` is zero
-    either way; Sanket divides by it **twice**, for ``SID_Hist_Z`` (the cross-sectional
-    ranking score) and ``SID_Impulse`` (the conviction basis). Both were inflated across
-    the whole early region, on every symbol short enough to live there. ``signal`` was
-    missing from the old sum as well.
-    """
-    return 2 * int(norm) + int(length) + int(vol_n) + int(smooth) + int(signal)
-
-
 # ════════════════════════════════════════════════════════════════════════════════════════
-# THE OSCILLATOR  (pure numeric core — no DataFrame, so it is trivially testable)
+# PER-SYMBOL FEATURES  (time-series; one name, every bar)
 # ════════════════════════════════════════════════════════════════════════════════════════
-def _ema(s: pd.Series, span: int) -> pd.Series:
-    """Pine ``ta.ema``: alpha = 2/(span+1), seeded on the first value."""
-    return s.ewm(span=max(int(span), 1), adjust=False).mean()
+KIND_GLYPH = {"turn": "▲", "resume": "◆"}          # per side: ▲/▼ TURN, ◆ RESUME
+EVENT_LABEL = {("turn", 1): "▲ TURN", ("turn", -1): "▼ TURN",
+               ("resume", 1): "◆ RESUME ↑", ("resume", -1): "◆ RESUME ↓"}
 
 
-def true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
-    """Pine ``ta.tr(true)`` — gap-inclusive, falling back to ``high-low`` on the first bar."""
-    prev = close.shift(1)
-    tr = pd.concat([(high - low).abs(),
-                    (high - prev).abs(),
-                    (low - prev).abs()], axis=1).max(axis=1)
-    return tr.where(prev.notna(), (high - low).abs())
+def _lower(df: pd.DataFrame) -> pd.DataFrame:
+    """Sanket frames are Title-case (yfinance); the ports read lower-case."""
+    out = pd.DataFrame({
+        "open": pd.to_numeric(df["Open"], errors="coerce"),
+        "high": pd.to_numeric(df["High"], errors="coerce"),
+        "low": pd.to_numeric(df["Low"], errors="coerce"),
+        "close": pd.to_numeric(df["Close"], errors="coerce"),
+        "volume": (pd.to_numeric(df["Volume"], errors="coerce") if "Volume" in df.columns
+                   else pd.Series(np.nan, index=df.index)),
+    }, index=pd.DatetimeIndex(df.index))
+    if out.index.tz is not None:
+        out.index = out.index.tz_convert(None)
+    return out
 
 
-def siddhi_oscillator(high: pd.Series, low: pd.Series, close: pd.Series,
-                      volume: pd.Series | None = None,
-                      length: int = SID_LENGTH,
-                      smooth: int = SID_SMOOTH,
-                      signal: int = SID_SIGNAL,
-                      norm: int = SID_NORM,
-                      vol_n: int = SID_VOL_N,
-                      cap: float = SID_CAP,
-                      participation: str = SID_PARTICIPATION) -> dict[str, pd.Series]:
-    """The Siddhi conviction oscillator, its signal line and their histogram.
+def compute_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
+                  settings: EngineSettings, daily: pd.DataFrame | None = None) -> pd.DataFrame:
+    """The whole stack for one name, as a frame on the chart's own index.
 
-    Returns a dict of aligned Series: ``raw``, ``osc``, ``sig``, ``hist``, ``hist_sd``,
-    ``conv``, ``w``. A direct transcription of ``siddhi.pine`` sections 1-3; see the module
-    docstring for the numerical-fidelity notes that make it a transcription rather than an
-    approximation.
+    ``df`` is the chart's OHLCV (Title-case, ascending). ``drivers`` the macro closes
+    (samanvaya.prepare_drivers for the chart). ``daily`` the daily bars behind a weekly
+    chart, for its Ladder-down conviction rung. Returns pragati's columns, the value
+    engine's, and the grid's, prefixed — see add_pragati_features for the contract.
     """
-    length = max(int(length), 3)
-    norm   = max(int(norm), 30)
-    vol_n  = max(int(vol_n), 5)
-
-    # ── 1 · CONVICTION AND PARTICIPATION ──
-    tr = true_range(high, low, close)
-    disp = close - close.shift(1).fillna(close)
-    conv = (disp / tr.where(tr > 1e-12)).fillna(0.0)      # bounded -1 … +1
-
-    if volume is None:
-        vol = pd.Series(np.nan, index=close.index, dtype=float)
-    else:
-        vol = pd.to_numeric(volume, errors="coerce").astype(float)
-    vol_ok = vol.notna() & (vol > 0)
-
-    # A hollow bar (holiday, half session, thin overnight print) would otherwise feed NaN
-    # into this EMA and kill the participation baseline for a whole averaging window,
-    # silently dropping the series back to range weighting. Carrying the last good print
-    # keeps it alive; a genuinely volume-less symbol still leaves the baseline NaN and
-    # still falls through to true range, as documented.
-    vol_last = vol.where(vol_ok).ffill()
-    vol_avg  = _ema(vol_last, vol_n)
-    tr_avg   = _ema(tr, vol_n)
-
-    w_vol = (vol / vol_avg.where(vol_avg > 1e-12)).where(vol_ok)
-    w_rng = (tr / tr_avg.where(tr_avg > 1e-12)).fillna(1.0)
-
-    mode = str(participation)
-    if mode == "Off":
-        w_raw = pd.Series(1.0, index=close.index)
-    elif mode == "True range":
-        w_raw = w_rng
-    elif mode == "Volume":
-        w_raw = w_vol.fillna(1.0)
-    else:                                                  # "Auto"
-        w_raw = w_vol.fillna(w_rng)
-    w = w_raw.fillna(1.0).clip(lower=0.0, upper=float(cap))
-
-    # ── 2 · THE OSCILLATOR ──
-    # A ratio of SUMS, so a dead bar contributes nothing to either side rather than an
-    # undefined ratio. Then scaled against its own dispersion, because the raw ratio cannot
-    # reach its own bounds and a threshold against a range the series never visits is a
-    # threshold that never fires.
-    num = (conv * w).rolling(length).mean()
-    den = (conv.abs() * w).rolling(length).mean()
-    raw = (100.0 * num / den.where(den > 1e-12))
-
-    raw_sd = raw.rolling(norm).std(ddof=0)
-    ok = raw_sd.notna() & (raw_sd >= SID_MIN_RAW_SIGMA)
-    # tanh is clamped at ±10 in the Pine to keep exp() finite; np.tanh saturates
-    # gracefully on its own, so the clamp is only kept for exact parity of intent.
-    scaled = pd.Series(
-        np.where(ok, 100.0 * np.tanh(np.clip(raw / (3.0 * raw_sd), -10.0, 10.0)), np.nan),
-        index=close.index, dtype=float)
-    # Bars whose raw is warm but whose σ is not yet available stay NaN rather than
-    # collapsing to 0 — a fabricated zero would fire a crossing that never happened.
-    scaled = scaled.where(raw.notna())
-
-    osc = _ema(scaled, smooth) if int(smooth) > 1 else scaled
-    # `_ema` propagates the leading NaNs of `scaled` rather than seeding on them, so the
-    # oscillator stays undefined until the whole chain is warm.
-    sig = _ema(osc, signal)
-    hist = osc - sig
-    hist_sd = hist.rolling(norm).std(ddof=0)
-
-    return {"raw": raw, "osc": osc, "sig": sig, "hist": hist,
-            "hist_sd": hist_sd, "conv": conv, "w": w}
+    lo = _lower(df)
+    lo = lo[lo["close"].notna() & lo["high"].notna() & lo["low"].notna()]
+    chart = settings.chart
+    val = sv.compute_value(lo, drivers, symbol, chart=chart)
+    dl = _lower(daily) if daily is not None and len(daily) else None
+    out = pg.compute(lo, val, settings.params, chart=chart, daily=dl)
+    grid = cg.classify(out["c_tape"], out["v_tape"], out["push"], out["hist_ready"],
+                       out["c_ready"] & out["v_ready"], out["conv"], out["value"],
+                       out["conv_ready"] & out["value_built"],
+                       settings.params.z1, settings.params.theta, index=out.index)
+    extra = val[["rv_z", "breadth_z", "legs_split", "hedge", "drivers", "n_obs", "enough",
+                 "basket_warm", "bars_since_rot"]]
+    return pd.concat([out, grid, extra], axis=1)
 
 
-# ════════════════════════════════════════════════════════════════════════════════════════
-# PER-SYMBOL FEATURES  (time-series; run once per name before cross-sectional ranking)
-# ════════════════════════════════════════════════════════════════════════════════════════
-def add_siddhi_features(df: pd.DataFrame,
-                        length: int = SID_LENGTH,
-                        smooth: int = SID_SMOOTH,
-                        signal: int = SID_SIGNAL,
-                        norm: int = SID_NORM,
-                        vol_n: int = SID_VOL_N,
-                        cap: float = SID_CAP,
-                        participation: str = SID_PARTICIPATION,
-                        k: float = SID_K,
-                        horizon: int = SID_HORIZON) -> pd.DataFrame:
-    """Attach the Siddhi conviction signal to one symbol's OHLCV frame.
+def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
+                         symbol: str = "", settings: EngineSettings | None = None,
+                         daily: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Attach the Pragati stack to one symbol's OHLCV frame. Columns written:
 
-    Columns written:
-      ``SID_Raw``       raw participation-weighted share of effort, 100·Σcw/Σ|c|w. Exported
-                        because it is honest about ABSOLUTE conviction, which the rescaled
-                        oscillator deliberately is not — worth a glance when a reading looks
-                        dramatic and the chart does not
-      ``SID_Osc``       the scaled, smoothed oscillator (adaptive: bounded ±100)
-      ``SID_Sig``       its signal-line EMA
-      ``SID_Hist``      ``SID_Osc - SID_Sig`` — the histogram. THIS is the screening variable.
-      ``SID_Hist_Sd``   σ of the histogram over the normalization window
-      ``SID_Hist_Z``    ``SID_Hist / SID_Hist_Sd`` — the histogram in its own σ units, which
-                        is what makes it comparable ACROSS symbols and therefore rankable
-      ``SID_Impulse``   ``(hist - hist[1]) / SID_Hist_Sd`` — the size of the crossing step
-      ``SID_Thr``       the magnitude gate, ``k · SID_Hist_Sd`` (0 at the shipped default)
-      ``Signal_Score``  ``SID_Hist_Z`` — positive = bullish. The score the universe ranks on.
-      ``buy_cond``      green triangle: histogram crossed UP through the gate
-      ``sell_cond``     yellow diamond: histogram crossed DOWN through the gate
-      ``SID_Hold_Dir``  +1 inside a buy window, -1 inside a sell window, 0 outside
-      ``SID_Hold_Age``  bars since that window opened (0 = fired on this bar)
-      ``SID_Zone``      where the oscillator sits: Extreme Bull / Bull / Neutral / Bear /
-                        Extreme Bear, against the inner and outer zones. Context, not a gate.
-      ``SID_State``     WARMING UP / DEGENERATE / BUY / SELL / NEUTRAL for the bar
-
-    A crossing is ``ta.crossover(hist, thr)`` — ``hist > thr and hist[1] <= thr[1]`` — so at
-    the default ``k = 0`` it is precisely "the histogram crossed zero". Nothing fires before
-    :func:`warmup_bars` (452 bars at the defaults); a frame shorter than that produces no
-    events at all rather than events computed from a half-warm oscillator — and, just as
-    importantly, no ``SID_Hist_Z`` or ``SID_Impulse`` computed against a σ that has not yet
-    seen a clean window.
+    READINGS
+      PRG_Conv / PRG_Conv_Z      chart conviction, ±100 and in σ — the flow ingredient
+      PRG_Value / PRG_Value_Z    Samanvaya's value, ±100 (+ rich) and in σ
+      PRG_Trace                  conviction × value, ±100 — how far the move is stretched
+      PRG_Hist / PRG_Hist_Z      the trace's push (trace − EMA9), native and in its own σ
+      PRG_Push / PRG_Push_Tier   the push in five levels (−2 … +2) and its drawn tier
+      PRG_CTape / PRG_VTape      the MTF conviction and value tapes (the grid's axes)
+      PRG_Raw / PRG_Raw_Sd       the raw participation-weighted share and its σ
+      PRG_Eff_Pct / PRG_Absorbed effort → result percentile; absorbed = bottom fifth
+      PRG_Hedge / PRG_Drivers    the macro hedge applied and the drivers in use
+      PRG_RV_Z / PRG_Breadth_Z   the value ingredient's two legs
+      PRG_Split / PRG_Quiet / PRG_Settling / PRG_Legs_Split   the gold qualifiers
+      PRG_Stack_OK / PRG_Why     can the signal set judge this bar, and if not why
+    EVIDENCE
+      PRG_Bull_Div / PRG_Bear_Div       a qualified divergence confirmed on this bar
+      PRG_Div_Seen_Bull / _Bear, PRG_Abs_Seen   inside the dislocation window
+    EVENTS
+      turn_buy / turn_sell / resume_long / resume_short     the four signals
+      long_cond / short_cond                                either kind, per side
+      PRG_Event                  the label of the event on this bar, else ''
+      PRG_Armed / PRG_Armed_Age  an open TURN window (+1 ▲ / −1 ▼) and bars used of 5
+      PRG_Decl / PRG_Decl_Age    the standing declaration (+1 ▲ / −1 ▼) and its age
+      PRG_Hold_Dir / PRG_Hold_Age / PRG_Hold_Kind   the latest event inside its horizon
+    STATE
+      CVG_Cell / CVG_Action / CVG_Why / CVG_Units / CVG_Side / CVG_Held / CVG_Bars /
+      CVG_From / CVG_Chart / CVG_Lead
+      PRG_State                  WARMING UP / PAUSED / TURN ▲ … / ARMED ▲ … / NEUTRAL
+      Signal_Score               the trace — what the level views sort on
     """
+    settings = settings or settings_for(None, None, "Daily")
     df = df.copy()
-    high, low, close = df['High'], df['Low'], df['Close']
-    vol = df['Volume'] if 'Volume' in df.columns else None
+    df.index = pd.to_datetime(df.index)
+    if df.index.tz is not None:
+        df.index = df.index.tz_convert(None)
+    f = compute_frame(df, drivers, symbol, settings, daily).reindex(df.index)
+    T = len(df)
+    horizon = int(settings.horizon)
 
-    o = siddhi_oscillator(high, low, close, vol,
-                          length=length, smooth=smooth, signal=signal, norm=norm,
-                          vol_n=vol_n, cap=cap, participation=participation)
+    b = lambda c: f[c].fillna(False).astype(bool).to_numpy()     # noqa: E731
+    tb, ts, rl, rs = b("turn_buy"), b("turn_sell"), b("resume_long"), b("resume_short")
+    long_c, short_c = tb | rl, ts | rs
 
-    hist, hist_sd = o['hist'], o['hist_sd']
-    thr = float(k) * hist_sd.fillna(0.0)
+    df["PRG_Conv"] = f["conv"].where(f["conv_ready"].fillna(False).astype(bool))
+    df["PRG_Conv_Z"] = f["conv_z"]
+    df["PRG_Value"] = f["value"].where(f["value_built"].fillna(False).astype(bool))
+    df["PRG_Value_Z"] = f["value_z"]
+    df["PRG_Trace"] = f["trace"]
+    df["PRG_Hist"] = f["hist"].where(f["hist_ready"].fillna(False).astype(bool))
+    df["PRG_Hist_Z"] = f["hist_z"].where(f["hist_ready"].fillna(False).astype(bool))
+    df["PRG_Thr"] = f["thr"]
+    df["PRG_Push"] = f["push"].fillna(0).astype(int)
+    df["PRG_Push_Tier"] = f["push_tier"]
+    df["PRG_CTape"] = f["c_tape"].where(f["c_ready"].fillna(False).astype(bool))
+    df["PRG_VTape"] = f["v_tape"].where(f["v_ready"].fillna(False).astype(bool))
+    df["PRG_Raw"] = f["raw"]
+    df["PRG_Raw_Sd"] = f["raw_sd"]
+    df["PRG_Eff_Pct"] = f["eff_pct"]
+    df["PRG_Absorbed"] = b("eff_abs")
+    df["PRG_Hedge"] = f["hedge"]
+    df["PRG_Drivers"] = f["drivers"].fillna("")
+    df["PRG_RV_Z"] = f["rv_z"]
+    df["PRG_Breadth_Z"] = f["breadth_z"]
+    df["PRG_Split"] = b("split")
+    df["PRG_Quiet"] = b("quiet")
+    df["PRG_Settling"] = b("settling")
+    df["PRG_Legs_Split"] = b("legs_split")
+    df["PRG_Stack_OK"] = b("stack_ok")
+    df["PRG_Why"] = f["stack_why"].fillna("chart warming")
+    df["PRG_Rec_Err"] = f["rec_err"]
+    df["PRG_Bull_Div"] = b("bull_div")
+    df["PRG_Bear_Div"] = b("bear_div")
+    df["PRG_Div_Seen_Bull"] = b("bull_div_seen")
+    df["PRG_Div_Seen_Bear"] = b("bear_div_seen")
+    df["PRG_Abs_Seen"] = b("abs_seen")
+    for c in ("div_x1", "div_p1", "div_x2", "div_p2"):
+        df["PRG_" + c.title().replace("_", "")] = f[c]
 
-    # In σ units, so two instruments on different scales are directly comparable. This is
-    # the cross-sectional score; the raw histogram is not comparable across symbols.
-    hist_z  = hist / hist_sd.where(hist_sd > 1e-12)
-    impulse = hist.diff() / hist_sd.where(hist_sd > 1e-12)
+    df["turn_buy"], df["turn_sell"] = tb, ts
+    df["resume_long"], df["resume_short"] = rl, rs
+    df["long_cond"], df["short_cond"] = long_c, short_c
+    df["PRG_Event"] = np.select([tb, ts, rl, rs],
+                                [EVENT_LABEL[("turn", 1)], EVENT_LABEL[("turn", -1)],
+                                 EVENT_LABEL[("resume", 1)], EVENT_LABEL[("resume", -1)]], "")
 
-    df['SID_Raw']     = o['raw']
-    df['SID_Osc']     = o['osc']
-    df['SID_Sig']     = o['sig']
-    df['SID_Hist']    = hist
-    df['SID_Hist_Sd'] = hist_sd
-    df['SID_Hist_Z']  = hist_z
-    df['SID_Impulse'] = impulse
-    df['SID_Thr']     = thr
-    df['Signal_Score'] = hist_z
+    armed = f["armed"].fillna(0).astype(int).to_numpy()
+    df["PRG_Armed"] = armed
+    df["PRG_Armed_Age"] = np.where(armed != 0, f["armed_age"].fillna(0).astype(int), 0)
+    decl = f["decl"].fillna(0).astype(int).to_numpy()
+    since = f["decl_since"].fillna(-1).astype(int).to_numpy()
+    pos = np.arange(T)
+    df["PRG_Decl"] = decl
+    df["PRG_Decl_Age"] = np.where(decl != 0, pos - since, np.nan)
 
-    # ── Warmup and degeneracy ──
-    n = len(df)
-    pos = np.arange(n)
-    warm = pos >= warmup_bars(length, norm, vol_n, smooth, signal)
-    # A collapsed histogram σ means the two lines have stopped separating at all; the
-    # z-score and the impulse are then divisions by ~0 and describe arithmetic, not the
-    # market. Those bars must not fire and must not rank.
-    degenerate = hist_sd.notna() & (hist_sd <= 1e-12)
-    valid = warm & hist.notna() & hist.shift(1).notna() & ~degenerate.to_numpy(dtype=bool)
+    # ── the hold window: the latest event, while it is inside the declared horizon ──
+    fires = long_c | short_c
+    fire_dir = np.where(long_c, 1.0, np.where(short_c, -1.0, np.nan))
+    fire_kind = np.where(tb | ts, "TURN", np.where(rl | rs, "RESUME", None))
+    last_fire = pd.Series(np.where(fires, pos.astype(float), np.nan)).ffill().to_numpy()
+    held_dir = pd.Series(fire_dir).ffill().to_numpy()
+    held_kind = pd.Series(fire_kind, dtype=object).ffill().to_numpy()
+    age = pos - last_fire
+    in_win = np.isfinite(age) & (age <= horizon)
+    df["PRG_Hold_Dir"] = np.where(in_win, np.nan_to_num(held_dir), 0.0).astype(int)
+    df["PRG_Hold_Age"] = np.where(in_win, age, np.nan)
+    df["PRG_Hold_Kind"] = np.where(in_win, held_kind, "")
 
-    # ── The two plotted events: Pine ta.crossover / ta.crossunder against ±thr ──
-    buy_cond  = ((hist > thr) & (hist.shift(1) <= thr.shift(1))).fillna(False).to_numpy(dtype=bool) & valid
-    sell_cond = ((hist < -thr) & (hist.shift(1) >= -thr.shift(1))).fillna(False).to_numpy(dtype=bool) & valid
-    df['buy_cond']  = buy_cond
-    df['sell_cond'] = sell_cond
+    # ── the grid ──
+    cell = f["cvg_cell"].fillna(cg.UNREAD).astype(int).to_numpy()
+    df["CVG_Cell"] = cell
+    df["CVG_Action"] = [cg.action(c) for c in cell]
+    df["CVG_Why"] = [cg.reason(c) for c in cell]
+    df["CVG_Units"] = [cg.UNITS[c] for c in cell]
+    df["CVG_Side"] = [cg.SIDES[c] for c in cell]
+    df["CVG_Held"] = b("cvg_held")
+    df["CVG_Bars"] = pos - f["cvg_since"].fillna(0).astype(int).to_numpy() + 1
+    df["CVG_From"] = f["cvg_from"].fillna(cg.UNREAD).astype(int)
+    chart_cell = f["cvg_chart"].fillna(cg.UNREAD).astype(int).to_numpy()
+    df["CVG_Chart"] = chart_cell
+    df["CVG_Chart_Action"] = [cg.NAMES[c] for c in chart_cell]
+    df["CVG_Lead"] = f["cvg_lead"].fillna(0).astype(int)
 
-    # ── Hold window, vectorised ──
-    # A fire opens a window in its direction; a later fire re-opens it. Outside `horizon`
-    # bars the window has expired.
-    fpos = pos.astype(float)
-    fires = buy_cond | sell_cond
-    fire_dir = np.where(buy_cond, 1.0, np.where(sell_cond, -1.0, np.nan))
-
-    last_fire = pd.Series(np.where(fires, fpos, np.nan), index=df.index).ffill()
-    held_dir  = pd.Series(fire_dir, index=df.index).ffill()
-    age       = fpos - last_fire.to_numpy(dtype=float)
-    in_window = np.isfinite(age) & (age <= int(horizon))
-
-    df['SID_Hold_Dir'] = np.where(in_window, held_dir.fillna(0.0).to_numpy(dtype=float), 0.0).astype(int)
-    df['SID_Hold_Age'] = np.where(in_window, age, np.nan)
-
-    # ── Zone: how one-sided the window's effort is. Display context only. ──
-    oscv = o['osc']
-    df['SID_Zone'] = np.select(
-        [oscv >=  SID_ZONE_OUTER, oscv >=  SID_ZONE_INNER,
-         oscv <= -SID_ZONE_OUTER, oscv <= -SID_ZONE_INNER],
-        ['Extreme Bull', 'Bull', 'Extreme Bear', 'Bear'],
-        default='Neutral',
-    )
-    df.loc[oscv.isna(), 'SID_Zone'] = '—'
-
-    df['SID_State'] = np.select(
-        [degenerate.to_numpy(dtype=bool) & warm,
-         ~valid,
-         buy_cond, sell_cond],
-        ['DEGENERATE', 'WARMING UP', 'BUY', 'SELL'],
-        default='NEUTRAL',
-    )
+    stack = b("stack_ok")
+    hist_ready = b("hist_ready")
+    df["PRG_State"] = np.select(
+        [~hist_ready, ~stack, tb, ts, rl, rs, armed > 0, armed < 0],
+        ["WARMING UP", "PAUSED", "TURN ▲", "TURN ▼", "RESUME ◆↑", "RESUME ◆↓", "ARMED ▲", "ARMED ▼"],
+        default="NEUTRAL")
+    df["Signal_Score"] = df["PRG_Trace"]
     return df
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
-# CROSS-SECTIONAL RANKING  (one date's universe, ordered by the conviction histogram)
+# THE SNAPSHOT ROW  (one symbol, one date — what the screener tables carry)
 # ════════════════════════════════════════════════════════════════════════════════════════
-def compute_ranking(df: pd.DataFrame,
-                    cost_bps: float = SID_COST_BPS,
-                    k: float = SID_K,
-                    horizon: int = SID_HORIZON,
-                    study=None) -> pd.DataFrame:
-    """Rank one date's cross-section by the conviction histogram.
+SNAPSHOT_COLUMNS = (
+    "PRG_Conv", "PRG_Conv_Z", "PRG_Value", "PRG_Value_Z", "PRG_Trace", "PRG_Hist", "PRG_Hist_Z",
+    "PRG_Push", "PRG_Push_Tier", "PRG_CTape", "PRG_VTape", "PRG_Raw", "PRG_Raw_Sd",
+    "PRG_Eff_Pct", "PRG_Absorbed", "PRG_Hedge", "PRG_Drivers", "PRG_RV_Z", "PRG_Breadth_Z",
+    "PRG_Split", "PRG_Quiet", "PRG_Settling", "PRG_Legs_Split", "PRG_Stack_OK", "PRG_Why",
+    "PRG_Div_Seen_Bull", "PRG_Div_Seen_Bear", "PRG_Abs_Seen", "PRG_Event",
+    "turn_buy", "turn_sell", "resume_long", "resume_short", "long_cond", "short_cond",
+    "PRG_Armed", "PRG_Armed_Age", "PRG_Decl", "PRG_Decl_Age",
+    "PRG_Hold_Dir", "PRG_Hold_Age", "PRG_Hold_Kind",
+    "CVG_Cell", "CVG_Action", "CVG_Why", "CVG_Units", "CVG_Side", "CVG_Held", "CVG_Bars",
+    "CVG_From", "CVG_Chart", "CVG_Chart_Action", "CVG_Lead", "PRG_State", "Signal_Score",
+)
 
-    df: one row per symbol carrying ``SID_Hist_Z`` (and optionally ``SID_Impulse``,
-    ``buy_cond`` / ``sell_cond``, ``SID_Hold_*``). cost_bps / study: the cost gate (see
-    :func:`cost_ok`). ``horizon`` must match the one the per-symbol pass used, or the hold
-    band decays against the wrong denominator.
 
-    The score is ``SID_Hist_Z`` — the histogram in its own σ units, positive = the
-    oscillator is above its signal line. Ranking on the *level* while firing on the
-    *crossing* is deliberate: the level says who is currently in control, the crossing says
-    when that changed, and the measured edge is claimed only for the crossing.
+def _clean(v):
+    if isinstance(v, (np.bool_,)):
+        return bool(v)
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (np.floating,)):
+        return float(v)
+    return v
 
-    Conviction is the CROSSING STEP, not the level
-    ----------------------------------------------
-    At the moment a histogram crosses zero it is, by construction, approximately zero — so
-    scaling conviction off ``|hist|`` would score every fresh signal at zero and every stale
-    one high, which is backwards. What actually distinguishes crossings is how forcefully
-    the gap opened: ``SID_Impulse``, the one-bar change in the histogram measured in σ of
-    its own distribution. A crossing that snaps open half a sigma in one bar is a different
-    event from one that drifts across, and this is the only quantity available at fire time
-    that separates them.
 
-    It remains a DESCRIPTION. Nothing has established that a larger crossing step predicts a
-    better outcome; it does not gate anything, and no measured expectancy enters it — that
-    is ``edge.py``'s job, reported rather than applied. A universe that measures no edge
-    still fires at full conviction, and says so.
+def snapshot(df: pd.DataFrame, idx_pos: int, settings: EngineSettings) -> dict:
+    """The engine's fields for one bar, plus the per-age event history the tables bucket.
 
-    Adds the output contract and returns the frame sorted by ``Priority_Long`` desc
-    (warming-up rows, whose score is NaN, sort last). Pure & deterministic.
+    ``BUY_Today … BUY_5d`` carry the long event's glyph at that age (▲ TURN, ◆ RESUME)
+    or '—'; ``SELL_*`` the short side's. ``Kind_Hist`` / ``Trace_Hist`` / ``Close_Hist``
+    are [today, 1 back, …, 4 back] so an aged row can report the bar that fired it.
     """
+    row = df.iloc[idx_pos]
+    out = {c: _clean(row.get(c)) for c in SNAPSHOT_COLUMNS if c in df.columns}
+    lo = max(0, idx_pos - 4)
+    win = df.iloc[lo: idx_pos + 1]
+
+    def _glyph(r, side):
+        if side > 0:
+            return "▲" if r["turn_buy"] else "◆" if r["resume_long"] else "—"
+        return "▼" if r["turn_sell"] else "◆" if r["resume_short"] else "—"
+
+    longs = [_glyph(r, 1) for _, r in win.iterrows()][::-1]
+    shorts = [_glyph(r, -1) for _, r in win.iterrows()][::-1]
+    longs += ["—"] * (5 - len(longs))
+    shorts += ["—"] * (5 - len(shorts))
+    for i, lab in enumerate(("Today", "1d", "2d", "3d")):
+        out[f"BUY_{lab}"] = longs[i]
+        out[f"SELL_{lab}"] = shorts[i]
+    out["BUY_5d"] = next((g for g in longs if g != "—"), "—")
+    out["SELL_5d"] = next((g for g in shorts if g != "—"), "—")
+
+    def _hist(col):
+        v = [float(x) if pd.notna(x) else float("nan") for x in win[col].tolist()][::-1]
+        return v + [float("nan")] * (5 - len(v))
+
+    out["Trace_Hist"] = _hist("PRG_Trace")
+    out["Close_Hist"] = _hist("Close")
+    out["Units_Hist"] = _hist("CVG_Units")
+    out["PRG_Horizon"] = int(settings.horizon)
+    return out
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════
+# CROSS-SECTIONAL RANKING  (one date's universe)
+# ════════════════════════════════════════════════════════════════════════════════════════
+def grid_weight(units, side: int = 1):
+    """The grid's weight in [0, 1): (units − ¼)/2¾ for the long side, mirrored short."""
+    u = np.asarray(units, dtype=float)
+    g = (u - 0.25) / 2.75 if side > 0 else (3.0 - u) / 2.75
+    return np.clip(g, 0.0, 0.999)
+
+
+RANK_CONTRACT = ("Side", "Signal_Kind", "Priority_Long", "Priority_Short",
+                 "Priority_Long_pct", "Priority_Short_pct", "Trace_Rank_Pct",
+                 "Grid_Weight", "Cost_OK", "Signal_Reason")
+
+
+def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
+                    study=None) -> pd.DataFrame:
+    """Rank one date's cross-section. Pure and deterministic; see the module docstring.
+
+    ``df`` has one row per symbol carrying the snapshot fields. Adds RANK_CONTRACT and
+    returns the frame sorted by Priority_Long (warming rows last).
+    """
+    settings = settings or settings_for(None, None, "Daily")
     df = df.copy()
-    contract = ('SID_Score', 'SID_Rank_Pct', 'Signal_Score', 'Conviction', 'Side',
-                'Priority_Long', 'Priority_Short', 'Priority_Long_pct', 'Priority_Short_pct',
-                'Signal_Reason')
     if len(df) == 0:
-        for c in contract:
+        for c in RANK_CONTRACT:
             df[c] = pd.Series(dtype=float)
         return df
-
-    k = float(k)
     idx = df.index
+    horizon = float(max(int(settings.horizon), 1))
+    confirm = float(max(int(settings.params.confirm), 1))
 
-    def _col(name: str) -> pd.Series:
-        return df[name].astype(float) if name in df.columns else pd.Series(np.nan, index=idx)
+    def _b(c):
+        return (df[c].fillna(False).astype(bool).to_numpy() if c in df.columns
+                else np.zeros(len(df), dtype=bool))
 
-    hz  = _col('SID_Hist_Z')
-    imp = _col('SID_Impulse')
+    def _f(c, default=np.nan):
+        return (pd.to_numeric(df[c], errors="coerce").to_numpy(dtype=float) if c in df.columns
+                else np.full(len(df), default))
 
-    # ── 1. Score = the histogram in σ units. Positive = bullish. ──
-    df['SID_Score']    = hz
-    df['Signal_Score'] = hz
+    tb, ts, rl, rs = _b("turn_buy"), _b("turn_sell"), _b("resume_long"), _b("resume_short")
+    units = _f("CVG_Units", 1.0)
+    units = np.where(np.isfinite(units), units, 1.0)
+    ready = np.isfinite(_f("PRG_Trace"))
+    armed = _f("PRG_Armed", 0.0)
+    a_age = _f("PRG_Armed_Age", 0.0)
+    h_dir = _f("PRG_Hold_Dir", 0.0)
+    h_age = _f("PRG_Hold_Age")
+    push = _f("PRG_Push", 0.0)
 
-    # ── 2. Cross-sectional rank percentile [0,100] (NaN where still warming up) ──
-    rank_pct = hz.rank(pct=True) if len(df) >= 2 else pd.Series(0.5, index=idx)
-    df['SID_Rank_Pct'] = (rank_pct * 100).round(2)
+    df["Side"] = np.where(tb | rl, "Buy", np.where(ts | rs, "Sell", "—"))
+    df["Signal_Kind"] = np.where(tb | ts, "TURN", np.where(rl | rs, "RESUME", ""))
+    remain = np.clip(1.0 - np.nan_to_num(h_age, nan=horizon) / horizon, 0.0, 1.0)
+    a_left = np.clip(1.0 - (np.nan_to_num(a_age) - 1.0) / confirm, 0.0, 1.0)
 
-    # ── 3. Side: only a fired CROSSING is actionable; a level is context ──
-    #    The events come from the per-symbol pass, which is the only place that can see the
-    #    previous bar. Falling back to the sign of the histogram would turn "who is in
-    #    control" into a trade signal, which is exactly the claim this engine does not make.
-    if 'buy_cond' in df.columns and 'sell_cond' in df.columns:
-        buy  = df['buy_cond'].fillna(False).to_numpy(dtype=bool)
-        sell = df['sell_cond'].fillna(False).to_numpy(dtype=bool)
-    else:
-        state = df['SID_State'].astype(str) if 'SID_State' in df.columns else pd.Series('', index=idx)
-        buy  = (state == 'BUY').to_numpy(dtype=bool)
-        sell = (state == 'SELL').to_numpy(dtype=bool)
-    df['Side'] = np.where(buy, 'Buy', np.where(sell, 'Sell', '—'))
+    def _priority(side: int, turn, res):
+        g = grid_weight(units, side)
+        held = (h_dir == side) & np.isfinite(h_age) & ~(turn | res)
+        arm = (armed == side) & ~(turn | res)
+        # context: the grid weight, with the push as a tie-break inside a cell
+        ctx = g - 0.5 + 0.004 * np.clip(side * push, -2, 2)
+        pr = np.where(turn, 5.0 + g, np.where(res, 4.0 + g,
+             np.where(held, 3.0 + remain * 0.99, np.where(arm, 2.0 + a_left * 0.99, ctx))))
+        return pd.Series(np.where(ready, pr, np.nan), index=idx)
 
-    # ── 4. Conviction [0,1] = crossing force × cost gate ──
-    # tanh of |impulse| in σ units: bounded, smooth, monotone, and free of a fitted
-    # constant — one sigma of the histogram's own distribution is the natural unit, so
-    # a one-sigma step reads 0.76 and a two-sigma step 0.96. See the docstring above for
-    # why the LEVEL cannot be used here.
-    mag = pd.Series(np.tanh(imp.abs().clip(upper=10.0)), index=idx)
-    base = 0.30 + 0.70 * mag
-    cost_f = 1.0 if cost_ok(cost_bps, study) else 0.5
-    df['Conviction'] = (base * cost_f).clip(0.0, 1.0).fillna(0.0)
+    p_long = _priority(1, tb, rl)
+    p_short = _priority(-1, ts, rs)
+    df["Priority_Long"] = p_long * 100.0
+    df["Priority_Short"] = p_short * 100.0
+    df["Priority_Long_pct"] = p_long.rank(pct=True) * 100
+    df["Priority_Short_pct"] = p_short.rank(pct=True) * 100
+    tr = pd.Series(_f("PRG_Trace"), index=idx)
+    df["Trace_Rank_Pct"] = (tr.rank(pct=True) * 100).round(2) if len(df) >= 2 else 50.0
+    df["Grid_Weight"] = units / 3.0
+    gate = cost_ok(settings.cost_bps, study)
+    df["Cost_OK"] = gate
 
-    # ── 5. Priority: BANDED, because a crossing sits at zero ──
-    #
-    # The previous engine could sort the universe on its raw score, because there the
-    # extreme readings WERE the fired signals — a buy was the most negative z on the board.
-    # A zero-crossing is the opposite: at the instant it fires the histogram is, by
-    # construction, ~0, so sorting the universe on the level would bury every fresh signal
-    # in the middle of the list. The sort has to encode what the engine actually claims.
-    #
-    # Three bands, highest first:
-    #   FIRED TODAY      2 + conviction         a crossing on this bar, strongest first
-    #   IN HOLD WINDOW   1 + remaining fraction a crossing still inside its horizon
-    #   CONTEXT          tanh(hist σ) ∈ (−1,1)  no crossing; just who is currently in control
-    #
-    # The bands cannot overlap, so an actionable row always outranks a merely bullish one —
-    # which is the same statement the `Side` column and `Signal_Reason` already make.
-    conv = df['Conviction'].astype(float).fillna(0.0)
-    age  = _col('SID_Hold_Age')
-    hdir = _col('SID_Hold_Dir').fillna(0.0)
-    hrz  = float(max(int(horizon), 1))
-    remaining = (1.0 - (age / hrz)).clip(0.0, 1.0).fillna(0.0)
-    context = pd.Series(np.tanh(hz.fillna(0.0)), index=idx)
-
-    def _priority(fired: np.ndarray, side_sign: float) -> pd.Series:
-        held = (hdir == side_sign) & age.notna() & ~pd.Series(fired, index=idx)
-        return pd.Series(
-            np.where(fired, 2.0 + conv,
-                     np.where(held, 1.0 + remaining, side_sign * context)),
-            index=idx, dtype=float)
-
-    # Warming-up rows carry no opinion at all and must sort last, not at the middle of the
-    # context band — NaN plus na_position='last' is how the caller expects that expressed.
-    warm = hz.notna()
-    p_long  = _priority(buy, +1.0).where(warm)
-    p_short = _priority(sell, -1.0).where(warm)
-
-    scale = 100.0
-    df['Priority_Long']      = p_long * scale
-    df['Priority_Short']     = p_short * scale
-    df['Priority_Long_pct']  = p_long.rank(pct=True) * 100
-    df['Priority_Short_pct'] = p_short.rank(pct=True) * 100
-
-    # A per-row note on the measured state of THIS universe, when a study exists. Never a
-    # class label — that would be the hardcoded claim this design refuses to make.
-    def _verdict_note(side_key: str) -> str:
+    def _note(side_key: str) -> str:
         if study is None:
-            return " · expectancy not yet measured on this universe"
-        lbl, _kind, _detail = study.verdict(side_key)
-        return f" · measured on this universe: {lbl}"
+            return "expectancy not yet measured on this universe"
+        lbl, _k, _d = study.verdict(side_key)
+        return f"measured on this universe: {lbl}"
 
-    _buy_note, _sell_note = _verdict_note('buy'), _verdict_note('sell')
-    _gate = "zero" if k <= 0 else f"+{k:g}σ"
-    _gate_dn = "zero" if k <= 0 else f"−{k:g}σ"
-    df['Signal_Reason'] = [
-        ("warming up — the oscillator has no normalization window yet" if not np.isfinite(zz) else
-         f"BUY · histogram crossed above {_gate} · conviction turning up, hold the horizon, "
-         f"enter next open{_buy_note}"
-         if sd == 'Buy' else
-         f"SELL · histogram crossed below {_gate_dn} · conviction turning down{_sell_note}"
-         if sd == 'Sell' else
-         f"context only · histogram {zz:+.2f}σ, no crossing on this bar")
-        for zz, sd in zip(hz, df['Side'])
-    ]
+    notes = {"buy": _note("buy"), "sell": _note("sell")}
+    cost_txt = "" if gate else f" · cost gate fails at {settings.cost_bps:g}bp"
+    reasons = []
+    for i, r in enumerate(df.itertuples(index=False)):
+        rd = r._asdict()
+        grid = f"grid {rd.get('CVG_Action', '—')} · {rd.get('CVG_Why', '')} ({units[i]:g}u)"
+        if not ready[i]:
+            reasons.append(f"warming up — {rd.get('PRG_Why') or 'the histogram is not calibrated yet'}")
+            continue
+        if not bool(rd.get("PRG_Stack_OK", False)):
+            reasons.append(f"signals paused — {rd.get('PRG_Why') or 'a tape is warming'} · {grid}")
+            continue
+        ev = ""
+        if tb[i] or rl[i] or ts[i] or rs[i]:
+            side_key = "buy" if (tb[i] or rl[i]) else "sell"
+            kind = "turn" if (tb[i] or ts[i]) else "resume"
+            lab = EVENT_LABEL[(kind, 1 if side_key == "buy" else -1)]
+            if kind == "turn":
+                why = []
+                if bool(rd.get("PRG_Div_Seen_Bull" if side_key == "buy" else "PRG_Div_Seen_Bear")):
+                    why.append(("bullish" if side_key == "buy" else "bearish") + " divergence")
+                if bool(rd.get("PRG_Abs_Seen")):
+                    why.append("effort absorbed")
+                ev = (f"{lab} · the stretch released, the push that made it failed"
+                      + (f" ({' + '.join(why)})" if why else "") + f" · {notes[side_key]}")
+            else:
+                ev = (f"{lab} · a trend resuming from inside the zone, control held · "
+                      f"{notes[side_key]}")
+            reasons.append(f"{ev} · {grid}{cost_txt}")
+            continue
+        a = int(armed[i]) if np.isfinite(armed[i]) else 0
+        if a != 0:
+            reasons.append(f"watch · the trace turned {'▲' if a > 0 else '▼'} — TURN window "
+                           f"{int(a_age[i])}/{int(confirm)}, awaiting its ingredients · {grid}")
+            continue
+        hd = int(h_dir[i]) if np.isfinite(h_dir[i]) else 0
+        if hd != 0 and np.isfinite(h_age[i]):
+            k = rd.get("PRG_Hold_Kind") or "event"
+            reasons.append(f"{'long' if hd > 0 else 'short'} {k} {int(h_age[i])} bars ago, inside "
+                           f"its {int(horizon)}-bar hold · {grid}")
+            continue
+        reasons.append(f"state only · {grid}")
+    df["Signal_Reason"] = reasons
+    return df.sort_values("Priority_Long", ascending=False, kind="stable", na_position="last")
 
-    return df.sort_values('Priority_Long', ascending=False, kind='stable',
-                          na_position='last')
+
+__all__ = [
+    "COST_BPS", "EVENT_LABEL", "EngineSettings", "HOLD_HORIZONS", "HORIZON", "KIND_GLYPH",
+    "LARGEST_KNOWN_EFFECT", "POOLED_BREAKEVEN_BPS", "PRG_NORM", "PRG_NORM_WEEKLY",
+    "RANK_CONTRACT", "SNAPSHOT_COLUMNS", "add_pragati_features", "chart_of", "compute_frame",
+    "compute_ranking", "cost_basis", "cost_in_vol_units", "cost_ok", "grid_weight",
+    "instrument_class", "settings_for", "snapshot",
+]

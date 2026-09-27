@@ -1,36 +1,37 @@
 # SANKET — Institutional Market Signal Terminal
-### Siddhi Conviction Oscillator · Graphite · Pragyam Family · `v7.1.5`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v8.0.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
-Sanket is a quantitative market-screening terminal built on **one screening condition**: how much
-of the market's **effort** actually converts into price **displacement**, measured against its own
-signal line. It fires two events — a **BUY** where that conviction histogram crosses **above zero**
-(green triangle) and a **SELL** where it crosses **below** (yellow diamond) — ranks the whole
-cross-section by it, and states the *measured out-of-sample expectancy for the symbols you actually
-put on screen* on every run.
+Sanket screens a universe with **Pragati** (`pragati.pine` v6) — the indicator Pragyam's
+Conviction-Value Grid already reads — and asks of every name the indicator's own question:
+**is the push paid for, and at what price?**
 
-The engine is the **Siddhi Conviction Oscillator**, ported from [`siddhi.pine`](siddhi.pine). Its
-header is the primary source document; [`ARCHITECTURE.md`](ARCHITECTURE.md) summarises it.
+It reports three things, and keeps them apart:
+
+- **Events.** ▲▼ **TURN** — a stretch releasing, each ingredient confirming on its own tape and
+  the push that made the stretch shown to have failed. ◆ **RESUME** — a trend resuming from
+  inside the zone. Bucketed by age, ranked, and measured.
+- **State.** Every name's cell in the **4 × 4 conviction-value grid**, named as an action —
+  Buy · Add · Accumulate · Hold · Wait · Watch · Trim · Reduce · Exit — with Pragyam's seed units
+  as its weight. Where the name stands *between* events.
+- **Evidence.** The out-of-sample expectancy of the event set **on the symbols you put on
+  screen**, measured every day by the built-in Edge Study, with the interval and the power stated.
 
 Part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/thebullishvalue).
 
-> **Read this first.** Sanket is **decision-support**, not a turnkey strategy. Three things the
-> system says about itself, plainly:
-> 1. **A bare zero-crossing is the source indicator's own weakest tested configuration.** It
->    measures the `k = 0` case at +0.0205R on the instruments it was fitted to and **+0.0015R,
->    t = 0.2**, on eight held-out ones. Sanket ships it because it is the condition asked for, and
->    marks the trigger `⚠ BARE` on the engine card so the caveat travels with it.
-> 2. **Scope is earned per universe, never inherited.** Nothing about your symbols is hardcoded.
->    The built-in **Edge Study** measures expectancy on your own symbols on every run, and the
->    verdict is whatever *your* data supports — with the confidence interval, the effective
->    sample size, and the minimum detectable effect all on screen. That measurement, not any
->    number quoted from the source, is what applies to what you are looking at.
-> 3. **Nothing in the source reaches statistical significance** once overlapping forward windows
->    are accounted for: its best case across 48 horizon/bracket cells was t = 1.9, and the
->    correlation between a configuration's fitted edge and its edge on unseen instruments is
->    approximately zero. Read every published number as a ranking, not a promise. There is **no
->    intraday claim** here.
+> **Read this first.** Sanket is **decision-support**, not a turnkey strategy.
+> 1. **The signal set is unmeasured in its source.** `pragati.pine`'s evidence section measured
+>    conviction's *components* — regular divergence ranked first, participation weighting earns
+>    its place, the scaling is calibrated — and nothing it measured reaches significance once
+>    overlapping windows are counted (best t = 1.9 of 48 cells). The TURN / RESUME stack, the
+>    trace, its histogram and the grid are new objects. So the app measures them, on your symbols.
+> 2. **The grid is a weight, not a forecast.** Pragyam measured its 3 × 3 seed through a real
+>    allocator on three universes: within half a percent a year of equal weight, never above it,
+>    none of the gaps significant. Sanket ranks with it because it is the indicator's own reading
+>    of where a name stands — not because it predicts.
+> 3. **Scope is earned per universe, never inherited.** Nothing about your symbols is hardcoded;
+>    until the Edge Study measures, the app says "not measured".
 >
 > Signals are not financial advice.
 
@@ -39,15 +40,17 @@ Part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/
 ## Contents
 
 - [What Sanket Does](#what-sanket-does)
-- [The Signal (and the evidence)](#the-signal-and-the-evidence)
-- [Why the event form](#why-the-event-form)
+- [The Stack](#the-stack)
+- [The Signals](#the-signals)
+- [The Grid](#the-grid)
+- [Ranking](#ranking)
 - [Edge Study — expectancy measured on your universe](#edge-study--expectancy-measured-on-your-universe)
-- [The Engine](#the-engine)
+- [What Is Adapted, and Why](#what-is-adapted-and-why)
 - [Outputs](#outputs)
 - [Architecture Overview](#architecture-overview)
 - [Analysis Modes](#analysis-modes)
 - [Asset Universe Coverage](#asset-universe-coverage)
-- [UI System — Obsidian Quant](#ui-system--obsidian-quant)
+- [UI System — Graphite](#ui-system--graphite)
 - [Installation & Launch](#installation--launch)
 - [What Changed](#what-changed)
 - [Tech Stack](#tech-stack)
@@ -57,251 +60,184 @@ Part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/
 
 ## What Sanket Does
 
-Most screeners rank stocks by a stack of overlapping indicators. Sanket runs **one** condition,
-across a universe, and tells you where it holds:
+Siddhi, the engine Sanket shipped through v7, fired whenever conviction crossed its own signal
+line — about 113 times per 1,000 bars, the source's weakest tested configuration. Pragati keeps
+Siddhi's measurement at its root and asks the other half of the question on the same bar:
 
 ```
-conviction     c = (close - close[1]) / TrueRange              bounded -1 … +1
-participation  w = min(volume / EMA(volume, 20), 3.0)          true-range fallback, automatic
-raw            = 100 · SMA(c·w, 20) / SMA(|c|·w, 20)           share of effort that went somewhere
-osc            = EMA(100 · tanh(raw / 3σ), 3)                  adaptive self-normalisation
-sig            = EMA(osc, 9)
-SID_Hist       = osc - sig                                     THE SCREENING VARIABLE
+conviction   c = (C − C[1]) / TR,  w = min(V / EMA(V), 3)       how much of the travel became progress
+             raw = 100 · Σ(c·w) / Σ(|c|·w),  100·tanh(raw / 3σ)  Nishchaya v3 exactly
+value        Samanvaya: the name hedged against a macro basket, its    where price stands against
+             spread's z over five timescales ⊕ seven breadth views    what the drivers explain
+trace        100 · softbound(0.5 · (z_c + z_v) / √(2 + 2ρ))            how far the move is STRETCHED
+histogram    trace − EMA(trace, 9)                                       the trace's own PUSH
+tapes        each ingredient averaged across its ladder of timeframes   WHY — who controls, and
+                                                                         where price stands
 ```
 
-`SID_Hist` crossing **above** zero fires **▲ BUY**; crossing **below** fires **◆ SELL**. Entry is
-the next session's open; the declared hold is 10 bars.
-
-Two properties make this different from a momentum oscillator. `c` is signed displacement divided
-by **true range**, so gaps count and a wide, violent bar that closes where it opened scores **zero**
-— nothing was accomplished. `w` weights each bar by how much of the market showed up for it, capped
-so one expiry print cannot own the window. A rally into a higher high on heavy volume that closes
-badly therefore adds a lot to the denominator and very little to the numerator: the oscillator
-flattens while price rises. That is *effort without result*, and it is a statement about how a move
-is being paid for rather than about how fast price moved.
-
-The core question Sanket answers: **whose conviction just turned, how forcefully did it turn, and
-does that event carry an edge on the universe in front of me?**
+The trace says **how far**, the histogram says **which way it is going**, the tapes say **why**.
 
 ---
 
-## The Signal (and what is actually claimed)
+## The Stack
 
-The condition is a **state change, not a level**. Nothing fires while the histogram merely sits on
-one side of zero, and the two sides are symmetric — unlike the close-location engine this replaces,
-where the sides meant different things and only one survived its own holdout.
+| Layer | Module | Carried from |
+|:---|:---|:---|
+| Value — rich or cheap against the macro drivers | `samanvaya.py` | Pragyam's port, vectorised; Weekly added |
+| Conviction, the trace, the histogram, the signals | `pragati.py` | Pragyam's conviction port, extended to v6 |
+| The 4 × 4 grid | `cvgrid.py` | the v6 Pine's section 10 (Pragyam's 3 × 3 seed, grown) |
+| Settings, per-symbol features, snapshot, ranking | `engine.py` | Sanket |
+| Measured expectancy | `edge.py` | Sanket, now measuring the new events |
 
-What the source indicator measures about its own trigger, quoted at face value:
+**The value engine is Samanvaya, carried whole.** The name's per-bar return is regressed on up
+to three macro factors — chosen by stepwise partial correlation over 250 periods read 12 in
+arrears, admitted past a Šidák-corrected Fisher floor, solved by ridge Gram-Schmidt — and the
+hedge is applied only as far as its own out-of-sample skill has earned. The basket is Pragyam's
+*expanded* one: US yields, bond-ETF proxies for other 10-year yields, the dollar, energy (WTI and
+Brent), precious and industrial metals, the INR crosses and the name's home equity index
+(Nifty for NSE names, the S&P 500 otherwise). Drivers are fetched once per universe. A driver
+that closes more than a third of a bar after the name is read at its previous close (US drivers
+against NSE lag a day on Daily). If the drivers cannot be fetched, value runs unhedged — the
+Pine's "Macro hedge: Off" — and the notice rail says so.
 
-| Check | Result |
+**Every number is causal.** A truncation test — every bar computed on the full history equals the
+same bar computed on history cut off at it — passes at 1e-9 across the whole stack. The weekly
+conviction rung is *reconstructed* from the forming week and lands on the settled weekly value
+to 1e-13.
+
+---
+
+## The Signals
+
+**▲ TURN** (▼ mirrors) — *a stretch releasing, the selling spent.* The trace crosses back up
+through −θ (θ = ±42.9, Samanvaya's 1.5σ) with the value basket settled; that opens a 5-bar
+window. Inside it, on one closed bar, all of:
+
+| Layer | Condition |
 |:---|:---|
-| Bare zero-crossing (`k = 0`, what ships here) | +0.0205R on the primary futures (t = 1.7) · **+0.0015R, t = 0.2** on eight held-out instruments |
-| Fire rate at `k = 0` | ~113 per 1000 bars — roughly one every nine bars |
-| Participation weighting | Earns its place: switching it **Off** is the worst available setting in all three signal architectures tested |
-| Adaptive scaling calibration | Holds — measured occupancy beyond the outer zone is 3.2–4.3% against the 4% claimed |
-| Any of it, corrected for overlap | **Nothing reaches significance.** Best case across 48 horizon/bracket cells: t = 1.9 |
-| Fitted vs out-of-sample edge, across 900 configurations | Correlation ≈ **0** (−0.07 to +0.11) |
+| Value · its tape | reached −θ inside the last 20 bars (a dislocation every horizon saw), and not rich past +θ now |
+| Conviction · its tape | above zero, or rising two bars running |
+| The trace's push | histogram > 0 — the release still pushing |
+| The push failed | inside the same 20 bars, effort was **absorbed** (bottom fifth of its history) **or** a regular bullish **divergence** formed on conviction's own pivots, zone-gated, at a price value called cheap |
 
-Read that table as a ranking, not a promise — which is exactly what its author says. The number
-that applies to your screen is the one the **Edge Study** below measures on your symbols.
+A ▲ declares BUY, a ▼ SELL. A declaration stands until the opposite one; it has no exit.
 
-**Do not tune this to a backtest.** The optimiser's best-fitted settings lost 81% of their edge in
-the same assets' later period and went negative on new ones. Every parameter Sanket ships is the
-source indicator's own default, and none is adjustable in the UI for that reason.
+**◆ RESUME** (long; short mirrors) — *a trend resuming from inside the zone.* The histogram dipped
+below zero inside 6 bars and now crosses +k·σ (k = 0.5); the trace is inside ±θ; the conviction
+tape is past +30 (control held across horizons); the value tape is short of +θ (room left); and
+effort is not absorbed on the bar.
+
+TURN takes precedence over RESUME on the same bar; ▲ and long ◆ share one 10-bar cooldown.
+Nothing pauses silently: a name whose tapes are still calibrating is **paused**, and says which
+layer it is waiting for.
+
+**Why divergence and absorption are evidence, not signals.** Divergence was the one element the
+source ranked first; hidden divergence and the chart-only reversal trigger measured nothing.
+So v6 folds the ranked element into the TURN as evidence that the push failed, rather than
+firing it alone.
 
 ---
 
-## Why the event form
+## The Grid
 
-This is the single most important design decision in the system, and it survives the engine change
-intact.
+The two tapes place every name in a 4 × 4, each split at its knee and at zero:
 
-Two lines that both hug zero **cross constantly**. A continuous position on that separation turns
-over every time they touch, and the turnover — not the signal — is what decides whether anything
-is tradeable. Firing on the crossing and holding a declared horizon is what makes the rule costable
-at all.
+```
+                 CHEAP              BELOW FAIR          ABOVE FAIR          RICH
+buyers firm      Buy · turn 3       Add · trend 3       Add · strong 3      Hold · don't add 1.5
+buyers edge      Accumulate ·       Accumulate ·        Wait · drifting 1   Trim · stalling 0.75
+                 basing 1.5         early turn 1.5
+sellers edge     Accumulate ·       Wait · no edge 1    Trim · rolling      Trim · topping 0.75
+                 deep value 1.5                         over 0.75
+sellers firm     Watch · still      Reduce ·            Reduce ·            Exit · distribution
+                 falling 1          downtrend 0.5       breakdown 0.5       0.25
+```
 
-Cost is charged in the units the edge is measured in: `cost_bps / 1e4 / σ_h`. That is why the edge
-dies on low-volatility instruments — 3bp against a 4% 10-day sigma costs 0.008 vol units, but
-against a 1% sigma it costs 0.030. The source makes the same point in its own units: a round trip
-costs about 0.02R on daily bars and 0.09R on 5-minute bars, against a best-case measured edge near
-0.05R. **On 5-minute bars the cost is roughly double anything this construction has been shown to
-produce.** Daily is the only timeframe with real headroom.
+**The histogram runs the rows.** Columns move freely — price is where it is. A row moves only
+with the push behind it: a push moves it one step toward the tape, an impulse all the way, no push
+holds it (**held**, in gold). Before the histogram is calibrated the row follows the tape.
+
+**The chart cell.** The trace's two ingredients on this chart alone place a second cell; when it
+carries more units than the state, the chart **leads ↑**, fewer **↓**. Display only.
+
+**Read the push against the action.** Buy, Add and Accumulate are best done on a push ↑; Trim,
+Reduce and Exit now or into a push ↑; Hold, Wait and Watch change nothing.
+
+---
+
+## Ranking
+
+The events are rare and the state is universal, so priority is **banded**:
+
+```
+long side                                   short side
+5 + g   ▲ TURN on this bar                  5 + g'  ▼ TURN on this bar
+4 + g   ◆ RESUME ↑ on this bar              4 + g'  ◆ RESUME ↓ on this bar
+3 + r   a long event inside its hold        3 + r   a short event inside its hold
+2 + a   a ▲ TURN window open (watchlist)    2 + a   a ▼ TURN window open
+g − ½   the grid state alone                g' − ½  the grid state alone
+```
+
+`g = (units − ¼) / 2¾` — **Pragyam's inference: the state is the weight.** Among names that fired
+the same event, the one the grid calls Buy · turn outranks the one it calls Watch · still falling.
+`g'` mirrors it for the short side. `r` is the hold left, `a` the confirmation window left. The
+bands cannot overlap. Nothing measured enters the ranking: the Edge Study is reported, never
+applied, and the cost gate is a flag on the row, not a multiplier.
 
 ---
 
 ## Edge Study — expectancy measured on your universe
 
-The edge does not hold everywhere — the source indicator's own results change sign between the
-instruments it was calibrated on and the ones it held out. Earlier versions of this app hardcoded
-a per-class expectancy table and applied it as a conviction multiplier. That was wrong on four
-counts: it could not cover a universe the source never touched (NSE F&O single names, NSE
-thematic ETFs, most of what this app screens), it applied an **asset-class** claim to
-**instrument-level** decisions, it could not report that a component had stopped working, and you
-could not check it against your own data.
+`edge.py` runs an event study on your symbols through **the exact engine call the screener
+makes** (`engine.compute_frame`), so every guard — warm-up, the stack gate, the basket gate, the
+cooldowns — applies to the study by construction. Six slices:
 
-So the app measures it. **`edge.py` runs an event study on your symbols**, at the pre-declared
-parameters, with the methodology that makes the source numbers credible:
+| Slice | What it is |
+|:---|:---|
+| Long · all / Short · all | the screen's two sides, TURN and RESUME pooled |
+| ▲ TURN / ▼ TURN | the declarations alone |
+| ◆ RESUME ↑ / ↓ | continuation alone |
+
+The method is unchanged from v7 and each step kills one way of fooling yourself:
 
 | # | Step | The failure it prevents |
 |:--|:---|:---|
-| 1 | Event study at the declared horizon (enter the bar after the signal, hold `h`) | Measuring the continuous form, whose turnover is set by how often two lines near zero touch — a question nobody trades |
-| 2 | **Drift removal, within era** — subtract each symbol's own mean forward return | Every long signal in a bull market prints a profit; you'd have measured beta |
+| 1 | Event study at the declared horizon (enter the bar after the signal, hold 10) | Measuring a continuous form nobody trades |
+| 2 | **Drift removal, within era** | Every long signal in a bull market prints a profit — beta, not edge |
 | 3 | Vol normalisation by the symbol's own σ | FX, bond ETFs and small-caps on incomparable scales |
-| 4 | Sign folding, so both sides read "positive = right" | Reporting the two sides on opposite conventions |
-| 5 | **Block bootstrap over dates** | Overlapping returns *and* a correlated cross-section both inflate significance |
-| 6 | Cost charged in the same vol units (`bps/1e4 ÷ σ_h`) | Ignoring that the same bps costs 4× more on a low-vol instrument |
-| 7 | **Power stated**: `n_eff`, and a minimum detectable effect from it | Reporting "no edge" from a test that could never have detected one |
+| 4 | Sign folding | The two sides on opposite conventions |
+| 5 | **Block bootstrap over dates** | Overlapping returns and a correlated cross-section inflating significance |
+| 6 | Cost in the same vol units (`bps/1e4 ÷ σ_h`) | The same bps costing 4× more on a low-vol name |
+| 7 | **Power stated**: `n_eff`, and a minimum detectable effect | "No edge" reported from a test that could never have seen one |
 
-The **confidence interval decides**, not a p-value hurdle. Verdicts:
+Verdicts: `CONFIRMED` · `GROSS ONLY` · `DISCOVERY ONLY` · `NO EDGE` · `ANTI-PREDICTS` ·
+`UNDERPOWERED` (the MDE exceeds 0.036, the largest effect this indicator family has shown
+anywhere). **Expect UNDERPOWERED often, especially for the TURN slices**: every layer must confirm
+on one bar, so TURNs are far rarer than Siddhi's crossings were, and the app says "we could not
+tell" rather than "there is no edge".
 
-| Verdict | Meaning |
+It fetches ~15 years once a day per universe (80-symbol fixed-seed sample above that), streams
+in chunks of 20, and reuses the measurement until the date rolls.
+
+---
+
+## What Is Adapted, and Why
+
+Every indicator input is `pragati.pine`'s own default. Five things differ, and each is stated
+where it applies:
+
+| Adaptation | Why |
 |:---|:---|
-| `CONFIRMED` | holdout CI excludes zero **and** survives costs |
-| `GROSS ONLY` | holdout edge is real but costs consume it |
-| `DISCOVERY ONLY` | discovery CI excludes zero, holdout does not |
-| `NO EDGE` | CI straddles zero at adequate power |
-| `ANTI-PREDICTS` | CI excludes zero on the wrong side |
-| `UNDERPOWERED` | the MDE exceeds the largest effect ever measured for this signal — the test is vacuous, so no verdict is claimed |
+| **Conviction ladder on Daily is W · D (Ladder up)**; the Pine's default is Ladder down (1m … 4h) | No free feed carries intraday history at depth. The Pine's own FALLBACK reads the other direction when one has no frames; Pragyam made the same choice |
+| **The daily chart's W conviction rung normalises over 52 weeks**, not 200 | At 200 it needs four years of weekly history (Pragyam's adaptation) |
+| **Weekly runs a 60-bar normalization window**, not 200 | Calibration costs two windows; at 200 a weekly name needs 8.7 years. Weekly's conviction ladder is the daily bars *inside* each week (Ladder down, the Pine's own fallback on Weekly) and its value ladder is M · W |
+| **The quiet-regime test ranks over the history available** (≥ one normalization window) where the Pine asks for four | The panel cannot supply 800 bars of σ history |
+| **A volume-less name's reconstructed parent rung calibrates on true range** | The Pine requires a volume baseline there, so on index spot or FX with Ladder up the conviction tape would never calibrate and every signal would stay paused |
 
-That last row is the point: *"we could not detect an edge"* and *"there is no edge"* are
-different statements, and conflating them is how underpowered studies get quoted as evidence
-of absence.
-
-### Two things the study refuses to do
-
-- **It does not tune the signal.** Every oscillator parameter and the horizon stay pre-declared.
-  Searching for the best lookback or magnitude gate per universe would fit noise and destroy the
-  credibility the study exists to establish — the source measured that fitted-vs-out-of-sample
-  correlation at approximately zero and said so.
-- **It does not gate the signal.** The measurement is *reported*, never applied. Conviction is
-  `crossing force × cost gate` with no expectancy term. A universe that measures no edge still
-  fires at full conviction and says so — the alternative is a hidden multiplier you cannot audit.
-  The cost gate is careful about this too: it keys off the measured *cost charge*, never the
-  measured net, so a `NO EDGE` verdict cannot halve conviction through the back door.
-
-### It runs on a 1 GB shared container
-
-The study needs ~15 years of history (the power arithmetic: resolving an effect of `e` needs
-`n_eff ≈ (1.96/e)²`, and `n_eff = (dates/horizon) × participation_ratio` — the screener's own
-900-day window resolves only ~0.10, i.e. nothing but the single largest effect the source study
-ever found). Fetching that naively for a large universe OOMs a Streamlit Community Cloud
-container. Three choices avoid it:
-
-1. **Lean** — the study computes the conviction oscillator and forward returns only; no volume
-   profile, no regime engine, no order flow. It calls `engine.siddhi_oscillator` directly rather
-   than re-deriving the rule, so the study can never drift from what the screener fires.
-2. **Streaming** — symbols are fetched and reduced in chunks of 20, each chunk released before
-   the next; what accumulates is event tuples at a ~11% fire rate.
-3. **Sampled** — universes above 80 symbols are sampled with a fixed seed. Nearly free
-   statistically, because the participation ratio saturates well below 80.
-
-Measured `tracemalloc` peak on 80 symbols × 15 years: **31 MB**, and flat in universe size. The
-naive alternative — holding the full analysed panel — measures 556 MB at 80 symbols (6.8 MB per
-symbol), which projects to ~3.4 GB on NIFTY 500: a hard OOM.
-
-### The reference prior
-
-The source indicator's per-group numbers survive as a **labelled comparison row** — "the source
-measured *Commodity* at +0.036 on gold, silver and crude, and −0.016 on eight held-out
-instruments; here is what we measure on your universe." Nothing computes from them, and the app
-states plainly that the source establishes **no** class. Two operative constants remain: a pooled
-~7bp cost breakeven used *only* as the cost-gate fallback until a study exists (the UI reports
-which basis it used, `measured` vs `pooled prior`), and `LARGEST_KNOWN_EFFECT = 0.036` — the most
-this construction has ever been worth anywhere — used as the cost-gate ceiling and as the bar the
-minimum detectable effect must clear before a verdict is claimed at all.
-
-## The Engine
-
-`engine.py` is the whole thing — no fitted weights, no training step, no per-symbol models.
-
-### 1. Per-symbol signal — `add_siddhi_features(df, **settings)`
-```
-c            = (C − C[1]) / TrueRange              conviction, bounded [−1, +1]
-w            = clip(V / EMA(V, 20), 0, 3.0)        participation; true-range fallback, automatic
-SID_Raw      = 100 · SMA(c·w, 20) / SMA(|c|·w, 20) share of effort that became displacement
-SID_Osc      = EMA(100 · tanh(SID_Raw / 3σ), 3)    adaptive self-normalisation, bounded ±100
-SID_Sig      = EMA(SID_Osc, 9)
-SID_Hist     = SID_Osc − SID_Sig                   THE SCREENING VARIABLE
-SID_Hist_Z   = SID_Hist / σ(SID_Hist, 200)         in its own σ — comparable ACROSS symbols
-SID_Impulse  = Δ SID_Hist / σ(SID_Hist, 200)       crossing force
-buy_cond     = SID_Hist crosses ABOVE 0            ▲ green triangle
-sell_cond    = SID_Hist crosses BELOW 0            ◆ yellow diamond
-SID_Zone     = Extreme Bull / Bull / Neutral / Bear / Extreme Bear   (context, never a gate)
-SID_State    = WARMING UP / DEGENERATE / BUY / SELL / NEUTRAL
-```
-
-Numerical fidelity to the Pine is deliberate: `ta.ema` is `ewm(span=n, adjust=False)`, `ta.stdev`
-is the **population** standard deviation (`ddof=0`), `ta.tr(true)` includes the gap, and the
-hollow-bar volume carry is reproduced so a holiday or thin overnight print cannot kill the
-participation baseline for a whole averaging window.
-
-**Warmup is two nested normalizations, and it is counted rather than guessed** —
-`2·norm + length + vol_n + smooth + signal`, **452 daily bars** at the defaults. `rawSd` is a
-stdev *of* `raw`, so it needs a window free of the bars where `raw` is still pinned; `histSd` is
-a stdev of the *histogram*, so it needs its own clean window on top of that. Shorter histories
-are excluded with a "warming up" count in the run stats.
-
-**Weekly runs a shorter normalization window** (`SID_NORM_WEEKLY = 60`, warmup 172 bars) and
-fetches deeper history to match. At the source's 200 a weekly symbol would need 452 *weekly*
-bars — 8.7 years each — before the screen showed anything, which no fetch this app can make will
-supply. It is flagged `ADAPTED` in the engine card rather than presented as a measured setting.
-
-`SID_K` scales an optional magnitude gate — the histogram must cross `± k·σ(hist)` rather than
-`± 0`. **It defaults to 0.0, which is exactly the zero-crossing above.** The knob exists so the
-parameter can be *measured* by `edge.py` on a real universe rather than argued about.
-
-### 2. Cross-sectional ranking — `compute_ranking(df, cost_bps, k, horizon, study)`
-
-Scores on `SID_Hist_Z` and takes `Side` from whether the histogram **actually crossed on this
-bar**. Ranking on the *level* while firing on the *crossing* is deliberate: the level says who is
-currently in control, the crossing says when that changed, and the claim is only about the
-crossing.
-
-Priority is **banded**, and it has to be:
-
-```
-FIRED TODAY      2 + conviction          a crossing on this bar, strongest first
-IN HOLD WINDOW   1 + remaining fraction  a crossing still inside its horizon
-CONTEXT          tanh(SID_Hist_Z)        no crossing; just who is in control
-```
-
-A zero-crossing sits at **zero by construction**, so sorting the universe on the level alone would
-bury every fresh signal in the middle of the list. The bands cannot overlap, so an actionable row
-always outranks a merely bullish one — the same statement `Side` and `Signal_Reason` already make.
-
-```
-Conviction = clip(0.30 + 0.70·tanh(|SID_Impulse|)) × cost_factor
-cost_factor: 1.00 if the cost gate passes, else 0.50
-             — measured from the Edge Study when one exists, else the pooled ~7bp prior
-```
-
-Conviction is built from the **crossing force**, not the level, for the same reason: at the instant
-a histogram crosses zero it *is* ~zero, so scaling conviction off `|hist|` would score every fresh
-signal at nothing and every stale one high. What distinguishes crossings is how forcefully the gap
-opened, and `SID_Impulse` is the only quantity available at fire time that separates them.
-
-It remains a **relative weighting, not a probability**, and is labelled that way in every tooltip.
-Note what is deliberately absent: no expectancy term (measured and *reported* by the Edge Study,
-never folded into an unauditable number), no per-name volatility factor, no regime factor, no
-live-IC scaling.
-
-### 3. Bar convention — one deliberate difference from the Pine
-The Pine gates every discrete object on `barstate.isconfirmed` so nothing is drawn on a forming bar
-and then withdrawn. Sanket evaluates completed bars directly, so that gate is structural rather
-than explicit: a signal fires on the bar whose close produced it, and entry is the next session's
-open. One carry-over: **a signal on a session that has not closed yet is provisional until it
-does.**
-
-### Everything else is context, and never a signal input
-Inferred delta / CVD / `Delta_Z` / absorption / volume profile (OHLC proxies, validated three times
-to add no cross-sectional edge), the flow zone, and the **regime engine** (HMM + GARCH + CUSUM,
-per-name *risk context*). All displayed beside the signal, aggregated in the range charts, and
-exported — none of it enters `SID_Hist`, `Side`, or `Conviction`.
-
-`Delta_Z` is a *close-location* proxy and is unrelated to the oscillator: it z-scores the
-volume-weighted position of the close inside its bar, where Siddhi measures signed displacement
-against true range. Only the latter is the signal.
+**Warm-up.** The histogram is calibrated after 450 daily bars; the signal set needs both tapes as
+well, and the conviction tape's weekly rung binds, so the stack first judges near bar ~670.
+Daily therefore fetches 1,300 + 365 calendar days (~480 signal-bearing dates). Weekly is bound by
+the value ladder's monthly rung (~5 years) and fetches 2,600 + 365 days.
 
 ---
 
@@ -311,56 +247,56 @@ Per symbol, on each run:
 
 | Column | Meaning |
 |:---|:---|
-| `SID_Raw` | raw participation-weighted share of effort that became displacement |
-| `SID_Osc` / `SID_Sig` | the oscillator (bounded ±100) and its signal line |
-| `SID_Hist` | **the screening variable** — `SID_Osc − SID_Sig`. Its crossing of zero is the signal |
-| `Signal` / `SID_Hist_Z` / `SID_Score` | the histogram in its own σ; what the universe is ranked on |
-| `SID_Impulse` | crossing force — Δhistogram in σ. What separates one crossing from another |
-| `SID_Zone` | where the oscillator sits vs the ±30 / ±60 zones. Context, never a gate |
-| `BUY_Today…BUY_5d` | ▲ green-triangle event (crossed up), by age |
-| `SELL_Today…SELL_5d` | ◆ yellow-diamond event (crossed down), by age |
-| `Side` | `Buy` / `Sell` / `—` (no crossing on this bar — context only) |
-| `Conviction` | `[0,1]` = `tanh(\|SID_Impulse\|)` × cost gate |
-| `SID_State` | WARMING UP / DEGENERATE / BUY / SELL / NEUTRAL |
-| `SID_Hold_Dir` / `SID_Hold_Age` | hold-window direction and bars elapsed ("day 3/10") |
-| `Signal_Reason` | plain-language read of the row, caveat included |
-| Risk context | `Vol_Regime`, `Regime_Confidence`, `Change_Point`, `ATR_Pct` |
-| Flow context | `Bar_Delta`, `CVD`, `Delta_Z`, `Buy_Share`, `Absorption_Score`, `VA_Pos` |
+| `turn_buy` / `turn_sell`, `resume_long` / `resume_short` | the four events on this bar |
+| `BUY_*` / `SELL_*` | the long / short event by age — ▲▼ a TURN, ◆ a RESUME, — none |
+| `Side` / `Signal_Kind` / `PRG_Event` | an event on this bar, and which |
+| `PRG_Armed` / `PRG_Armed_Age` | an open TURN window (the watchlist) and bars used of 5 |
+| `PRG_Decl` / `PRG_Decl_Age` | the standing ▲/▼ declaration |
+| `PRG_Trace` (`Signal`) | the trace, ±100 |
+| `PRG_Hist` / `PRG_Hist_Z` / `PRG_Push` | the histogram, in its own σ, and in five push levels |
+| `PRG_CTape` / `PRG_VTape` | the two MTF tapes — the grid's axes |
+| `PRG_Conv` / `PRG_Value` | the trace's two ingredients on this chart |
+| `PRG_Hedge` / `PRG_Drivers` | the macro hedge applied and the drivers selected |
+| `PRG_Div_Seen_*` / `PRG_Abs_Seen` | TURN evidence inside the dislocation window |
+| `PRG_Split` / `PRG_Quiet` / `PRG_Settling` | read-with-caution qualifiers |
+| `PRG_Stack_OK` / `PRG_Why` | whether the signal set can judge, and if not why |
+| `CVG_Action` / `CVG_Why` / `CVG_Units` / `CVG_Held` / `CVG_Lead` | the grid state |
+| `Priority_Long` / `Priority_Short` | the banded ranking keys |
+| `Signal_Reason` | a plain-language read of the row |
+| Risk / flow context | `Vol_Regime`, `Regime_Confidence`, `Change_Point`, `Bar_Delta`, `CVD`, `Delta_Z`, `Buy_Share`, `Absorption_Score` — displayed, never an input |
 
 ---
 
 ## Architecture Overview
 
 ```
-sanket.py            ← Streamlit entry point: UI, data fetch, per-symbol features, screen routing
-engine.py            ← THE signal engine: conviction oscillator + zero-cross events + conviction
-edge.py              ← Measured expectancy: event study, drift removal, block bootstrap, power
-siddhi.pine          ← Source indicator and the primary source document (read its header)
-research.py          ← LEGACY harness from an older momentum engine; does not validate Siddhi
-logger.py            ← Structured terminal logging (ANSI color, phase timing, run IDs)
-ARCHITECTURE.md      ← Signal, evidence, scope, and design rationale (read this)
-ui/
-  theme.py           ← CSS injection, Plotly Obsidian theme, progress cards
-  theme.css          ← Full Obsidian Quant design system
-  components.py      ← Reusable UI primitives (headers, metric cards, signal tables)
+sanket.py            ← Streamlit entry point: UI, data + macro-driver fetch, screen routing
+engine.py            ← settings, per-symbol features, the snapshot row, banded ranking, cost gate
+pragati.py           ← pragati.pine v6: conviction, ladders, trace, histogram, TURN / RESUME
+samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
+cvgrid.py            ← the 4 × 4 conviction-value grid
+edge.py              ← measured expectancy: event study, drift removal, block bootstrap, power
+research.py          ← LEGACY harness from an older momentum engine; validates nothing here
+logger.py            ← structured terminal logging
+ARCHITECTURE.md      ← the stack, the evidence, and the design rationale
+ui/                  ← theme.py · theme.css · components.py (the Graphite design system)
 ```
 
-The **regime engine** (Hidden Markov + GARCH + CUSUM) lives in `sanket.py` and provides per-name
-risk context only. The **order-flow layer** (inferred delta, CVD, volume profile, absorption) is
-computed for display only. Neither enters the signal.
+The **regime engine** (HMM + GARCH + CUSUM) and the **order-flow layer** (inferred delta, CVD,
+volume profile, absorption) are unchanged and remain context only.
 
 ---
 
 ## Analysis Modes
 
-1. **Single Date Screener** — fetch the universe on a date, build each symbol's conviction
-   oscillator, and return the fired BUY / SELL crossings bucketed by age plus the full ranking.
-   Tabs: Action Dashboard · Signal Strength · System Data (which carries the Edge Study readout).
-2. **Historical Range** — bulk harvest of the signal across a date range, with breadth charts,
-   forward-return labels, and Excel export.
-3. **Correlation Analysis** — cross-asset correlation + confluence, weighted by Siddhi signal
-   strength (fired crossing > open hold window > level) and conviction.
-4. **Pulse Narrative** — full-universe conviction state, ranked both ways.
+1. **Single Date Screener** — Action Dashboard (events by age, each with its grid state, push,
+   tapes and evidence) · **Grid** (the 4 × 4 census, the watchlist of open TURN windows, names by
+   action) · Signal Strength (the banded ranking) · System Data (exports, raw frame, Edge Study).
+2. **Historical Range** — event breadth by kind, open TURN windows, grid breadth (build vs cut),
+   the universe-mean tapes, regime context, forward-return labels, Excel export.
+3. **Correlation Analysis** — cross-asset correlation, with confluence = |correlation| × the
+   normalised Pragati priority.
+4. **Pulse Narrative** — every name's state, both sides, plus the Grid and Strength tabs.
 
 ---
 
@@ -373,12 +309,10 @@ computed for display only. Neither enters the signal.
 | **US / Global Indices** | S&P 500, NASDAQ, DOW, international benchmarks |
 | **ETF · Commodities · Currencies · Crypto · Global Macro** | Gold/Silver/Crude/Gas, FX majors, BTC/ETH, bond/macro ETFs |
 
-**Data sources**: NSE India API (`nsepython` / `NseKit`), Yahoo Finance (`yfinance`), Wikipedia
-(index constituent lists). Siddhi is a per-symbol signal, so it fires on any instrument with
-~452 bars of clean OHLC on Daily (172 weekly bars on Weekly) — volume is used where it exists
-and relative true range where it does not, automatically, so index spot works without
-configuration. Whether it carries an *edge* on a
-given universe is not assumed — run the Edge Study and read the verdict.
+**Data sources**: NSE India API (`nsepython` / `NseKit`), Yahoo Finance (`yfinance`, including the
+macro drivers), Wikipedia (index constituent lists). Volume is used where it exists and relative
+true range where it does not, automatically — index spot and FX work without configuration.
+Whether the signal set carries an *edge* on a given universe is not assumed — read the Edge Study.
 
 ---
 
@@ -459,8 +393,8 @@ Charts, tables and embedded iframes all go through the same panel: header (title
 meta · chip) · body · footer. There is no bare `st.dataframe`, `st.error`, `st.warning`,
 `st.info` or `st.caption` anywhere in the app — each brings its own typeface, radius and ink
 that the stylesheet cannot reach, and three of them on a page read as three different products.
-Sanket's screener tables stay bespoke, because per-cell glyphs (▲ BUY / ◆ SELL), conviction
-readouts and hold counters are not expressible as a DataFrame — but they draw their typeface,
+Sanket's screener tables stay bespoke, because per-cell glyphs (▲▼ TURN / ◆ RESUME), grid
+states, push levels and hold counters are not expressible as a DataFrame — but they draw their typeface,
 row height, header and tokens from `ui.components.table_shell_css`, so the only thing that
 differs from a generic table is the content of a cell.
 
@@ -475,15 +409,49 @@ pip install -r requirements.txt
 streamlit run sanket.py
 ```
 
-Opens at `http://localhost:8501`. There is nothing to configure and nothing to tick: the signal's
-settings are fixed measured plateaus, and the **Edge Study runs on every run**. It fetches ~15
-years the first time it sees a universe on a given day and reuses that measurement for the rest of
-the day — within one calendar day the study reads identical data, so re-measuring would return a
-bit-identical answer for a 15-year round trip. It re-measures automatically once the date rolls.
+Opens at `http://localhost:8501`. There is nothing to configure and nothing to tick: every
+indicator input is the Pine's own default, and the **Edge Study runs on every run**. It fetches
+~15 years (and the macro drivers behind them) the first time it sees a universe on a given day and
+reuses that measurement for the rest of the day — within one calendar day the study reads
+identical data, so re-measuring would return a bit-identical answer. It re-measures once the date
+rolls. `scipy` is required (the value engine's Šidák floor).
 
 ---
 
 ## What Changed
+
+**v8.0.0 — Pragati: the screener re-envisioned on conviction × value.** The Siddhi zero-crossing
+engine is replaced by the indicator Pragyam's Conviction-Value Grid reads, carried the rest of the
+way to its signals. What changed and why:
+
+- **The screening variable is a trace, not a histogram crossing.** Conviction (Siddhi's measure,
+  unchanged at its root) is blended in σ with Samanvaya's macro-hedged value into one trace — how
+  far a move is stretched — whose histogram is its push. Siddhi fired ~113 times per 1,000 bars on
+  its source's weakest configuration; the new events need every layer on one bar.
+- **Two signals.** ▲▼ TURN (a stretch releasing; declares) and ◆ RESUME (a trend resuming). The one
+  element the source ranked first — regular divergence — is folded into TURN as evidence that the
+  push failed, with effort absorption as the alternative.
+- **One state for every name.** The 4 × 4 conviction-value grid, named as actions with Pragyam's
+  units, is a new Grid tab (census, watchlist of open TURN windows, names by action) and a column
+  in every table.
+- **Ranking uses Pragyam's inference.** Banded — TURN > RESUME > hold window > open TURN window >
+  grid state — and ordered inside every band by the grid's weight. The crossing-force "Conviction"
+  column is gone.
+- **The Edge Study measures the new events**, pooled per side and per kind, through the same
+  engine call the screener makes.
+- **Macro drivers** are fetched once per universe (cached an hour); a failed fetch degrades value
+  to unhedged and says so in the notice rail.
+- **Colours follow the Pine**: green up, red down, amber only for "read with caution". The yellow
+  SELL diamond is gone.
+- **Deeper fetch**: Daily 1,300 + 365 days, Weekly 2,600 + 365, because the tapes — not the
+  histogram — bind the warm-up.
+- **Fixed on the way**: a volume-less name's reconstructed weekly conviction rung never calibrated
+  (the Pine demands a volume baseline there), which would have paused every index-spot and FX name
+  for good under Ladder up. It now calibrates on true range, as the develop step already did.
+- Validated offline on a synthetic market (Yahoo was unreachable from the build environment): the
+  vectorised value fit is bit-identical to Pragyam's loop; the whole stack passes a truncation
+  (no-look-ahead) test; all four modes run headless on Daily and Weekly.
+
 
 **v7.1.5 — the rail stops repeating the command bar, and the tab boundary stops doubling.**
 
@@ -790,7 +758,7 @@ cost-survivable edge. *(Retired in v6.0.0.)* See [`CHANGELOG.md`](CHANGELOG.md) 
 | Layer | Technology |
 |:---|:---|
 | Language | Python 3.10+ |
-| Web Framework | Streamlit 1.30+ |
+| Web Framework | Streamlit 1.52.2 (pinned) |
 | Numerical | NumPy 1.24+, Pandas 2.1+ |
 | Charts | Plotly 5.18+ |
 | Data | yfinance, nsepython / NseKit |
@@ -808,4 +776,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v5.1.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v8.0.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

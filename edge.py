@@ -1,73 +1,66 @@
 """
-edge.py — measured out-of-sample expectancy for the Siddhi signal, per universe.
+edge.py — measured out-of-sample expectancy for the Pragati signal set, per universe.
 
 Why this module exists
 ----------------------
-The signal (``engine.py``) is a fixed, pre-declared rule. The question this module answers
-is separate and empirical: **does that rule carry an edge on the universe actually on
-screen, and can we prove it from data the app can fetch?**
+The signal set (``engine.py``: ▲▼ TURN and ◆ RESUME, pragati.pine v6) is a fixed,
+pre-declared rule. The question this module answers is separate and empirical: **does
+that rule carry an edge on the universe actually on screen, and can we prove it from data
+the app can fetch?** The source indicator's own answer for this set is "unmeasured" — its
+evidence section measured conviction's components, not the TURN / RESUME stack — so a
+quoted number would be worse than none. This measures it, on your symbols.
 
-Before this existed, the answer was a hardcoded lookup of eight numbers copied from the
-source study's 39 instruments. That is indefensible for three reasons: it cannot cover a
-universe the study never touched (NSE F&O single names, NSE thematic ETFs, crypto), it
-makes an asset-class claim and applies it to instrument-level decisions, and it cannot
-report that the edge has stopped working — while the source study's own headline is that
-the edge decayed 4x since the 1990s.
+What is measured
+----------------
+Six slices, each with the full method below:
 
-So: measure it. On your symbols, at the pre-declared parameters, with the same methodology
-that makes the source study's numbers credible in the first place.
+    buy / sell                   every long event (▲ TURN + ◆ RESUME ↑) / every short one
+    turn_buy / turn_sell         ▲ TURN / ▼ TURN alone — the declarations
+    resume_long / resume_short   ◆ RESUME alone — continuation
+
+The pooled sides are what the screen's two sides are; the per-kind slices say which of
+the two situations is carrying (or costing) the pooled number. TURNs are rare by
+construction — every layer must confirm on one bar — so their slices will usually read
+UNDERPOWERED, and the app says so rather than quoting a number it cannot resolve.
 
 Method (each step exists to kill a specific way of fooling yourself)
 -------------------------------------------------------------------
 1. **Event study at the declared horizon.** Enter at the bar AFTER the signal bar closes,
-   exit ``horizon`` bars later (the source study's EXEC-B convention). Not a continuous
-   IC: a continuous position on this signal turns over daily and nets -0.48 Sharpe, so
-   measuring the continuous form would answer a question nobody trades.
+   exit ``horizon`` bars later (EXEC-B).
 
 2. **Drift removal, within era.** Subtract each symbol's own mean forward return, computed
-   inside the era being measured. Without this, every long signal on an equity universe in
-   a bull market prints a profit and you have measured beta, not edge. Computing the mean
-   *within* era also stops the discovery period's drift leaking into the holdout.
+   inside the era being measured. Without this every long signal on an equity universe in
+   a bull market prints a profit and you have measured beta, not edge.
 
-3. **Volatility normalisation.** Divide by the symbol's own forward-return sigma, so the
-   result is in vol units and an FX pair, a bond ETF and a small-cap equity are on one
-   scale. This is also what makes the cost charge meaningful (step 6).
+3. **Volatility normalisation.** Divide by the symbol's own forward-return sigma, so an FX
+   pair, a bond ETF and a small-cap equity land on one scale — and the cost charge means
+   the same thing on each.
 
-4. **Sign folding.** A buy event scores positive when the return beat the symbol's drift;
-   a sell event scores positive when it fell short. Both sides are then "positive = the
-   signal was right", which is how the source study reports fade-long and fade-short.
+4. **Sign folding.** A long event scores positive when the return beat the symbol's drift;
+   a short event scores positive when it fell short.
 
-5. **Block bootstrap over DATES.** Two dependencies would otherwise inflate significance:
-   an h-bar forward return overlaps its neighbours, and every symbol on one date shares
-   the market factor. Resampling contiguous *blocks of whole dates* handles both at once —
-   blocks for the serial overlap, whole dates for the cross-sectional correlation. The
-   confidence interval, not a p-value, decides whether an edge is claimed.
+5. **Block bootstrap over DATES.** h-bar forward returns overlap, and every symbol on one
+   date shares the market factor. Resampling contiguous blocks of whole dates handles
+   both. The confidence interval, not a p-value, decides whether an edge is claimed.
 
-6. **Costs charged in the same units.** ``cost_bps / 1e4 / sigma_h``. This is why the edge
-   dies on low-volatility instruments: 3bp against a 4% 10-day sigma is 0.008 vol units,
-   but against a 1% sigma it is 0.030 — a real drag on a small edge. A hardcoded class
-   table cannot express that; this does.
+6. **Costs charged in the same units.** ``cost_bps / 1e4 / sigma_h``.
 
-7. **Power stated, never assumed.** Effective sample size is
-   ``(n_dates / horizon) x participation_ratio``, where the participation ratio is the
-   eigenvalue-based count of genuinely independent names in the cross-section — measured,
-   not guessed. From it comes a minimum detectable effect. When the MDE is larger than the
-   biggest effect the source study ever found, the test is vacuous and says so instead of
-   reporting a verdict. This is the source study's own opening lesson: 370,686 intraday
-   bars were only ~601 independent observations.
+7. **Power stated, never assumed.** ``n_eff = (n_dates / horizon) x participation_ratio``,
+   and a minimum detectable effect from it. When the MDE is larger than the biggest effect
+   this family of indicators has ever shown anywhere, the test is vacuous and says so.
+
+The events come from ``engine.compute_frame`` — the exact call the screener makes — so the
+study can never measure a rule the screener does not fire. The macro drivers behind the
+value ingredient are fetched once for the whole history.
 
 What this module deliberately does NOT do
 -----------------------------------------
-* **It does not tune the signal.** Every oscillator parameter and the horizon stay
-  pre-declared. With a few hundred independent blocks, searching for the best lookback or
-  magnitude gate per universe would fit noise and destroy the very credibility this module
-  exists to establish — the source indicator measured that correlation between fitted and
-  out-of-sample edge at approximately zero, and said so. It measures the expectancy of a
-  fixed rule; it does not search for a better rule.
-* **It does not gate the signal.** The measurement is reported, not applied. Conviction in
-  ``engine.compute_ranking`` derives from the crossing impulse and the cost gate only. A
-  universe that measures no edge still fires its signals at full conviction — the number is
-  information for the person reading the screen, not a hidden multiplier.
+* **It does not tune the signal.** Every indicator input and the horizon stay pre-declared.
+  The source measured fitted-vs-unseen edge at approximately zero correlation across 900
+  configurations; searching here would fit noise.
+* **It does not gate the signal.** The measurement is reported, not applied. Ranking is
+  the grid state and the event bands; a universe that measures no edge still fires, and
+  says so.
 """
 from __future__ import annotations
 
@@ -82,83 +75,71 @@ import engine as eng
 N_BOOTSTRAP = 2000     # percentile CI resamples. Vectorised, so this is milliseconds.
 CI_LEVEL = 0.95
 
-# The largest edge the source indicator found on any instrument group. Defined in
+# The largest edge this indicator family has found on any instrument group. Defined in
 # engine.py (it is a claim about the signal) and aliased here: if our minimum detectable effect
-# exceeds it, the test cannot resolve even the best case ever observed for this signal — so it
+# exceeds it, the test cannot resolve even the best case ever observed for this family — so it
 # is vacuous, and reporting "no edge" would be an unsupported claim rather than a finding.
 LARGEST_KNOWN_EFFECT = eng.LARGEST_KNOWN_EFFECT
 
 # Minimum events per side before a point estimate is worth printing at all.
 MIN_EVENTS = 30
 
+# The slices measured: key -> (side, kind or None for both kinds).
+SLICES = {
+    "buy":          (1.0, None),
+    "sell":         (-1.0, None),
+    "turn_buy":     (1.0, "turn"),
+    "turn_sell":    (-1.0, "turn"),
+    "resume_long":  (1.0, "resume"),
+    "resume_short": (-1.0, "resume"),
+}
+SLICE_LABEL = {"buy": "Long · all", "sell": "Short · all", "turn_buy": "▲ TURN",
+               "turn_sell": "▼ TURN", "resume_long": "◆ RESUME ↑", "resume_short": "◆ RESUME ↓"}
+
 
 # ════════════════════════════════════════════════════════════════════════════════════════
 # EVENT EXTRACTION  (per symbol; the caller streams symbols so nothing accumulates)
 # ════════════════════════════════════════════════════════════════════════════════════════
-def symbol_events(close: pd.Series, high: pd.Series, low: pd.Series,
-                  volume: pd.Series | None = None, *,
-                  length: int = eng.SID_LENGTH, k: float = eng.SID_K,
-                  horizon: int = eng.SID_HORIZON,
-                  smooth: int = eng.SID_SMOOTH, signal: int = eng.SID_SIGNAL,
-                  norm: int = eng.SID_NORM, vol_n: int = eng.SID_VOL_N,
-                  cap: float = eng.SID_CAP,
-                  participation: str = eng.SID_PARTICIPATION) -> pd.DataFrame:
-    """Extract Siddhi crossing events for one symbol as a compact (date, side, fwd) table.
+def symbol_events(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
+                  settings: "eng.EngineSettings", daily: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Extract the Pragati events for one symbol as a compact (date, side, kind, fwd) table.
 
-    Returns a frame with columns ``date``, ``side`` (+1 buy / -1 sell) and ``fwd`` (the
-    raw h-bar forward return from the next bar's open-proxy). Drift removal and vol
-    normalisation happen later, in :func:`measure`, because they must be computed *within
-    era* — doing them here would leak across the discovery/holdout boundary.
+    ``df`` is the chart's OHLCV (Title-case, ascending) — weekly bars on a weekly study,
+    with ``daily`` the bars behind them. ``side`` is +1 long / -1 short, ``kind`` is
+    'turn' or 'resume', ``fwd`` the raw h-bar forward return from the next bar. Drift
+    removal and vol normalisation happen later, in :func:`measure`, within era.
 
-    THE EVENTS COME FROM THE ENGINE ITSELF. The previous version of this function
-    re-derived the signal inline, which meant every guard added to the engine had to be
-    mirrored here or the study would silently measure a rule the screener does not fire.
-    :func:`engine.siddhi_oscillator` is vectorised and touches only OHLCV, so calling it
-    costs nothing and removes that whole class of drift by construction.
-
-    Still deliberately lean: it does NOT compute the volume profile, the regime engine or
-    the order-flow layer — the study does not need them, and on a shared vCPU those would
-    dominate the runtime.
+    THE EVENTS COME FROM THE ENGINE ITSELF (``engine.compute_frame``), so every guard
+    the screener applies — warm-up, the stack gate, the basket-settling gate, cooldowns —
+    applies to the study by construction. Still lean: no volume profile, no regime
+    engine, no order flow.
     """
     empty = pd.DataFrame({"date": pd.Series(dtype="datetime64[ns]"),
-                          "side": pd.Series(dtype=float),
+                          "side": pd.Series(dtype=float), "kind": pd.Series(dtype=object),
                           "fwd": pd.Series(dtype=float)})
-    n = len(close)
-    warm = eng.warmup_bars(length, norm, vol_n, smooth, signal)
-    if n < warm + int(horizon) + 3:
+    horizon = int(settings.horizon)
+    if df is None or len(df) < settings.min_bars + horizon + 3:
         return empty
-
-    o = eng.siddhi_oscillator(high, low, close, volume,
-                              length=length, smooth=smooth, signal=signal, norm=norm,
-                              vol_n=vol_n, cap=cap, participation=participation)
-    hist, hist_sd = o["hist"], o["hist_sd"]
-    thr = float(k) * hist_sd.fillna(0.0)
-
-    # ta.crossover / ta.crossunder against ±thr. At the shipped k = 0 this is exactly
-    # "the histogram crossed zero", which is the screening condition.
-    up = (hist > thr) & (hist.shift(1) <= thr.shift(1))
-    dn = (hist < -thr) & (hist.shift(1) >= -thr.shift(1))
-
-    ready = pd.Series(np.arange(n) >= warm, index=close.index)
-    healthy = hist.notna() & hist.shift(1).notna() & (hist_sd > 1e-12)
+    f = eng.compute_frame(df, drivers, symbol, settings, daily)
+    close = pd.to_numeric(df["Close"], errors="coerce").reindex(f.index)
 
     # EXEC-B: the signal bar closes, we enter on the NEXT bar and hold `horizon` bars.
-    # Using next-bar close as the open proxy (the app's frames are OHLC; entering at the
-    # signal close vs the next open tests barely different).
+    # Next-bar close is the open proxy (the frames are OHLC; entering at the signal close
+    # vs the next open tests barely different).
     entry = close.shift(-1)
-    exit_ = close.shift(-1 - int(horizon))
-    fwd = exit_ / entry - 1.0
+    exit_ = close.shift(-1 - horizon)
+    fwd = (exit_ / entry - 1.0).to_numpy()
 
-    fires = (up | dn) & ready & healthy & fwd.notna()
-    if not fires.any():
+    parts = []
+    for col, side, kind in (("turn_buy", 1.0, "turn"), ("turn_sell", -1.0, "turn"),
+                            ("resume_long", 1.0, "resume"), ("resume_short", -1.0, "resume")):
+        m = f[col].fillna(False).astype(bool).to_numpy() & np.isfinite(fwd)
+        if m.any():
+            parts.append(pd.DataFrame({"date": pd.to_datetime(f.index[m]), "side": side,
+                                       "kind": kind, "fwd": fwd[m]}))
+    if not parts:
         return empty
-
-    side = np.where(up[fires], 1.0, -1.0)   # cross up -> buy, cross down -> sell
-    return pd.DataFrame({
-        "date": pd.to_datetime(close.index[fires]),
-        "side": side,
-        "fwd": fwd[fires].to_numpy(dtype=float),
-    })
+    return pd.concat(parts, ignore_index=True).sort_values("date", kind="stable")
 
 
 def symbol_baseline(close: pd.Series, horizon: int) -> pd.Series:
@@ -285,8 +266,8 @@ def block_bootstrap_ci(scores: np.ndarray, date_codes: np.ndarray, n_dates: int,
 # ════════════════════════════════════════════════════════════════════════════════════════
 @dataclass
 class SideResult:
-    """One side (buy or sell) measured in one era."""
-    side: str                 # 'buy' | 'sell'
+    """One slice (a side, or a side × kind) measured in one era."""
+    side: str                 # a key of SLICES
     era: str                  # 'discovery' | 'holdout' | 'full'
     n_events: int
     n_dates: int
@@ -331,9 +312,9 @@ class EdgeStudy:
     universe: str
     selected_index: str | None
     timeframe: str
-    iclass: str                       # label only — used to show the source's prior
-    length: int                       # oscillator lookback
-    k: float                          # magnitude gate in σ of the histogram (0 = zero-cross)
+    iclass: str                       # display label for the kind of universe
+    length: int                       # conviction lookback
+    trigger: str                      # the signal set measured, in prose
     horizon: int
     cost_bps: float
     # Coverage
@@ -343,9 +324,9 @@ class EdgeStudy:
     start: str
     end: str
     part_ratio: float
-    fire_rate: float                  # fraction of usable bars that fired either side
+    fire_rate: float                  # fraction of usable bars that fired any event
     split_date: str
-    # Results, keyed 'buy'/'sell' -> era -> SideResult (as dicts for cache round-tripping)
+    # Results, keyed by SLICES -> era -> SideResult (as dicts for cache round-tripping)
     results: dict = field(default_factory=dict)
     measured_at: str = ""
     partial: bool = False             # some symbols failed to fetch
@@ -371,8 +352,8 @@ class EdgeStudy:
         if all(r.underpowered for r in present):
             ref = max(present, key=lambda r: r.n_eff)
             return ("UNDERPOWERED", "neutral",
-                    f"MDE {ref.mde:.3f} vs the largest effect ever measured for this "
-                    f"signal ({LARGEST_KNOWN_EFFECT:.3f}) · {ref.n_events} events, "
+                    f"MDE {ref.mde:.3f} vs the largest effect this indicator family has "
+                    f"shown anywhere ({LARGEST_KNOWN_EFFECT:.3f}) · {ref.n_events} events, "
                     f"n_eff {ref.n_eff:.0f}")
         if hold is not None and hold.significant:
             if hold.net > 0:
@@ -407,15 +388,13 @@ class EdgeStudy:
     def from_dict(d: dict) -> "EdgeStudy":
         return EdgeStudy(**d)
 
-    def prior(self) -> tuple:
-        """The source study's published number for this instrument class — reference only.
-
-        Shown beside the measurement so the two can be compared, never used to compute
-        anything. Import is local to keep engine.py free of a dependency on this module.
-        """
-        import engine as eng
-        return (eng.class_edge(self.iclass), eng.class_hit(self.iclass),
-                eng.is_established(self.iclass))
+    def counts(self) -> dict:
+        """Events per slice over the full history — how often each situation fires."""
+        out = {}
+        for key in SLICES:
+            r = self.get(key, "full")
+            out[key] = r.n_events if r is not None else 0
+        return out
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
@@ -466,9 +445,12 @@ def _score_events(ev: pd.DataFrame, baselines: dict, symbols: np.ndarray,
 
 def _measure_side(sub: pd.DataFrame, side_key: str, era: str, horizon: int,
                   part_ratio: float, cost_bps: float) -> SideResult | None:
-    """Bootstrap one (side, era) slice into a SideResult."""
-    want = 1.0 if side_key == "buy" else -1.0
-    s = sub.loc[sub["side"] == want]
+    """Bootstrap one (slice, era) into a SideResult."""
+    want, kind = SLICES[side_key]
+    m = sub["side"] == want
+    if kind is not None and "kind" in sub.columns:
+        m &= sub["kind"] == kind
+    s = sub.loc[m]
     if s.empty:
         return None
     scores = s["score"].to_numpy(dtype=float)
@@ -499,13 +481,13 @@ def _measure_side(sub: pd.DataFrame, side_key: str, era: str, horizon: int,
 
 def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
             universe: str, selected_index, timeframe: str, iclass: str,
-            length: int, k: float, horizon: int, cost_bps: float,
+            length: int, trigger: str, horizon: int, cost_bps: float,
             n_symbols_universe: int, n_bars_median: int,
             holdout_frac: float = 0.40, partial: bool = False,
             measured_at: str = "") -> EdgeStudy:
     """Turn streamed events into an :class:`EdgeStudy`.
 
-    ``events``    long frame of (symbol, date, side, fwd) from :func:`symbol_events`.
+    ``events``    long frame of (symbol, date, side, kind, fwd) from :func:`symbol_events`.
     ``baselines`` {symbol: dated h-bar forward-return series} from :func:`symbol_baseline`.
     ``ret_matrix`` wide daily-return frame used only to measure the participation ratio.
 
@@ -516,7 +498,7 @@ def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
     if events is None or events.empty:
         return EdgeStudy(
             universe=universe, selected_index=selected_index, timeframe=timeframe,
-            iclass=iclass, length=int(length), k=float(k), horizon=int(horizon),
+            iclass=iclass, length=int(length), trigger=str(trigger), horizon=int(horizon),
             cost_bps=float(cost_bps), n_symbols_universe=int(n_symbols_universe),
             n_symbols_studied=0, n_bars_median=int(n_bars_median), start="", end="",
             part_ratio=1.0, fire_rate=0.0, split_date="", results={},
@@ -547,19 +529,19 @@ def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
         "discovery": (lo_all, split - pd.Timedelta(days=1)),
         "holdout":   (split, hi_all),
     }
-    results: dict = {"buy": {}, "sell": {}}
+    results: dict = {k: {} for k in SLICES}
     for era, (a, b) in eras.items():
         scored = _score_events(ev, baselines, ev["symbol"].unique(), a, b)
         if scored.empty:
             continue
-        for side_key in ("buy", "sell"):
+        for side_key in SLICES:
             r = _measure_side(scored, side_key, era, int(horizon), pr, float(cost_bps))
             if r is not None:
                 results[side_key][era] = asdict(r)
 
     return EdgeStudy(
         universe=universe, selected_index=selected_index, timeframe=timeframe,
-        iclass=iclass, length=int(length), k=float(k), horizon=int(horizon),
+        iclass=iclass, length=int(length), trigger=str(trigger), horizon=int(horizon),
         cost_bps=float(cost_bps),
         n_symbols_universe=int(n_symbols_universe),
         n_symbols_studied=int(ev["symbol"].nunique()),

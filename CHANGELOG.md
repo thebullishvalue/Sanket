@@ -1,9 +1,63 @@
 # CHANGELOG
-### Sanket — Close-Location Reversal (CLR)
+### Sanket — Pragati · Conviction × Value
 
 All notable changes to the **Sanket** platform are documented here. Sanket is part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/thebullishvalue).
 
 Format: `[version] · date — release title`
+
+---
+
+## [v8.0.0] · 2026-09-27
+### Pragati · The Screener Re-envisioned on Conviction × Value
+
+The Siddhi zero-crossing engine is replaced by **Pragati** (`pragati.pine` v6) — the indicator
+Pragyam's Conviction-Value Grid reads — ported in full and carried to its signals. Sanket's own
+machinery (the universe registry, the Edge Study's method, the Graphite UI, the order-flow and
+regime context) is kept; everything that computed or displayed the signal is rebuilt.
+
+**New modules.**
+- `samanvaya.py` — the value engine, carried from Pragyam: macro-hedged relative value (stepwise
+  driver selection, Šidák floor, ridge Gram-Schmidt, the hedge weighed by its own out-of-sample
+  skill, a five-timescale spread ensemble) blended with seven breadth views. **Vectorised across
+  time** — only the hysteresis paths run bar by bar — bit-identical to Pragyam's loop and 5–6×
+  faster; breadth on plain arrays, identical to 1e-13 and 3× faster. Adds a Weekly chart (M parent
+  rung), the basket-rotation state the TURN gate needs, and once-per-universe driver preparation.
+  The Šidák quantile uses the standard library, so no scipy dependency.
+- `pragati.py` — conviction (Nishchaya v3 exactly), the conviction ladder (Daily W · D with the
+  weekly rung reconstructed from the forming week; Weekly the daily bars inside each week), the
+  trace, its histogram and five-level push, divergence evidence on conviction's own pivots, and the
+  ▲▼ TURN / ◆ RESUME signal set with its windows, cooldowns and standing declaration.
+- `cvgrid.py` — the 4 × 4 conviction-value grid: actions with Pragyam's seed units, push-gated rows
+  (held), the chart cell and its lead.
+
+**Rewritten.**
+- `engine.py` — `EngineSettings` (one definition for every path), `add_pragati_features`,
+  `snapshot`, and a banded `compute_ranking`: TURN > RESUME > hold window > open TURN window > grid
+  state, ordered inside every band by the grid weight. The crossing-force "Conviction" column and
+  the Siddhi per-class priors are gone.
+- `edge.py` — measures six slices (both sides pooled, and each kind) through
+  `engine.compute_frame`, the exact call the screener makes.
+- `sanket.py` — macro drivers fetched once per universe; a new **Grid** tab (census, watchlist of
+  open TURN windows, names by action); every table rebuilt around event · grid · push · trace ·
+  tapes · evidence; the Historical Range dashboard gains events by kind, open TURN windows and grid
+  breadth; Pine colours (green up, red down, amber = caution only); notices for unhedged value and
+  paused names; the Excel legend rewritten.
+
+**Fixed on the way — the Pine's own edge case.** A volume-less symbol's reconstructed weekly
+conviction rung required a volume baseline that never exists, so under Ladder up every index-spot
+and FX name stayed PAUSED forever. It now calibrates on true range, as the develop step already
+did. Found by the headless FX and global-index runs.
+
+**Fetch depth.** Daily 1,300 + 365 calendar days (the stack first judges near bar ~670 — the
+conviction tape's weekly rung binds), Weekly 2,600 + 365 (the monthly value rung binds).
+
+**Verified offline** (Yahoo was unreachable from the build environment, so on a synthetic market):
+a truncation test over 63 columns — every bar on the full history equals the same bar on history cut
+at it — passes with 0 mismatches; the weekly-rung reconstruction lands to 1e-13; all four modes run
+headless through `streamlit.testing` on Daily and Weekly with no exception; every bespoke table was
+rendered and scanned for leaked placeholders.
+
+Cache identity: `ENGINE_SIG = "prg1"`, so no Siddhi frame or study is served to the new engine.
 
 ---
 

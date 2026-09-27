@@ -3,20 +3,19 @@ research.py — reproducible, point-in-time research harness (LEGACY, v5.x).
 
 ⚠ THIS DOES NOT VALIDATE THE SHIPPED ENGINE.
 ------------------------------------------------------------------------------------
-As of v7.0.0 Sanket runs a single screening condition — the Siddhi Conviction Oscillator
-(see ``engine.py`` and ``siddhi.pine``): the participation-weighted share of each bar's
-effort that became price displacement, measured against its own signal line, with the
-BUY on the histogram crossing above zero and the SELL on it crossing below. This harness
-documents a much older engine's thesis: the 12-1 cross-sectional momentum study on 100
-NIFTY-100 names, 2016-2026.
+As of v8.0.0 Sanket runs Pragati (see ``engine.py`` and ``pragati.py``): conviction × value
+— the participation-weighted share of each bar's effort that became displacement, blended
+with Samanvaya's macro-hedged value — its histogram, two multi-timeframe tapes, the ▲▼ TURN
+and ◆ RESUME signal set and the 4 × 4 conviction-value grid. This harness documents a much
+older engine's thesis: the 12-1 cross-sectional momentum study on 100 NIFTY-100 names,
+2016-2026.
 
 It is retained because the machinery is sound and reusable — a no-lookahead, cost-aware,
 shuffled-null-controlled cross-sectional evaluator is worth keeping — but nothing it
-prints describes the engine currently in production. Siddhi's source evidence lives in the
-``siddhi.pine`` header, and the expectancy that actually applies is whatever ``edge.py``
-measures on the user's own universe.
+prints describes the engine currently in production. The expectancy that actually applies
+is whatever ``edge.py`` measures on the user's own universe.
 
-Do not quote this file's numbers as support for Siddhi.
+Do not quote this file's numbers as support for Pragati (or for Siddhi before it).
 ------------------------------------------------------------------------------------
 
 Why this module exists
