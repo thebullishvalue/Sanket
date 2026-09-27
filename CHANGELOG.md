@@ -7,6 +7,42 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v8.1.0] · 2026-09-27
+### The Grid in Pragyam's Grammar — tones, the map, and tables that fit
+
+The UI now reads the conviction-value grid the way Pragyam does. No engine output changes.
+
+**One tone per state, everywhere.** A grid cell is coloured by what it *means*, not by the side
+it trades — Pragyam's `CVG_TONE`: **emerald** buyers firm below a rich price, **cyan** cheap and
+watched, **amber** rich or stalling, **rose** sellers in control, **slate** no edge / unread
+(`cvgrid.TONES`, `TONE_CHIP`, `ACTION_TONE`). The census, the Grid column of every screener table,
+the KPI strip and the charts all use it. Because the semantic hues do not separate as a
+categorical set under colour-vision deficiency, every tone also carries a **shape**
+(▲ ● ◆ ■ ▼) — in the tables as a glyph, on the map as the marker.
+
+**New `charts.py`** (Pragyam's `_LivePalette` arrangement, theme-live):
+- **Conviction-value map** — every name at its two tapes on the 4 × 4 plane, cells tinted and named,
+  knees dotted; hollow = held row, accent ring = TURN / RESUME on this bar.
+- **Tone history** (Historical Range → Grid Dynamics) — the universe's share in each tone, stacked
+  to 100% in the book's reading order; replaces the build / cut lines.
+- **Correlation heatmap** — panel-midpoint diverging scale, sorted by ρ, primary-ink labels.
+
+**Grid tab.** A five-card tone census (share + action mix) replaces the four side cards, followed
+by a prose note, the map, and the census sized to its real rows (it clipped before).
+
+**Tables & components, carried from Pragyam.** `.note` prose tier with inline **bold** / *italic*;
+`render_kv_table` — System Data now shows the **Run Configuration** a frame was computed under;
+`render_data_table(lower_is_better_cols=, best_in_row=)` marks a row's winner; table row height
+re-measured to 31 px so iframes no longer cut their last row; `diverging_scale()` in the theme.
+
+**Charts.** The dual-axis *Volatility Dynamics* chart is split into two single-axis panels
+(high-vol share, regime change points).
+
+**Fix.** Correlation Analysis on the Weekly timeframe resampled a close-only frame as OHLCV and
+failed; it now takes each week's last close.
+
+---
+
 ## [v8.0.0] · 2026-09-27
 ### Pragati · The Screener Re-envisioned on Conviction × Value
 

@@ -40,6 +40,7 @@ import engine as eng
 import edge
 import samanvaya as sv
 import cvgrid as cg
+import charts
 import warnings
 import logging
 import time
@@ -50,7 +51,7 @@ from logger import console
 
 # UI — Obsidian Quant Terminal System
 from ui.theme import (inject_css, apply_chart_theme, progress_bar, chart_color,
-                      chart_rgba, grid_rgba, panel_bg)
+                      chart_rgba, grid_rgba)
 import ui.components as ui
 
 # ── SVG ICON SYSTEM ────────────────────────────────────────────────────────
@@ -87,7 +88,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v8.0.0"
+VERSION = "v8.1.0"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -3288,6 +3289,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'Push': row.get('PRG_Push', 0),
                     'Stack_OK': bool(row.get('PRG_Stack_OK', False)),
                     'Action': row.get('CVG_Action', 'Unread'),
+                    'Cell': row.get('CVG_Cell', cg.UNREAD),
                     'Units': row.get('CVG_Units', 1.0),
                     'CVG_Side': row.get('CVG_Side', 0),
                     'Held': bool(row.get('CVG_Held', False)),
@@ -3448,6 +3450,14 @@ def _aggregate_timeseries(ts_df):
     daily_agg['Build_Pct'] = (daily_agg['_build'] / _read * 100).fillna(0)
     daily_agg['Cut_Pct']   = (daily_agg['_cut'] / _read * 100).fillna(0)
     daily_agg['Armed_Up']  = daily_agg['_armed_up']
+    # Tone share — the grid's five tones (Pragyam's CVG_TONE) as a share of names read.
+    if 'Cell' in ts_df.columns:
+        _cells = pd.to_numeric(ts_df['Cell'], errors='coerce').fillna(cg.UNREAD).astype(int)
+        _tone = _cells.map(lambda k: cg.TONES[k]).where(_cells != cg.UNREAD)
+        _share = (pd.crosstab(ts_df['Date'], _tone).reindex(daily_agg.index).fillna(0))
+        _den = _share.sum(axis=1).where(lambda x: x > 0)
+        for _t in charts.TONE_ORDER:
+            daily_agg[f'Tone_{_t}'] = ((_share[_t] if _t in _share.columns else 0) / _den * 100).fillna(0)
     daily_agg['Armed_Dn']  = daily_agg['_armed_dn']
 
     # Flow-zone breadth: % of names in accumulation vs distribution each day.
@@ -3612,19 +3622,25 @@ def render_timeseries_dashboard():
                                  "Share of the readable universe whose grid cell builds (Buy / Add / "
                                  "Accumulate) vs cuts (Trim / Reduce / Exit)",
                                  icon="grid", accent="emerald")
-        fig_grid = go.Figure()
-        fig_grid.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Build_Pct'], mode='lines',
-                                      name='Build-side %', fill='tozeroy',
-                                      fillcolor=chart_rgba('emerald', 0.10),
-                                      line=dict(color=chart_color('emerald'), width=2)))
-        fig_grid.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Cut_Pct'], mode='lines',
-                                      name='Cut-side %', fill='tozeroy',
-                                      fillcolor=chart_rgba('rose', 0.10),
-                                      line=dict(color=chart_color('rose'), width=2)))
-        fig_grid.update_layout(title='', height=320, hovermode='x unified',
-                               yaxis=dict(range=[0, 100], title='% of readable universe'))
-        apply_chart_theme(fig_grid)
-        ui.render_chart_panel(fig_grid, key='grid_breadth', context=_chart_ctx())
+        _tone_cols = [f'Tone_{t}' for t in charts.TONE_ORDER]
+        if all(c in daily_agg.columns for c in _tone_cols):
+            _ts = daily_agg[_tone_cols].rename(columns=lambda c: c[5:])
+            ui.render_chart_panel(charts.create_tone_history(_ts), key='grid_breadth',
+                                  context=_chart_ctx('% of names read'))
+            ui.render_note("Stacked in the order a book reads the grid — **build** (emerald), "
+                           "**watched** (cyan), **no edge** (grey), **caution** (amber), **cut** "
+                           "(rose). A band thickening toward the top is the universe climbing "
+                           "the grid; toward the bottom, sliding down it.")
+        else:
+            fig_grid = go.Figure()
+            fig_grid.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Build_Pct'], mode='lines',
+                                          name='Build-side %', line=dict(color=chart_color('emerald'), width=2)))
+            fig_grid.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Cut_Pct'], mode='lines',
+                                          name='Cut-side %', line=dict(color=chart_color('rose'), width=2)))
+            fig_grid.update_layout(title='', height=320, hovermode='x unified',
+                                   yaxis=dict(range=[0, 100], title='% of readable universe'))
+            apply_chart_theme(fig_grid)
+            ui.render_chart_panel(fig_grid, key='grid_breadth', context=_chart_ctx())
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("The Two Tapes, Universe Mean",
@@ -3712,25 +3728,28 @@ def render_timeseries_dashboard():
                                  icon="shield", accent="amber")
         vol_high = ts_df.groupby('Date')['Vol_Regime'].apply(
             lambda x: (x.isin(['HIGH', 'EXTREME'])).sum() / len(x) * 100)
-        fig_vol = go.Figure()
-        # High-Vol % belongs on the RIGHT axis (yaxis2) — without the explicit
-        # assignment both series shared y1 and the labeled right axis sat empty,
-        # letting the 0-100% line crush the per-day change-point counts.
-        fig_vol.add_trace(go.Scatter(x=daily_agg.index, y=vol_high.fillna(0),
-                                     mode='lines+markers', name='High Vol %',
-                                     yaxis='y2',
-                                     line=dict(color=chart_color('amber'), width=2),
-                                     marker=dict(size=5)))
-        fig_vol.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['Change_Point'],
-                                 name='Symbols with Regime Change',
-                                 marker=dict(color=chart_color('violet'), opacity=0.7)))
-        fig_vol.update_layout(
-            title='', height=250, hovermode='x unified',
-            yaxis=dict(title='# Symbols'),
-            yaxis2=dict(title='High-Vol %', overlaying='y', side='right'),
-        )
-        apply_chart_theme(fig_vol)
-        ui.render_chart_panel(fig_vol, key='volatility', context=_chart_ctx())
+        # Two measures on two scales → two charts on one shared time axis, never a
+        # second y-axis (a dual axis lets the reader's eye pair any two levels).
+        v1, v2 = st.columns(2)
+        with v1:
+            fig_vol = go.Figure()
+            fig_vol.add_trace(go.Scatter(x=daily_agg.index, y=vol_high.reindex(daily_agg.index).fillna(0),
+                                         mode='lines', name='High / extreme vol %',
+                                         fill='tozeroy', fillcolor=chart_rgba('amber', 0.12),
+                                         line=dict(color=chart_color('amber'), width=2)))
+            fig_vol.update_layout(title='', height=250, hovermode='x unified', showlegend=False,
+                                  yaxis=dict(title='% in high / extreme vol', range=[0, 100]))
+            apply_chart_theme(fig_vol)
+            ui.render_chart_panel(fig_vol, key='volatility', context=_chart_ctx('% of universe'))
+        with v2:
+            fig_cp = go.Figure()
+            fig_cp.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['Change_Point'],
+                                    name='Regime change points',
+                                    marker=dict(color=chart_color('violet'), line=dict(width=0))))
+            fig_cp.update_layout(title='', height=250, hovermode='x unified', showlegend=False,
+                                 yaxis=dict(title='# symbols changing regime'))
+            apply_chart_theme(fig_cp)
+            ui.render_chart_panel(fig_cp, key='change_points', context=_chart_ctx('# symbols'))
 
         st.markdown("<br>", unsafe_allow_html=True)
         col_r1, col_r2 = st.columns(2)
@@ -3910,7 +3929,12 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         # Resample to weekly if needed
         if timeframe == "Weekly":
-            close_df = resample_to_weekly(close_df)
+            # A frame of closes, one column per name — not OHLCV, so the last close of each
+            # week (the same W-MON bucketing resample_to_weekly uses).
+            close_df = close_df.copy()
+            close_df.index = pd.to_datetime(close_df.index)
+            close_df = (close_df.resample('W-MON', closed='left', label='left').last()
+                        .dropna(how='all'))
 
         progress_bar(progress_slot, 40, "Computing Returns", f"Method: {method}")
 
@@ -4343,8 +4367,19 @@ def _push_cell(push, held: bool = False, tier: str = "") -> str:
             f'title="{html.escape(title)}">{html.escape(glyph)}</td>')
 
 
+#: The glyph each tone carries in a table — the same shape it plots as on the map,
+#: so a state is never told by colour alone (charts.TONE_SYMBOL).
+_TONE_GLYPH = {"emerald": "▲", "cyan": "●", "amber": "■", "rose": "▼", "slate": "◆"}
+
+
+def _tone_ink(tone: str, t: "dict | None" = None) -> str:
+    """A grid tone as table ink; slate reads as secondary ink, not as a colour."""
+    t = t or ui.table_tokens()
+    return t["ink_secondary"] if tone == "slate" else t[tone]
+
+
 def _grid_cell(row) -> str:
-    """The grid state — the action, its reason and its units, coloured by the side it works."""
+    """The grid state — the action, its reason and its units, in the cell's TONE (Pragyam's CVG_TONE)."""
     try:
         cell = int(row.get('CVG_Cell', cg.UNREAD))
     except (TypeError, ValueError):
@@ -4352,9 +4387,9 @@ def _grid_cell(row) -> str:
     if cell == cg.UNREAD:
         return (f'<td class="numeric" style="color:{_dim()}; font-size:{ui.FS["2xs"]};" '
                 f'title="{html.escape(cg.MEANING[cg.UNREAD])}">unread</td>')
-    side = cg.SIDES[cell]
+    tone = cg.TONES[cell]
     held = bool(row.get('CVG_Held', False))
-    col = _long_c() if side > 0 else _short_c() if side < 0 else ui.table_tokens()["ink_secondary"]
+    col = _tone_ink(tone)
     lead = int(row.get('CVG_Lead', 0) or 0)
     tip = cg.tooltip(cell, cg.UNITS[cell], int(row.get('CVG_Bars', 1) or 1),
                      int(row.get('CVG_From', cg.UNREAD) or cg.UNREAD),
@@ -4362,7 +4397,8 @@ def _grid_cell(row) -> str:
     lead_g = (f' <span style="color:{_long_c() if lead > 0 else _short_c()};">'
               f'{"↑" if lead > 0 else "↓"}</span>') if lead else ""
     return (f'<td style="color:{col}; font-weight:600; font-size:{ui.FS["2xs"]}; white-space:nowrap;" '
-            f'title="{html.escape(tip)}">{html.escape(cg.action(cell))}'
+            f'title="{html.escape(tip)}"><span style="font-size:{ui.FS["3xs"]};">{_TONE_GLYPH[tone]}</span> '
+            f'{html.escape(cg.action(cell))}'
             f'<span style="color:{_neut_c()}; font-weight:400;"> · {html.escape(cg.reason(cell))} · '
             f'{cg.UNITS[cell]:g}u</span>{lead_g}</td>')
 
@@ -4810,6 +4846,14 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy') -> st
     return _html_doc(head, rows, _MAXH)
 
 
+_CENSUS_CELL_H = 66   # three stacked lines of text + padding, measured in the rendered iframe
+
+
+def _census_iframe_height(n_unread: int) -> int:
+    """The census is four tall rows, not four table rows — size its iframe for that."""
+    return ui.TABLE_HEADER_H + 4 * _CENSUS_CELL_H + (ui.TABLE_ROW_H + 8 if n_unread else 0) + 6
+
+
 def _build_grid_census_html(df: pd.DataFrame) -> str:
     """The 4 × 4 as the pane's grid: rows are who controls, columns where price stands.
 
@@ -4828,16 +4872,18 @@ def _build_grid_census_html(df: pd.DataFrame) -> str:
             cell = r * 4 + c
             n = int((cells == cell).sum())
             nh = int(((cells == cell) & held).sum())
-            side = cg.SIDES[cell]
-            col = _t["emerald"] if side > 0 else _t["rose"] if side < 0 else _t["ink_secondary"]
+            tone = cg.TONES[cell]
+            col = _tone_ink(tone, _t)
+            tint = "" if tone == "slate" or not n else f" background:{charts.chart_rgba(tone, 0.08)};"
             share = f"{n / n_read * 100:.0f}%" if n_read else "—"
             held_t = (f' <span style="color:{_t["amber"]};" title="rows held against their tape">'
                       f'· {nh} held</span>') if nh else ""
             tip = f"{cg.NAMES[cell]} - {cg.MEANING[cell]}. {cg.UNITS[cell]:g} units."
             tds.append(
-                f'<td style="text-align:center; padding:0.45rem 0.35rem; opacity:{1.0 if n else 0.45};" '
+                f'<td style="text-align:center; padding:0.45rem 0.35rem; opacity:{1.0 if n else 0.45};{tint}" '
                 f'title="{html.escape(tip)}">'
-                f'<div style="color:{col}; font-weight:700; font-size:{ui.FS["xs"]};">{html.escape(cg.action(cell))}</div>'
+                f'<div style="color:{col}; font-weight:700; font-size:{ui.FS["xs"]};">'
+                f'<span style="font-size:{ui.FS["3xs"]};">{_TONE_GLYPH[tone]}</span> {html.escape(cg.action(cell))}</div>'
                 f'<div style="color:{_t["ink_tertiary"]}; font-size:{ui.FS["2xs"]};">{html.escape(cg.reason(cell))} · {cg.UNITS[cell]:g}u</div>'
                 f'<div style="color:{_t["ink_primary"]}; font-weight:700; font-size:{ui.FS["sm"]}; margin-top:2px;">'
                 f'{n}<span style="color:{_t["ink_tertiary"]}; font-weight:400;"> · {share}</span>{held_t}</div></td>')
@@ -5180,21 +5226,9 @@ def render_correlation_results(corr_data: dict) -> None:
         if len(heatmap_data) > 0:
             # Filter to only the top symbols that exist in rolling_corr_df
             heatmap_rows = corr_df[corr_df['Symbol'].isin(valid_symbols)].copy()
-            fig = go.Figure(data=go.Heatmap(
-                z=heatmap_rows['Corr_Current'].values.reshape(-1, 1),
-                x=["Correlation"],
-                y=heatmap_rows['SimpleName'].values,
-                colorscale=[[0, chart_color('rose')], [0.5, panel_bg()], [1, chart_color('emerald')]],
-                zmid=0,
-                zmin=-1,
-                zmax=1,
-                text=heatmap_rows['Corr_Current'].values.reshape(-1, 1),
-                texttemplate='%{text:.2f}',
-                textfont={"size": 8, "color": chart_color("slate")},
-                colorbar=dict(title="Corr", thickness=15, len=0.7)
-            ))
-            apply_chart_theme(fig)
-            fig.update_layout(height=600, margin=dict(l=150, r=50, t=50, b=50))
+            heatmap_rows = heatmap_rows.sort_values('Corr_Current', ascending=True)
+            fig = charts.create_correlation_heatmap(heatmap_rows['SimpleName'].values,
+                                                    heatmap_rows['Corr_Current'].values)
             ui.render_chart_panel(fig, key='corr_0', context=_chart_ctx())
         else:
             ui_info("No correlation data available for heatmap")
@@ -5349,6 +5383,30 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
         }),
     )
 
+    # ── Run configuration — Pragyam's key/value readout ───────────────────
+    ui.render_section_header(
+        "Run Configuration",
+        "The settings this frame was computed under",
+        icon="cpu", accent="violet",
+    )
+    _p = sid.params
+    ui.render_kv_table({
+        "Universe": f"{universe or '—'}" + (f" · {selected_index}" if selected_index else ""),
+        "Analysis date": str(analysis_date or "—"),
+        "Timeframe · chart": f"{sid.timeframe} · {sid.chart}",
+        "Conviction ladder": sid.ladder_label,
+        "Value ladder": sid.value_ladder_label,
+        "Length · smooth · norm": f"{_p.length} · {_p.smooth} · {_p.norm}"
+                                  + (" (adapted)" if sid.norm_is_adapted else ""),
+        "Signal EMA": str(_p.signal),
+        "θ (trace stretch)": f"±{sv.THETA_OSC:.1f}",
+        "TURN window · confirm": f"{_p.turn} · {_p.confirm}",
+        "RESUME gate k · cooldown": f"{float(_p.k):g}σ · {_p.cool} bars",
+        "Hold horizon": f"{sid.horizon} bars",
+        "Round-trip cost": f"{sid.cost_bps:g} bps",
+        "Instrument class": sid.iclass,
+    }, header_left="Setting", header_right="Value")
+
     # ── Signal Reference ──────────────────────────────────────────────────
     ui.render_section_header(
         "Signal Reference",
@@ -5381,23 +5439,44 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
         f"name in, named as an action",
         icon="grid", accent="violet",
     )
-    g1, g2, g3, g4 = st.columns(4)
-    with g1: ui.render_metric_card("Build-Side", f"{n_build / n_read * 100:.0f}%",
-                                   f"{n_build} names in Buy / Add / Accumulate", "success")
-    with g2: ui.render_metric_card("Cut-Side", f"{n_cut / n_read * 100:.0f}%",
-                                   f"{n_cut} names in Trim / Reduce / Exit", "danger")
-    with g3: ui.render_metric_card("Held Rows", str(n_held),
-                                   "the tape moved, the push has not confirmed", "warning")
-    with g4: ui.render_metric_card("TURN Windows", str(int((armed != 0).sum())),
-                                   f"{int((armed > 0).sum())} ▲ · {int((armed < 0).sum())} ▼ awaiting "
-                                   "confirmation", "violet")
+    # ── census by TONE — Pragyam's reading order: build → watched → no edge → caution → cut ──
+    tones = cells.astype(int).map(lambda k: cg.TONES[k])[cells != cg.UNREAD]
+    actions = read.get('CVG_Action', pd.Series("", index=read.index)).astype(str)
+    kpis = []
+    for tone in charts.TONE_ORDER:
+        sel = (tones == tone).to_numpy()
+        n = int(sel.sum())
+        mix = actions[sel].value_counts()
+        kpis.append({"label": f"{_TONE_GLYPH[tone]} {charts.TONE_LABEL[tone].split(' — ')[0]}",
+                     "value": f"{n / n_read * 100:.0f}%",
+                     "subtext": " · ".join(f"{k} {v}" for k, v in mix.items()) or "none on this bar",
+                     "color_class": cg.TONE_CHIP[tone],
+                     "tooltip": charts.TONE_LABEL[tone]})
+    ui.render_kpi_strip(kpis, max_cols=5, key=f"{key}-tone-strip")
+    ui.render_note(f"**{n_build}** names sit on the build side and **{n_cut}** on the cut side. "
+                   f"**{n_held}** rows are *held* — the tape moved, the push has not confirmed — "
+                   f"and **{int((armed != 0).sum())}** TURN windows are open "
+                   f"({int((armed > 0).sum())} ▲ · {int((armed < 0).sum())} ▼).")
 
+    # ── the plane: every name at its two tapes ──
+    ui.render_sub_header("Conviction-value map")
+    ui.render_chart_panel(charts.create_conviction_value_map(results_df), f"{key}-map",
+                          units="conviction tape × value tape")
+    ui.render_note("Each name sits where its two tapes put it; its **shape and colour are its grid "
+                   "state**. Dotted lines are the knees (±30 conviction, ±θ value). A *hollow* "
+                   "point is a held row — the tape has moved into a new cell but the push has not "
+                   "yet backed it. An accent ring marks a TURN or RESUME on this bar.")
+
+    ui.render_sub_header("Census")
+    n_un = int((cells == cg.UNREAD).sum())
     with ui.html_panel(f"{key}-census", context=_chart_ctx("cell counts · share of names read")):
-        st.components.v1.html(_build_grid_census_html(results_df), height=ui.table_iframe_height(6, max_height=420))
+        st.components.v1.html(_build_grid_census_html(results_df),
+                              height=_census_iframe_height(n_un))
     ui.render_note("Rows are who controls (the conviction tape, split at ±30 and 0); columns "
-                   "are where price stands (the value tape, split at ±θ and 0). Green cells "
-                   "build a position, red cells cut one, grey ones change nothing. "
-                   + cg.READ_THE_PUSH)
+                   "are where price stands (the value tape, split at ±θ and 0). A cell wears its "
+                   "tone: **emerald** builds below a rich price, **cyan** is cheap and watched, "
+                   "**amber** is rich or stalling, **rose** is sellers in control, grey has no "
+                   "edge. " + cg.READ_THE_PUSH)
 
     # ── the watchlist: TURN windows open ──
     wl = results_df[armed != 0].copy()
