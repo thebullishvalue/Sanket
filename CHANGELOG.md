@@ -7,6 +7,63 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v9.0.0] · 2026-09-27
+### Pragati v9 — a fresh audit, the measuring stick fixed, the signals moved to where the edge is
+
+Everything in `pragati.pine` v8 was audited again from scratch — purpose, engines, every signal,
+the grid, open interest, and the presentation — on 380 instruments in six classes, ~20 years of
+daily bars **and weekly bars**, with a stricter rule: a change must hold in **all three eras**
+(2006–13, 2014–19, 2020–26). Report: [`studies/pragati_v9_audit.md`](studies/pragati_v9_audit.md);
+scripts: `studies/v9_lab/`.
+
+**The measuring stick was biased — fixed first.** v8's audit (and the app's Edge Study) scored
+readings against returns demeaned by the era's *own* mean. On pure random walks that alone scores a
+20-bar momentum reading at −0.04σ over 40 bars — "everything reverts" with nothing in it — and it
+flatters events that cluster in names whose era went badly. v9's scorers are causal (a position
+centred on its own trailing mean; returns over trailing volatility; market-neutral cross-section and
+rank IC for stocks) and read ≈ 0 on random walks.
+
+**What the data says, on the corrected stick.**
+- The pane's readings — conviction, value, the trace, its histogram, both tapes — carry almost no
+  timing information of their own. They describe; they barely forecast.
+- **Capitulation** (sellers in control across the ladder at a price cheap past θ) was followed by
+  gains in every era (+0.057 / +0.064 / +0.069σ at 10 bars, time-series; market-neutral agrees),
+  on weekly bars too, and under every one of nine engine variations. It kept working after 2020,
+  when plain oversold (RSI < 30) turned negative. Exit · distribution was negative in every era.
+- v8's ▲▼ TURN faded to +0.005σ after 2020, read **−0.06 to −0.07σ on weekly bars**, and on daily
+  worked only when a capitulation came first (TURN without one: −0.037σ after 2020). R divergence
+  read ≈ 0 everywhere; H, the ◆ and the held declaration nothing.
+- Inside capitulation, value momentum already reverting beat still-widening in every era.
+- Open interest (187 F&O stocks): the gold cast and short-covering rallies lagged in both halves;
+  build-ups did not predict continuation.
+
+**What changed** (Pine and port in parity — 0 mismatches over 81,623 bars):
+
+| | v8 | v9 |
+|---|---|---|
+| ▲ | TURN: the trace back through −θ, confirmed on its tapes | **CAPITULATION**: the grid's Buy · capitulation with value momentum reverting (+0.046 / +0.056 / +0.046σ, every era; weekly too) |
+| ▼ | TURN, mirrored | **DISTRIBUTION**: sellers taking control of a rich price (measured as a state) |
+| v8's TURN | the signal | one setting away — `▲ ▼ source: TURN (v8, legacy)` / `signal_source="turn"` |
+| R divergence | on | **off by default** (H, ◆ already off) |
+| App's Edge Study | drift removed within era | **drift and σ from returns realised before each event** |
+| Claims | v5/v7 text in places | rewritten to what was measured — header, tooltips, panel, readout, alerts, app, docs |
+
+In the Pine the grid's state engine moved above the signals (the ▲▼ are read from it); section 8b is
+new; the alerts are "▲ capitulation turn" and "▼ distribution". In Sanket: `pragati.v9_signals`
+(applied in `engine.compute_frame`), labels ▲ CAPITULATION / ▼ DISTRIBUTION, a watchlist of
+capitulations whose value has not yet turned, `ENGINE_SIG` `prg2` so cached studies re-measure.
+`archive/pragati_v8.pine` keeps v8.
+
+**What did not change.** Every engine and every numeric input (nine ablations — participation off,
+the Effort denominator, RV-only or breadth-only value, hedge off, inner zone 20/40, θ 1.0/2.0 — none
+beat the defaults in its worst era); the grid's units; the ranking.
+
+**Limits.** About +0.05σ over 10–20 bars: a lean, not a trade, usually UNDERPOWERED on one
+universe's Edge Study. Crypto is the exception. Intraday unmeasured. The `.pine` is not compiled
+here — load it in TradingView and confirm it compiles.
+
+---
+
 ## [v8.4.0] · 2026-09-27
 ### Pragati v8 — the final version: v5's grid, measured units, the audit's defaults
 

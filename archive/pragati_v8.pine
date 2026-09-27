@@ -3,66 +3,56 @@
 
 //@version=6
 // ═══════════════════════════════════════════════════════════════════════════
-//  PRAGATI · प्रगति  ·  MULTI-TIMEFRAME CONVICTION OSCILLATOR              v9
+//  PRAGATI · प्रगति  ·  MULTI-TIMEFRAME CONVICTION OSCILLATOR              v8
 //  "Is this move paid for - and is it paid for on every timeframe?"
 //
-//  ═══ v9 · A FRESH AUDIT, AND THE SIGNALS MOVED TO WHERE THE EDGE IS ════════
-//  HOW IT WAS MEASURED. From scratch (Sanket repo: studies/pragati_v9_audit.md).
-//  The Python port of this script (bar-for-bar checked) run on 380 instruments
-//  in six classes - NSE and US stocks, world indices, commodities, FX, crypto -
-//  on ~20 years of daily bars and again on weekly bars. Three eras, each change
-//  required to hold in ALL of them: 2006-13, 2014-19, 2020-26.
+//  ═══ v8 · THE PRODUCTION RELEASE, AND THE MEASUREMENT BEHIND IT ═══════════
+//  v8 is v5 with five defaults and one table changed by measurement - nothing
+//  else. Every engine, rule and input is v5's.
 //
-//  THE MEASURING STICK WAS FIXED FIRST. v8's audit scored each reading against
-//  returns with the era's own mean subtracted. On pure random walks that alone
-//  makes a persistent momentum reading score as reversion (up to −0.04σ over
-//  40 bars): the stick leaned toward "everything reverts". v9 scores without
-//  look-ahead - each position centred on its own trailing 250-bar mean, returns
-//  scaled by trailing volatility, checked to read ≈ 0 on random walks - and,
-//  for stocks, by cross-sectional rank IC. v8's headline numbers below were on
-//  the old stick; the conclusions that survive are restated on the new one.
-//
-//  WHAT THE DATA SAYS.
-//  · The pane's readings - conviction, value, the trace, its histogram, both
-//    tapes - carry almost no timing information of their own once measured
-//    without look-ahead. They describe; they do not forecast.
-//  · The CAPITULATION state - sellers in control across the ladder at a price
-//    cheap past θ, the grid's DOWN · cheap cell - was followed by gains in all
-//    three eras (+0.06 to +0.08σ over 10-20 bars outside crypto), on daily and
-//    weekly bars, under every engine variation tried. It kept working after
-//    2020, when plain oversold (RSI < 30, a 20-bar fall) stopped.
-//  · v8's ▲▼ TURN faded to nothing after 2020, read NEGATIVE on weekly bars,
-//    and on daily worked only when a capitulation came first. R divergence read
-//    about zero everywhere; H and the ◆ negative or mixed; the standing
-//    declaration held as a position, zero.
-//  · Inside the capitulation cell, value momentum already REVERTING beat value
-//    still widening in every era - the 5 × 5 phase the grid already reads.
-//  · Open interest (187 NSE F&O stocks, 2019-26): pushes under the gold cast
-//    lagged other pushes in both halves; short-covering rallies lagged too.
+//  HOW IT WAS MEASURED. From scratch, not from this script's own claims
+//  (pine_audit.py and pine_v5.py in the Sanket repo; studies/pine_audit.md).
+//  Every rule here was ported to Python and checked bar for bar - the ▲▼ and ◆
+//  on six instruments with zero mismatches, the grid's graded units against
+//  Pragyam's own code with zero difference - then run on 380 instruments in six
+//  classes (NSE and US stocks, world indices, commodities, FX, crypto), ~20
+//  years of daily bars. Each output became a position scored on the next bars'
+//  return, the instrument's own drift removed, in σ. Chosen on data BEFORE 2018,
+//  judged once on data AFTER it; intervals block-bootstrapped by date.
+//  v5 was measured with the conviction ladder on Ladder up (W · D): twenty
+//  years of the 1m-4h intrabars Ladder down reads exist on no free feed.
 //
 //  WHAT CHANGED.
-//  1 · ▲ IS NOW THE CAPITULATION TURN - the first closed bar the grid stands in
-//      DOWN · cheap with value momentum reverting (+0.046 to +0.056σ over 10
-//      bars in each era, daily; positive on weekly). ▼ IS DISTRIBUTION - the
-//      first bar sellers hold control of a price rich past θ. Both are the
-//      grid's own reading, so marker and CVG row always agree. v8's TURN stays
-//      one setting away ('▲ ▼ source': TURN, legacy).
-//  2 · R DIVERGENCE IS OFF BY DEFAULT, as H and the ◆ already were.
-//  3 · The claims throughout this header, the tooltips, the panel and the
-//      alerts were rewritten to what was measured.
+//  1 · THE GRID'S UNITS. Sellers in control at a cheap price was followed by
+//      gains in BOTH eras on every class but crypto (+0.12σ before 2018, +0.21σ
+//      after, over 10 bars) - v5 called it Watch, 1 unit. Buyers in control at a
+//      fair price lagged in both eras - v5 called it Add, 3 units.
+//                 CHEAP                FAIR                  RICH
+//      UP         Buy 3                Hold 1.5   (was Add 3)   Trim 0.75 (was Hold 1.5)
+//      FAINT      Accumulate 1.5       Wait 1                Trim 0.75
+//      DOWN       Buy 3  (was Watch 1) Accumulate 1.5 (was Reduce 0.5)  Exit 0.25
+//      As a position the grid scored −0.027σ (v5) against +0.039σ (v8) after
+//      2018, +0.040σ paired and significant; it beat the 4 × 4 grid of the v6 line
+//      (v7) by +0.017σ paired, significant. In Pragyam's own allocator - monthly,
+//      every name held - the same four moves beat the seed units in both eras on
+//      Nifty 50 and Dow 30, at lower turnover. Crypto trends and is the stated
+//      exception: the capitulation cells carried nothing there.
+//  2 · ◆ CONTINUATION IS OFF BY DEFAULT. Negative in both eras outside crypto
+//      (−0.021σ, −0.041σ), significantly so on US stocks in both.
+//  3 · THE CONVICTION LADDER DEFAULTS TO LADDER UP (W · D on a daily chart) -
+//      the configuration measured, and the one Pragyam reads. Ladder down stays
+//      available, unmeasured.
+//  4 · THE OI GOLD CAST IS ON BY DEFAULT. On 240 NSE F&O stocks, 2019-2026, a
+//      push the cast marks - paid for mostly by exits - did worse than other
+//      pushes in both eras (−0.060σ against −0.018σ after 2023, significant).
+//      Colour only: nothing reads it.
+//  5 · R and H keep their defaults, with their claims corrected: R showed no
+//      edge (−0.031σ before 2018, +0.024σ after); H was negative in both eras.
 //
-//  WHAT DID NOT CHANGE, AND WHY. Every engine and every number. Nine engine
-//  variations - participation off, the Effort denominator, value from its RV
-//  or breadth leg alone, the macro hedge off, the inner zone at 20 or 40, θ at
-//  1.0 or 2.0 - all kept the capitulation edge and none beat the defaults in
-//  its worst era. v8's grid units were not moved: re-measured, they held.
-//  Tuning still does not transfer (v8: 161 sets, ρ +0.10 between eras).
-//
-//  v8 (kept as the record): v5 with the grid's units re-weighted - DOWN · cheap
-//  Buy 3 (was Watch 1), DOWN · fair Accumulate 1.5 (was 0.5), UP · fair Hold
-//  1.5 (was Add 3), UP · rich Trim 0.75 (was 1.5) - ◆ off, conviction ladder on
-//  Ladder up, the OI gold cast on. In Pragyam's own allocator the v8 units beat
-//  the seed in both eras on Nifty 50 and Dow 30, at lower turnover.
+//  WHAT DID NOT CHANGE, AND WHY. 161 random parameter sets: a set's pre-2018
+//  edge correlated +0.10 with its post-2018 edge, and picking the best tenth did
+//  WORSE afterwards than a typical set. Every numeric input keeps v5's default.
+//  The ▲▼ were a tie with the v6 line's (paired ≈ 0).
 //
 //  Pragati is progress: travel that turns into displacement and holds under
 //  load. Its CONVICTION measures how consistently, and with how much
@@ -70,9 +60,9 @@
 //  whole, measures where price stands against fair. The pane draws one TRACE
 //  of the two - blended by default, or either alone - and its histogram. Four
 //  tapes read a ladder of timeframes through the two instruments, each on its
-//  own ladder setting: whether conviction HOLDS across the frames, and where
-//  the frames stand in VALUE - both on Ladder up by default (W · D on a daily
-//  chart, what Pragyam reads). Each instrument has a LEVEL tape and a MOMENTUM
+//  own ladder setting: whether conviction HOLDS across the frames (ladder
+//  down by default), and where the frames stand in VALUE (ladder up by
+//  default, as in Samanvaya). Each instrument has a LEVEL tape and a MOMENTUM
 //  tape.
 //
 //      +90  MTF CONVICTION MOMENTUM  which way the faster frames lead
@@ -98,9 +88,9 @@
 //      +90   MTF conviction momentum tape              faster frames − slower
 //      +82   MTF conviction tape                       who controls the ladder
 //      +60   dashed rail · bearish R H                  divergence
-//      +in   dotted rail · ▼ distribution, short ◆           signals
+//      +in   dotted rail · ▼ SELL declaration, short ◆ signals
 //        0   trace, signal line, histogram             the trace chosen
-//      −in   dotted rail · ▲ capitulation turn, long ◆     signals
+//      −in   dotted rail · ▲ BUY declaration, long ◆   signals
 //      −60   dashed rail · bullish R H                  divergence
 //      −82   MTF value tape                            rich or cheap on the ladder
 //      −90   MTF value momentum tape                   faster frames − slower
@@ -189,9 +179,9 @@
 //  not a working zone. The ingredients point opposite ways a third of the
 //  time, always with the blend inside θ, so the dim never hides a stretch.
 //
-//  MEASURED (v9). As a position the blended trace and its histogram carry
-//  almost no timing information once scored without look-ahead - read them as
-//  description: how far the move is stretched, and which way it is pushed.
+//  UNMEASURED. The blended trace and its histogram are new objects: nothing
+//  above says whether they predict anything. Every figure in EVIDENCE was
+//  measured on the Conviction trace; Samanvaya's on the Value trace's level.
 //
 //  ═══ READING THE TAPES WITH THE PANE ══════════════════════════════════════
 //  All four tapes use the pane's colour language, so nothing new is learned:
@@ -258,10 +248,9 @@
 //
 //  Every signal ENFORCES both level tapes (see THE SIGNALS); the tapes are
 //  drawn so the reading behind a marker can be checked at a glance. The
-//  momentum tapes are context for the pane; the GRID reads both as its 5 × 5
-//  phases, and v9's ▲ needs the value momentum reverting - so switching a
-//  momentum TAPE off hides the band, never the reading. Measured (v9): inside
-//  the capitulation cell, value momentum reverting beat widening in every era.
+//  momentum tapes are context: no signal reads them, so switching either off
+//  (each has its own switch under 2 · MTF tapes) changes nothing that fires.
+//  None of it is measured.
 //
 //  ═══ TWO DIRECTIONS, ONE SETTING PER TAPE ════════════════════════════════
 //  Each tape has its own ladder input, so they can read opposite directions.
@@ -464,13 +453,13 @@
 //  the book is (gold from the 80th percentile: crowded), the size of the
 //  change in σ, and how long the character has held.
 //
-//  The OI row is display only. The CVG row's state is what v9's ▲▼ read. The
-//  defaults read both tapes on D · W on a daily chart, exactly as Pragyam does.
+//  Display only: nothing on the pane reads either row. Pragyam reads D · W -
+//  on a daily chart set both ladders to Ladder up to match it.
 //
 //  ═══ THE SIGNALS · THREE FAMILIES ══════════════════════════════════════════
-//  INDICATOR SIGNALS, NOT TRADES. A ▲▼ marks a state the market has entered;
-//  the last one stands as the DECLARATION until the opposite one, with no exit.
-//  Every signal needs every one of its layers; nothing is optional:
+//  INDICATOR SIGNALS, NOT TRADES. A ▲▼ is a DECLARATION about the market at
+//  that bar; it stands until the opposite one and has no exit. Every signal
+//  needs every one of its layers; nothing is optional:
 //
 //      CHART        this timeframe: the trace and its histogram, the rails,
 //                   conviction's control and pivots, the impulse,
@@ -478,19 +467,7 @@
 //      CONVICTION   the +82 tape, C
 //      VALUE        the −82 tape, V - rich (+) or cheap (−), judged against θ
 //
-//  1 · ▲ ▼  read from the Conviction-Value Grid (v9 - the measured events)
-//      ▲ CAPITULATION TURN   the first closed bar on which the grid stands in
-//                   DOWN · cheap - C past −inner zone and held there by
-//                   conviction's histogram, V ≤ −θ - with value momentum
-//                   REVERTING (the fast end of value turned back toward fair).
-//                   Sellers still in control, price already cheap across the
-//                   frames, and the cheapening already easing.
-//      ▼ DISTRIBUTION        the first closed bar on which the grid stands in
-//                   DOWN · rich - sellers in control of a price V ≥ +θ.
-//      Measured in the v9 block at the top. The row is the grid's own push-
-//      gated row, so the ▲▼ inherit its three layers exactly.
-//
-//      LEGACY · TURN (v8), on '▲ ▼ source':
+//  1 · DECLARATION  ▲ ▼   Samanvaya's triangle, read through all of Pragati
 //      ARM        the trace crosses UP through −θ with the value basket
 //                 settled - on the Conviction trace, Samanvaya's value on
 //                 this chart does. Falling back below −θ cancels the arm.
@@ -500,7 +477,10 @@
 //        CONV · LADDER     C > 0, or C rising two bars running
 //        EFFORT → RESULT   participation absorbed at some point in the
 //                          dislocation window (switchable)
-//      Measured in v9: no edge after 2020, negative on weekly bars.
+//      In one line: cheap across the frames, effort exhausted, and buyers
+//      starting to do the work - on this chart and on the ladder.
+//      Arm-then-confirm replaced a same-bar rule that lost every ▲▼ whose
+//      layers turned one bar apart.
 //
 //  2 · CONTINUATION  ◆   the pullback reset value without breaking the push
 //      CHART        conviction > 0; the trace's histogram went < 0 inside
@@ -546,14 +526,16 @@
 //  layer. A ▲▼ also cannot arm while the basket settles after a rotation.
 //
 //  FREE PARAMETERS - none fitted for this stack: the trace's equal blend and
-//  its ±60 outer rail; θ (1.5); the inner zone reused as C's threshold; the
-//  cooldown (10); for the legacy TURN, 'rising two bars', the dislocation
-//  window (20), the confirmation window (5) and the absorption cut (bottom
-//  fifth); V > 0 for R; the pullback window (6). The v9 audit varied the ones
-//  the ▲ reads (inner zone 20-40, θ 1.0-2.0) and kept the defaults.
+//  its ±60 outer rail; θ (1.5); the inner zone
+//  reused as C's threshold (C averages several z's, so it reaches the zone less
+//  often than the trace); 'rising two bars'; the dislocation window (20); the
+//  confirmation window (5); the absorption cut (bottom fifth); V > 0 for R;
+//  the cooldown (10); the pullback window (6).
 //
-//  MEASURED AS A STACK in v8 and v9 (the blocks at the top), daily and weekly,
-//  never intraday: twenty years of intrabars exist on no free feed.
+//  UNMEASURED AS A STACK. Every figure in EVIDENCE below was measured on the
+//  chart layer alone. Samanvaya's figures are the information coefficient of
+//  its oscillator LEVEL on weekly data - not of the crossing as an event, and
+//  not intraday.
 //
 //  ═══ HOW TO READ IT ═══════════════════════════════════════════════════════
 //  ZERO LINE - on the Conviction trace, who is in control on this chart; on
@@ -566,16 +548,17 @@
 //      1.5σ stretch - where a ▲▼ can form as it releases - and ±60 a 3σ one.
 //      A setting, never a signal.
 //
-//  DIVERGENCE - read as a condition, and both families are OFF by default in
-//  v9: re-measured, R read about zero in every era and H was negative or mixed.
+//  DIVERGENCE - read as a condition. The v8 audit found no edge in R (see
+//  EVIDENCE); H was negative in both eras and is off by default.
 //      REGULAR BEARISH   price higher high, conviction lower high    → reversal
 //      REGULAR BULLISH   price lower low,   conviction higher low    → reversal
 //      HIDDEN  BEARISH   price lower high,  conviction higher high   → continuation
 //      HIDDEN  BULLISH   price higher low,  conviction lower low     → continuation
 //
-//  THE STRONGEST READING the v9 audit found is the ▲ itself - a capitulation
-//  whose value momentum has turned - and the CVG row's Buy · capitulation state
-//  behind it. Everything else on the pane describes; that is the one lean.
+//  THE STRONGEST READING is a regular divergence formed in a zone, confirmed by
+//  the ladder, followed by a ▲▼ in the same direction - the chart, the ladder's
+//  conviction and value across horizons all turning together. Read, not
+//  enforced: the R and the triangle are separate families.
 //
 //  WITH THE PROFILE ON, read the divergence against the structure too: a high in
 //  a low-volume node is distribution into thin air; the same high at the point
@@ -585,7 +568,7 @@
 //      TAPE          +90   MTF conviction momentum - faster minus slower
 //      TAPE          +82   MTF conviction - control across the ladder
 //      OUTER DASHED  ±60     divergences    R regular      H hidden
-//      INNER DOTTED  ±30|θ   signals        ▲ capitulation ▼ distribution ◆
+//      INNER DOTTED  ±30|θ   signals        ▲▼ declaration ◆ continuation
 //      TAPE          −82   MTF value - rich (green) / cheap (red) across it
 //      TAPE          −90   MTF value momentum - faster minus slower
 //
@@ -633,10 +616,10 @@
 //    persistently trending instrument one side's zone is visited more often.
 //
 //  ═══ EVIDENCE ═════════════════════════════════════════════════════════════
-//  THE v9 AUDIT is the evidence for this version - the block at the top, and
-//  studies/pragati_v9_audit.md in the Sanket repo. What follows is the
-//  ORIGINAL author's evidence for the single-frame engine (Nishchaya v3, the
-//  Conviction trace, Agreement denominator), kept as the record.
+//  Measured on the Conviction trace - the single-frame engine, published as
+//  Nishchaya v3 - under the Agreement denominator, which is the default. The
+//  tapes, the signal stack and the blended trace are unmeasured; so is any
+//  signal read off the blended trace's histogram.
 //
 //  METHOD. Every signal entered at the NEXT bar's open, bracketed at two ATR of
 //  target against one ATR of stop, twenty bars maximum, stop assumed first when a
@@ -670,8 +653,8 @@
 //        and Zhu 2016). What the evidence supports is "no demonstrated edge".
 //
 //  GLYPH INTENSITY FOLLOWS EVIDENCE WEIGHT. Every marker is sized
-//  automatically; the ▲▼ - v9's measured events - are drawn solid; R, H and
-//  the ◆, none of which held up when re-measured, lighter.
+//  automatically; R, the measured element, and the ▲▼ are drawn solid, the
+//  instrument-dependent ◆ and the edgeless H lighter.
 //
 //  ON OPTIMISING THE INPUTS. 900 randomised parameter sets: fitted edge and
 //  unseen edge correlate at about zero. Lookback at or above 20 and the inner
@@ -777,7 +760,7 @@ float  inpCap  = input.float(3.0, "Participation cap", minval=1.0, maxval=10.0, 
 string inpTrace = input.string("Conviction × Value", "Trace", options=["Conviction × Value", "Conviction", "Value"], group=G_M, tooltip="WHAT THE PANE DRAWS. The histogram is always this trace minus its own signal EMA.\n\nCONVICTION × VALUE (default) - how far the move is STRETCHED on this chart, in one-sided effort and in price against fair value: conviction in σ and Samanvaya's value in σ, blended equally, their measured correlation restoring the blend's variance, and bounded once on Samanvaya's scale - Samanvaya's own recipe for its two legs, one level up. Read against θ (±43 at the default) and ±60, a 3σ stretch. It DIMS while its two ingredients point opposite ways - accumulation or distribution, not quiet - and while the value basket settles.\n\nCONVICTION - the single-frame engine alone, bit-identical to Nishchaya v3: every number in the evidence was measured on it, and with it the script reads exactly as it did before this setting. Read against the conviction zones.\n\nVALUE - Samanvaya's value on this chart alone, read against θ.\n\nWHAT FOLLOWS THE TRACE: the columns and their tiers, the impulse gate, the ◆ pullback and resume, the ▲▼ push and - when the trace carries value - the ▲▼ arm, the rails and the panel's headline. WHAT STAYS ON CONVICTION: the conviction ladder's chart rung and momentum tape, control for a ◆, the divergence pivots (off the Conviction trace their connectors move to the price chart), the quiet regime, and the Conviction-Value Grid, which reads conviction's histogram as Pragyam does.\n\nThe blend is unmeasured.", display=display.none)
 string inpTape = input.string("Ladder up", "MTF conviction ladder", options=["Ladder down", "Ladder up", "Off"], group=G_M, tooltip="Which ladder of timeframes feeds the MTF CONVICTION tape (+82) - Pragati's own - and its MOMENTUM tape (+90). The MTF VALUE tapes have their own setting just below.\n\nV8 DEFAULTS TO LADDER UP - the configuration measured (studies/pine_audit.md in the Sanket repo) and the one Pragyam reads. Ladder down is unmeasured: twenty years of its intrabars exist on no free feed.\n\nLADDER DOWN - every standard frame BELOW the chart: 15m reads 1m · 3m · 5m · 15m, daily reads 1m through 4h, then D. Each lower frame is its conviction averaged across its own bars inside the chart bar, weighted by participation. Every lower frame's window is SHORTER than the chart's, so this is a FASTER read than chart conviction: whether the chart's conviction is BUILT from the bars inside it - it sees a turn inside the bars before the chart does.\n\nLADDER UP (default) - the chart and the standard frames ABOVE it, up to 4h: 5m reads 4h · 1h · 30m · 15m · 5m, daily reads W · D. A SLOWER read: whether the conviction is HELD by the frames that contain the chart.\n\nThe signal rules are the same in both directions; what each condition MEANS follows the direction, and the header's SIGNALS section spells out both.\n\nFALLBACK - if the chosen direction has no frames on this chart (Ladder up on 4h or weekly, Ladder down on 1m), the other direction is read and the tape's label shows ↺. Nothing pauses silently.\n\nOFF - no conviction tapes. Every signal needs both level tapes, so with this Off no signal can fire.\n\nUnmeasured.", display=display.none)
 bool   inpMomC = input.bool(true, "    Conviction momentum tape  (+90)", group=G_M, tooltip="MTF CONVICTION MOMENTUM (+90) - Dhṛti's momentum tape, on the conviction ladder above: the faster view of conviction minus the slower, in the tape's own points.\n\nLADDER DOWN - the bar's insides minus the bar. Bright against chart conviction's side is the inside of the bars turning before the chart does (TURNING INSIDE); with it, BUILDING INSIDE.\nLADDER UP - the chart minus the frames that contain it. Bright in the conviction tape's hue is the chart RUNNING AHEAD; against it, a PULLBACK in progress.\n\nShaded on the pane's own three column tiers: near-solid while the pull grows past k·σ of its own history, moderate while it grows below it, pale while it shrinks.\n\nContext only - no signal reads it, so switching it off changes nothing that fires. It requests no data. Unmeasured.", display=display.none)
-string inpVLad = input.string("Ladder up", "MTF value ladder", options=["Ladder up", "Ladder down", "Off"], group=G_M, tooltip="Which ladder of timeframes feeds the MTF VALUE tape (−82) and its MOMENTUM tape (−90) - Samanvaya's MTF bias and momentum, with Samanvaya's own rung choice.\n\nLADDER UP (default, as in Samanvaya) - the chart and the standard frames above it, 4h the intraday ceiling: 5m reads 4h · 1h · 30m · 15m · 5m, daily reads W · D, weekly reads M · W. Every higher rung is the WHOLE composite: the RV leg exactly and the breadth leg at its last closed bar. A SLOWER read: where the frames that contain the chart say price stands.\n\nLADDER DOWN - the three standard frames nearest below the chart, breadth leg only.\n\nWith the defaults both tapes read the chart and the frames above it (D · W on a daily chart) - what Pragyam reads. With conviction on Ladder down the stack reads three horizons: inside the bar, the chart, and above it.\n\nFALLBACK - if the chosen direction has no frames on this chart (Ladder up on 4h, 45m or monthly), the other direction is read and the label shows ↺.\n\nOFF - no value tapes; Samanvaya's chart-frame engine still runs. Every signal needs both level tapes, so with this Off no signal can fire.\n\nColours as set: GREEN = rich, RED = cheap.", display=display.none)
+string inpVLad = input.string("Ladder up", "MTF value ladder", options=["Ladder up", "Ladder down", "Off"], group=G_M, tooltip="Which ladder of timeframes feeds the MTF VALUE tape (−82) and its MOMENTUM tape (−90) - Samanvaya's MTF bias and momentum, with Samanvaya's own rung choice.\n\nLADDER UP (default, as in Samanvaya) - the chart and the standard frames above it, 4h the intraday ceiling: 5m reads 4h · 1h · 30m · 15m · 5m, daily reads W · D, weekly reads M · W. Every higher rung is the WHOLE composite: the RV leg exactly and the breadth leg at its last closed bar. A SLOWER read: where the frames that contain the chart say price stands.\n\nLADDER DOWN - the three standard frames nearest below the chart, breadth leg only.\n\nWith the defaults the stack reads THREE HORIZONS: inside the bar (conviction ↓), the chart itself, and the frames above it (value ↑).\n\nFALLBACK - if the chosen direction has no frames on this chart (Ladder up on 4h, 45m or monthly), the other direction is read and the label shows ↺.\n\nOFF - no value tapes; Samanvaya's chart-frame engine still runs. Every signal needs both level tapes, so with this Off no signal can fire.\n\nColours as set: GREEN = rich, RED = cheap.", display=display.none)
 bool   inpMomV = input.bool(true, "    Value momentum tape  (−90)", group=G_M, tooltip="MTF VALUE MOMENTUM (−90) - Samanvaya's momentum tape, on the value ladder above: the faster view of value minus the slower. Coloured as the value tape: GREEN toward rich, RED toward cheap.\n\nWIDENING when it agrees with the value tape - the faster frames are stretching the dislocation. REVERTING when it opposes it - the fast end has already turned back toward fair value. On Ladder down the value rungs are breadth only, so there it is partly breadth against the composite, not only fast against slow.\n\nShaded on three tiers as Samanvaya shades it: near-solid while the pull grows past 0.5σ of its own 200-bar history, moderate while it grows below it, pale while it shrinks.\n\nContext only - no signal reads it, so switching it off changes nothing that fires. It requests no data. Unmeasured.", display=display.none)
 
 // ── 3 · value model: Samanvaya's own inputs, the ones that move its composite ─
@@ -789,19 +772,18 @@ bool   inpCustom = input.bool(false, "Add a custom macro driver", group=G_S, too
 string usy_sym   = input.symbol("", "    Custom driver symbol", group=G_S, tooltip="Leave empty unless you have a specific economic reason.", display=display.none)
 
 // ── 4 · signals ─────────────────────────────────────────────────────────────
-bool   inpState = input.bool(true, "Signals  ▲ ▼", group=G_T, tooltip="THE ▲▼ - v9 reads them FROM THE GRID, where the audit found the one robust edge.\n\n▲ CAPITULATION TURN - the first closed bar on which the Conviction-Value Grid stands in DOWN · cheap (sellers in control across the ladder, value cheap past θ) with value momentum REVERTING: the fast end of value has already turned back toward fair. Measured on 380 instruments in six classes, drift-free and scored without look-ahead: positive in all three eras (2006-13, 2014-19, 2020-26) on daily AND weekly bars, in four or five of the five non-crypto classes each time. It is a lean, not a trade: about +0.05σ over the next 10-20 bars.\n\n▼ DISTRIBUTION - the first closed bar on which sellers hold control of a price rich past θ (the grid's Exit cell). As a STATE it was followed by underperformance in every era on both timeframes; as a one-bar event it is too rare to measure on its own.\n\nThe standing declaration (the panel's row, the optional background) is the last ▲ or ▼, with no exit. Measured as a held position it carried no edge.\n\nCRYPTO is the stated exception: it trends, and the capitulation reading failed there.\n\n'▲ ▼ source' just below switches the markers back to v8's arm-then-confirm TURN.", display=display.none)
-string inpSigSrc = input.string("Capitulation (v9)", "    ▲ ▼ source", options=["Capitulation (v9)", "TURN (v8, legacy)"], group=G_T, tooltip="CAPITULATION (v9, default) - the ▲▼ above, read from the grid.\n\nTURN (v8, legacy) - v8's arm-then-confirm pair on the same markers: the trace crossing back through θ arms it; within the confirmation window the value ladder must have been past θ inside the dislocation window, the histogram on the turn's side, the conviction tape with it or turning, and (switchable) participation absorbed. Measured in the v9 audit it faded to nothing after 2020 on daily bars, read NEGATIVE on weekly bars, and on daily worked only when a capitulation came first - which is why v9 reads the capitulation directly. The confirmation and dislocation windows below apply to this source only.", display=display.none)
-int    inpConfirm = input.int(5, "Confirmation window", minval=1, maxval=50, group=G_T, tooltip="LEGACY TURN SOURCE ONLY. For ▲▼: how many bars, counting the crossing bar, the other layers have to confirm Samanvaya's crossing.\n\nValue on this chart and effort usually turn a bar or two apart. Five bars absorbs that stagger while the turn is still the same event. 1 restores the old same-bar rule.\n\nA chosen number, not a fitted one.", display=display.none)
-int    inpDisloc = input.int(20, "Dislocation window", minval=3, maxval=200, group=G_T, tooltip="LEGACY TURN SOURCE ONLY. For ▲▼: how far back the MTF value tape may have been past θ for the turn to count as a dislocation every horizon saw.\n\nThe chart's own value reading turns first; the ladder mean, which includes slower frames, is usually already easing by the time the chart crosses back through θ. This window lets the ladder's dislocation be recent rather than simultaneous.", display=display.none)
-bool   inpCon  = input.bool(false, "Continuation  ◆", group=G_T, tooltip="OFF BY DEFAULT IN v8. Measured across 380 instruments in six asset classes it was negative in both eras outside crypto (−0.021σ before 2018, −0.041σ after, over 10 bars), significantly so on US stocks in both. Switch it on to see it; do not lean on it.\n\nCONTINUATION ◆ - control held, value reset, push resumed.\n\n◆ LONG (short mirrors) needs, on one closed bar:\n  CHART                this chart's conviction is above zero - control held - and the trace's histogram went below zero inside the pullback window and now crosses +k·σ\n  CONVICTION · LADDER  the conviction tape is past the inner zone on the buyers' side. With Ladder up (default) it is HELD by the frames above; with Ladder down the push is BUILT inside the bars at every finer frame, not carried by one print\n  VALUE · LADDER       the value tape is not rich past θ - the pullback left price fair or cheap; with the default Ladder up, on the frames above the chart\n  EFFORT → RESULT      participation is NOT absorbed on the bar - the push is producing result (switchable below)\n\nIn one line: the pullback reset value without breaking the push. The v9 audit found it negative in both of v8's eras and it stays off.", display=display.none)
+bool   inpState = input.bool(true, "Declarations  ▲ ▼", group=G_T, tooltip="The ▲▼ DECLARATIONS - Samanvaya's triangle, read through everything Pragati knows. A ▲ declares BUY, a ▼ declares SELL; a declaration stands until the opposite one. It is a statement about the market at that bar, not a position, and it has no exit.\n\nHOW A ▲ IS MADE (▼ mirrors):\n  1 · ARM      the trace crosses back UP through −θ with the value basket settled - the stretch releasing. On the Conviction trace it is Samanvaya's value reading on this chart that crosses - price leaving a dislocation. A fall back below −θ cancels the arm; the next crossing re-arms it.\n  2 · CONFIRM  inside the confirmation window, on one closed bar, all of:\n     VALUE · LADDER       the value tape was cheap past θ inside the dislocation window, and is not rich past θ now\n     PUSH · CHART         the trace's histogram is above zero\n     CONVICTION · LADDER  the conviction tape is above zero or has risen two bars running\n     EFFORT → RESULT      participation was ABSORBED at some point in the dislocation window - effort that stopped producing result, the exhaustion the turn comes out of (switchable below)\n\nArm-then-confirm replaced a same-bar rule that lost every ▲ whose layers turned one bar apart. Unmeasured as a stack: neither the crossing as an event nor the confirmations has been tested.", display=display.none)
+int    inpConfirm = input.int(5, "Confirmation window", minval=1, maxval=50, group=G_T, tooltip="For ▲▼: how many bars, counting the crossing bar, the other layers have to confirm Samanvaya's crossing.\n\nValue on this chart and effort usually turn a bar or two apart. Five bars absorbs that stagger while the turn is still the same event. 1 restores the old same-bar rule.\n\nA chosen number, not a fitted one.", display=display.none)
+int    inpDisloc = input.int(20, "Dislocation window", minval=3, maxval=200, group=G_T, tooltip="For ▲▼: how far back the MTF value tape may have been past θ for the turn to count as a dislocation every horizon saw.\n\nThe chart's own value reading turns first; the ladder mean, which includes slower frames, is usually already easing by the time the chart crosses back through θ. This window lets the ladder's dislocation be recent rather than simultaneous.", display=display.none)
+bool   inpCon  = input.bool(false, "Continuation  ◆", group=G_T, tooltip="OFF BY DEFAULT IN v8. Measured across 380 instruments in six asset classes it was negative in both eras outside crypto (−0.021σ before 2018, −0.041σ after, over 10 bars), significantly so on US stocks in both. Switch it on to see it; do not lean on it.\n\nCONTINUATION ◆ - control held, value reset, push resumed.\n\n◆ LONG (short mirrors) needs, on one closed bar:\n  CHART                this chart's conviction is above zero - control held - and the trace's histogram went below zero inside the pullback window and now crosses +k·σ\n  CONVICTION · LADDER  the conviction tape is past the inner zone on the buyers' side. With Ladder down (default) the push is BUILT inside the bars at every finer frame, not carried by one print; with Ladder up it is HELD by the frames above\n  VALUE · LADDER       the value tape is not rich past θ - the pullback left price fair or cheap; with the default Ladder up, on the frames above the chart\n  EFFORT → RESULT      participation is NOT absorbed on the bar - the push is producing result (switchable below)\n\nIn one line: the pullback reset value without breaking the push. The chart part alone measured +0.036R on metals and energy and -0.016R elsewhere; the stack is unmeasured.", display=display.none)
 float  inpK    = input.float(0.5, "Impulse threshold (σ of histogram)", minval=0.0, maxval=3.0, step=0.1, group=G_T, tooltip="The histogram must cross ± this many standard deviations of its own distribution, rather than merely crossing zero. Used by the ◆, and it sets the brightest histogram tier.\n\nIn the earlier trigger design, 0 - the plain signal-line crossover - was the worst value of this setting out of sample across a 900-configuration search; that is why it is not 0. It has not been re-measured for the ◆ as it now stands.\n\nRaise it for fewer and stronger ◆. Above about 1.5 only violent expansions qualify.", display=display.none)
 int    inpPull = input.int(6, "Pullback window", minval=2, maxval=50, group=G_T, tooltip="For continuation signals: how recently the histogram must have crossed to the wrong side for the move to count as a genuine pullback rather than an uninterrupted drift.", display=display.none)
-bool   inpEff = input.bool(true, "Effort → result in signals", group=G_T, tooltip="The indicator's own thesis - is the move paid for - as a signal layer.\n\nThe LEGACY TURN ▲▼ require that participation was ABSORBED (effort → result in the bottom fifth of its history) at some point in the dislocation window: heavy effort that stopped producing result, the exhaustion a turn comes out of. v9's ▲▼ do not read it - requiring absorption measured no better than the plain capitulation turn.\n◆ requires that participation is NOT absorbed on the signal bar: the resuming push is producing result.\n\nApplies to the legacy TURN source and the ◆ only.", display=display.none)
+bool   inpEff = input.bool(true, "Effort → result in signals", group=G_T, tooltip="The indicator's own thesis - is the move paid for - as a signal layer.\n\n▲▼ require that participation was ABSORBED (effort → result in the bottom fifth of its history) at some point in the dislocation window: heavy effort that stopped producing result, the exhaustion a turn comes out of.\n◆ requires that participation is NOT absorbed on the signal bar: the resuming push is producing result.\n\nA HYPOTHESIS, not a measured result. Switch it off to see the stack without it; comparing the two is how it should be judged.", display=display.none)
 int    inpCool = input.int(10, "Cooldown (bars)", minval=0, maxval=200, group=G_T, tooltip="Minimum bars between signals in the same direction - ▲ and long ◆ share one clock, ▼ and short ◆ the other.\n\nWithout this, one choppy stretch produces a cluster of markers that all describe the same event. Raise it if the rails still look busy on your timeframe.", display=display.none)
 
 // ── 5 · divergence ──────────────────────────────────────────────────────────
-bool   inpDiv  = input.bool(false, "Regular divergence  R", group=G_V, tooltip="DIVERGENCE FAMILY · REGULAR - the move is not confirmed by the chart OR by the ladder, at a price every horizon calls stretched.\n\nR BEARISH (bullish mirrors), judged at the confirming pivot:\n  CHART        price made a higher high while conviction made a lower high - on conviction's own pivots, whichever trace the pane draws; with the zone gate on, the earlier conviction high was above the inner zone.\n  CONVICTION   the ladder also made a lower high - its reading at this pivot is below its reading at the previous one. The whole ladder is failing to confirm, not one frame.\n  VALUE        the ladder is on the RICH side (> 0) at the pivot - the high was made above fair value across horizons.\n\nOFF BY DEFAULT IN v9. The original claim - chart-only regular divergence the one element positive almost everywhere - did not reproduce: on 380 instruments R read about zero in every era, daily and weekly. Switch it on to see it; do not lean on it.", display=display.none)
-bool   inpHid  = input.bool(false, "Hidden divergence  H", group=G_V, tooltip="DIVERGENCE FAMILY · HIDDEN - a pullback where the underlying control never left.\n\nH BEARISH (bullish mirrors), judged at the confirming pivot:\n  CHART        price made a lower high while conviction made a higher high - on its own pivots, whichever trace is drawn.\n  CONVICTION   the conviction tape is past the inner zone on the sellers' side at the pivot - inside the bars with Ladder down, the frames above with Ladder up.\n  VALUE        the value tape is NOT cheap past θ at the pivot - the bounce restored value inside that control.\n\nThe same thesis as the ◆, found at a pivot. Default off: negative or mixed in the v9 audit.", display=display.none)
+bool   inpDiv  = input.bool(true,  "Regular divergence  R", group=G_V, tooltip="DIVERGENCE FAMILY · REGULAR - the move is not confirmed by the chart OR by the ladder, at a price every horizon calls stretched.\n\nR BEARISH (bullish mirrors), judged at the confirming pivot:\n  CHART        price made a higher high while conviction made a lower high - on conviction's own pivots, whichever trace the pane draws; with the zone gate on, the earlier conviction high was above the inner zone.\n  CONVICTION   the ladder also made a lower high - its reading at this pivot is below its reading at the previous one. The whole ladder is failing to confirm, not one frame.\n  VALUE        the ladder is on the RICH side (> 0) at the pivot - the high was made above fair value across horizons.\n\nChart-only regular divergence was the one element positive almost everywhere it was measured; the tape conditions are unmeasured.", display=display.none)
+bool   inpHid  = input.bool(false, "Hidden divergence  H", group=G_V, tooltip="DIVERGENCE FAMILY · HIDDEN - a pullback where the underlying control never left.\n\nH BEARISH (bullish mirrors), judged at the confirming pivot:\n  CHART        price made a lower high while conviction made a higher high - on its own pivots, whichever trace is drawn.\n  CONVICTION   the conviction tape is past the inner zone on the sellers' side at the pivot - inside the bars with Ladder down, the frames above with Ladder up.\n  VALUE        the value tape is NOT cheap past θ at the pivot - the bounce restored value inside that control.\n\nThe same thesis as the ◆, found at a pivot. Chart-only hidden divergence measured no edge on any universe; default off.", display=display.none)
 int    inpPL   = input.int(5, "Pivot left", minval=1, maxval=30, group=G_V, tooltip="Bars of confirmation on the left of a pivot.", display=display.none)
 int    inpPR   = input.int(5, "Pivot right", minval=1, maxval=30, group=G_V, tooltip="Bars of confirmation on the right of a pivot.\n\nTHIS IS THE LAG. A divergence cannot be known until this many bars have passed after the turn. Not repainting - the price of confirmation.", display=display.none)
 int    inpGapM = input.int(5,  "Min pivot separation", minval=2, maxval=100, group=G_V, tooltip="Two pivots closer than this are the same swing and their comparison is meaningless.", display=display.none)
@@ -823,7 +805,7 @@ bool   inpQuiet = input.bool(true, "    Quiet-regime desaturation", group=G_D, t
 bool   inpTraceZone = input.bool(true, "Trace intensity by zone", group=G_D, tooltip="DISPLAY ONLY. The trace stays secondary but grades with distance from zero: muted inside the inner rail, clearer past it, full past the outer rail. A blended trace is also dimmed while its ingredients point opposite ways or the value basket settles. Zone position reads off the line itself rather than from the dotted rails.\n\nIntensity, not a new colour: past the outer zone is where trends run AND where they end, and a colour that implied either would claim more than the evidence supports.", display=display.none)
 bool   inpThr  = input.bool(false, "Show impulse threshold", group=G_D, tooltip="Draws the ± k·σ band the histogram must cross for a trigger to fire. Useful once, while calibrating the threshold to an instrument; clutter afterwards.", display=display.none)
 bool   inpFill = input.bool(true, "Shade", group=G_D, display=display.none)
-bool   inpStateBg = input.bool(false, "Declaration background", group=G_D, tooltip="DISPLAY ONLY. A faint pane tint for the standing declaration: green after a ▲ until the next ▼, red after a ▼ until the next ▲. Off by default - the triangles already mark each event, a declaration has no end, and as a held position it carried no edge in the v9 audit.\n\nNo tint while the stack is paused.", display=display.none)
+bool   inpStateBg = input.bool(false, "Declaration background", group=G_D, tooltip="DISPLAY ONLY. A faint pane tint for the standing declaration: green after a ▲ until the next ▼, red after a ▼ until the next ▲. Off by default - the triangles already mark each declaration, and a declaration has no end, so the tint can stand for a long time.\n\nNo tint while the stack is paused.", display=display.none)
 string inpTheme = input.string("Auto", "Palette", options=["Auto", "Light", "Dark"], group=G_D, display=display.none)
 
 // ── 8 · information panel ───────────────────────────────────────────────────
@@ -2884,21 +2866,38 @@ bool armedSell = not na(armSellBar) and bar_index - armSellBar <= inpConfirm - 1
 bool tBuy  = mVLoW <= -osc_entry and mV <  osc_entry and hist > 0.0 and (mC > 0.0 or mCUp) and (not inpEff or absSeen)
 bool tSell = mVHiW >=  osc_entry and mV > -osc_entry and hist < 0.0 and (mC < 0.0 or mCDn) and (not inpEff or absSeen)
 
-// LEGACY ▲▼ (v8's TURN). v9's ▲▼ are read from the grid (8b, after the grid's
-// state engine); this arm-then-confirm pair remains as the 'TURN (v8, legacy)'
-// source. Measured in the v9 audit: no edge since 2020 on daily bars, negative on
-// weekly, and negative on daily unless a capitulation came first.
-bool legBuy  = inpState and confirmed and stackOk and svTradable and armedBuy  and tBuy  and coolLong
-bool legSell = inpState and confirmed and stackOk and svTradable and armedSell and tSell and coolShort
-if legBuy
+bool buySig  = inpState and confirmed and stackOk and svTradable and armedBuy  and tBuy  and coolLong
+bool sellSig = inpState and confirmed and stackOk and svTradable and armedSell and tSell and coolShort
+if buySig
     armBuyBar  := na
-if legSell
+if sellSig
     armSellBar := na
 
 // ── ◆ · the push resumes inside conviction, with value room and real result ───
-// Evaluated in 8b, once the ▲▼ are known (a triangle takes precedence).
 bool tConL = mC >=  inpZ1 and mV <  osc_entry and (not inpEff or not effAbs)
 bool tConS = mC <= -inpZ1 and mV > -osc_entry and (not inpEff or not effAbs)
+
+bool conLong  = inpCon and confirmed and stackOk and not buySig  and
+     cvOsc > 0.0 and pulledUp and impUp and coolLong and tConL
+bool conShort = inpCon and confirmed and stackOk and not sellSig and
+     cvOsc < 0.0 and pulledDn and impDn and coolShort and tConS
+
+if buySig or conLong
+    lastLongBar := bar_index
+if sellSig or conShort
+    lastShortBar := bar_index
+
+// ── the standing declaration ──────────────────────────────────────────────────
+// +1 after a ▲, −1 after a ▼, standing until the opposite one: a declaration
+// about the market at that bar, deliberately without an exit.
+var int decl    = 0
+var int declBar = na
+if buySig
+    decl    := 1
+    declBar := bar_index
+if sellSig
+    decl    := -1
+    declBar := bar_index
 
 color oscCol = not ready ? C_NEUT : osc >= 0 ? C_BULL : C_BEAR
 
@@ -3530,162 +3529,6 @@ int   Q_LEN    = math.min(4 * inpNorm, 4999)
 float rawSdPr  = ta.percentrank(rawSd, Q_LEN)                // evaluated every bar
 bool  quietReg = inpQuiet and trHasC and cvReady and not na(rawSdPr) and rawSdPr < 20.0
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  THE GRID'S STATE ENGINE                                   (moved up in v9)
-//  Computed here, before the ▲▼, because v9's ▲▼ are read FROM the grid. The
-//  readout that displays it stays in the CVG section below, with its input.
-// ══════════════════════════════════════════════════════════════════════════════
-// ── conviction's histogram gate, exactly as Pragyam reads it ─────────────────
-// Conviction's own histogram, whichever trace the pane draws - the pane's
-// columns only on the Conviction trace.
-// Tier from the column's own channels, whatever the shading display is set to:
-// 0 impulse · 1 building · 2 decelerating · 3 turning. The drawn intensity -
-// direction × ink × saturation - is what a HELD row keeps its cell by.
-bool  gQuiet = cvReady and not na(rawSdPr) and rawSdPr < 20.0
-int   gTier  = cvExpand and cvImp ? 0 : cvExpand ? 1 : cvWith ? 2 : 3
-float gGate  = not cvReady ? na : gTier != 3 and not gQuiet ? (cvAbove ? 1.0 : -1.0) : 0.0
-f_gInk(float m, float lo, float hi, float t0, float t1) =>
-    float f = hi - lo > 1e-12 ? math.max(0.0, math.min(1.0, (m - lo) / (hi - lo))) : 0.0
-    1.0 - (t0 + (t1 - t0) * f) / 100.0
-float gInk   = gTier == 0 ? f_gInk(cvMag, cvThr, cvHi, 18.0, 0.0) : gTier == 1 ? f_gInk(cvMag, 0.0, math.max(cvThr, 1e-9), 60.0, 38.0) : gTier == 2 ? f_gInk(cvMag, 0.0, cvHi, 70.0, 50.0) : f_gInk(cvMag, 0.0, cvHi, 88.0, 72.0)
-float gPush  = not cvReady ? na : (cvAbove ? 1.0 : -1.0) * gInk * (gQuiet ? 0.45 : 1.0)
-
-// ── the grid's pieces: units, names, the map read at a position ──────────────
-// v8's measured units, re-measured and kept in v9 - see the blocks at the top. v5 (Pragyam's seed) had
-// UP 3 · 3 · 1.5 and DOWN 1 · 0.5 · 0.25.
-f_gUnit(int r, int c) =>
-    r == 1 ? (c == 0 ? 3.0 : c == 1 ? 1.5 : 0.75) : r == 0 ? (c == 0 ? 1.5 : c == 1 ? 1.0 : 0.75) : (c == 0 ? 3.0 : c == 1 ? 1.5 : 0.25)
-f_gName(int r, int c) =>
-    r == 1 ? (c == 0 ? "TURNED" : c == 1 ? "BUILDING" : "PAID") : r == 0 ? (c == 0 ? "BASING" : c == 1 ? "IDLE" : "STALLING") : (c == 0 ? "DISLOCATED" : c == 1 ? "FADING" : "DISTRIBUTION")
-// The nine units read at a position on the map - rows −1 … +1 (DOWN … UP),
-// columns −1 … +1 (CHEAP … RICH) - bilinear between the cells, as Pragyam does.
-f_gAt(float rp, float cp) =>
-    float r  = math.max(-1.0, math.min(1.0, rp))
-    float c  = math.max(-1.0, math.min(1.0, cp))
-    int   r0 = r < 0 ? -1 : 0
-    int   c0 = c < 0 ? -1 : 0
-    float wr = r - r0
-    float wc = c - c0
-    float lo = (1.0 - wc) * f_gUnit(r0, c0 + 1) + wc * f_gUnit(r0, c0 + 2)
-    float hi = (1.0 - wc) * f_gUnit(r0 + 1, c0 + 1) + wc * f_gUnit(r0 + 1, c0 + 2)
-    (1.0 - wr) * lo + wr * hi
-// A tape's ink on the Pine's own ramp: faint 0.12 → 0.45 inside the knee, a
-// step, bright 0.65 → 1.0 toward solid.
-f_gTapeInk(float x, float knee, float solid) =>
-    float a = math.abs(x)
-    a >= knee ? 0.65 + 0.35 * math.max(0.0, math.min(1.0, (a - knee) / math.max(solid - knee, 1e-9))) : 0.12 + 0.33 * math.max(0.0, math.min(1.0, a / math.max(knee, 1e-9)))
-// A momentum's standing side, its own knee the hysteresis; the sign until the
-// knee is calibrated; no side without a reading.
-f_gSide(float prev, float m, float knee) =>
-    na(m) ? 0.0 : na(knee) or knee <= 0.0 ? math.sign(m) : m >= knee ? 1.0 : m <= -knee ? -1.0 : prev != 0.0 ? prev : math.sign(m)
-
-// ── the state engine: the row memory and the two momentum sides ──────────────
-bool  gRead = mtfCOk and mtfVOk
-int   gTgt  = mC >= inpZ1 ? 1 : mC <= -inpZ1 ? -1 : 0
-int   gCol  = mV <= -osc_entry ? 0 : mV >= osc_entry ? 2 : 1
-var int   gRow   = na
-var float gSideC = 0.0
-var float gSideV = 0.0
-if not gRead
-    gRow   := na
-    gSideC := 0.0
-    gSideV := 0.0
-else
-    if na(gRow) or na(gGate)
-        gRow := gTgt
-    else if gTgt > gRow and gGate > 0
-        gRow := gTgt
-    else if gTgt < gRow and gGate < 0
-        gRow := gTgt
-    gSideC := f_gSide(gSideC, ladMomReady ? ladMom : na, ladMomThr)
-    gSideV := f_gSide(gSideV, tpReady ? tpMom : na, tpThr)
-bool  gHeld = gRead and gRow != gTgt
-// phases: +1 confirmed, −1 not, 0 no edge or no reading
-int   gCPh  = not gRead or gRow == 0 or gSideC == 0.0 ? 0 : gSideC == gRow ? 1 : -1
-int   gVPh  = not gRead or gCol == 1 or gSideV == 0.0 ? 0 : gSideV == (gCol == 0 ? 1.0 : -1.0) ? 1 : -1
-
-// ── where the graded map places it, and what it holds there ─────────────────
-f_gPos() =>
-    float posR = 0.0
-    float posC = 0.0
-    if gRead
-        if gHeld
-            float gHs = gRow > gTgt ? 1.0 : -1.0
-            float gHh = na(gPush) ? 0.0 : math.max(0.0, math.min(1.0, gPush * gHs))
-            int   gNb = gRow + (gTgt > gRow ? 1 : -1)
-            posR := gRow * (0.5 + 0.5 * gHh) + gNb * (0.5 - 0.5 * gHh)
-        else if gRow != 0
-            posR := gRow * f_gTapeInk(mC, inpZ1, inpZ2)
-        else
-            posR := (mC > 0 ? 1.0 : -1.0) * (f_gTapeInk(mC, inpZ1, inpZ2) - 0.12)
-        posC := gCol != 1 ? (gCol - 1) * f_gTapeInk(mV, osc_entry, 70.0) : (mV > 0 ? 1.0 : -1.0) * (f_gTapeInk(mV, osc_entry, 70.0) - 0.12)
-        if gRow != 0 and gCPh == -1
-            posR := posR * 0.5
-        if gCol != 1 and gVPh == -1
-            posC := posC * 0.5
-    [posR, posC]
-[gRPos, gCPos] = f_gPos()
-
-float  gUnits = gRead ? f_gAt(gRPos, gCPos) : na
-float  gCell  = gRead ? f_gAt(gRow * (gCPh == -1 ? 0.5 : 1.0), (gCol - 1) * (gVPh == -1 ? 0.5 : 1.0)) : na
-string gName  = gRead ? f_gName(gRow, gCol) : ""
-
-// days in the family, committed at each close - never counted twice live
-var string gPrevName = ""
-var int    gDays     = 0
-gDays     := gName != "" and gName == gPrevName ? gDays + 1 : gName != "" ? 1 : 0
-gPrevName := gName
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  8b · THE ▲ ▼ · v9, READ FROM THE GRID                    (measured, see top)
-//
-//  ▲ CAPITULATION TURN - the first closed bar on which the grid stands in
-//    DOWN · cheap (sellers in control across the ladder at a price cheap past
-//    θ) with value momentum REVERTING: the fast end of value has already turned
-//    back toward fair. The one event the v9 audit found positive in all three
-//    eras (2006-13, 2014-19, 2020-26), on daily and on weekly bars.
-//  ▼ DISTRIBUTION - the first closed bar on which sellers hold control of a
-//    price rich past θ (the grid's Exit cell). As a STATE it was followed by
-//    underperformance in every era and on both timeframes; as a one-bar event
-//    it is too rare to measure on its own.
-//  Each is the grid's own reading - row memory, push gate and phases exactly
-//  as the readout shows them - so the marker and the CVG row always agree.
-//  'TURN (v8, legacy)' puts section 8's arm-then-confirm pair on the same
-//  markers instead. The cooldown applies per direction either way; ▲ and a
-//  long ◆ share one clock.
-// ═══════════════════════════════════════════════════════════════════════════
-bool sigV9    = inpSigSrc == "Capitulation (v9)"
-bool gCapTurn = gRead and gRow == -1 and gCol == 0 and gVPh == 1
-bool gDistNow = gRead and gRow == -1 and gCol == 2
-bool capBuy   = gCapTurn and not gCapTurn[1]
-bool distSell = gDistNow and not gDistNow[1]
-
-bool buySig  = inpState and confirmed and stackOk and coolLong  and (sigV9 ? capBuy   : legBuy)
-bool sellSig = inpState and confirmed and stackOk and coolShort and (sigV9 ? distSell : legSell)
-
-bool conLong  = inpCon and confirmed and stackOk and not buySig  and
-     cvOsc > 0.0 and pulledUp and impUp and coolLong and tConL
-bool conShort = inpCon and confirmed and stackOk and not sellSig and
-     cvOsc < 0.0 and pulledDn and impDn and coolShort and tConS
-
-if buySig or conLong
-    lastLongBar := bar_index
-if sellSig or conShort
-    lastShortBar := bar_index
-
-// ── the standing declaration ──────────────────────────────────────────────────
-// +1 after a ▲, −1 after a ▼, standing until the opposite one. A reading of the
-// last event, deliberately without an exit - measured as a held position it
-// carried no edge (v9 audit), so it tints the pane only when asked.
-var int decl    = 0
-var int declBar = na
-if buySig
-    decl    := 1
-    declBar := bar_index
-if sellSig
-    decl    := -1
-    declBar := bar_index
-
 // DECLARATION BACKGROUND - opt-in. Declarations are committed on closed bars, so
 // the tint never flashes on a forming bar.
 bool  tintLong   = inpStateBg and stackOk and decl ==  1
@@ -3758,14 +3601,14 @@ f_panel() =>
          text_size = size.tiny, text_halign = text.align_right, bgcolor = color.new(hc, 86))
 
     f_sep(tb, 1, "SIGNALS · " + str.tostring(inpLen) + "b")
-    string armTxt = sigV9 ? "" : armedBuy  ? "  · ▲ armed " + str.tostring(bar_index - armBuyBar + 1) + "/" + str.tostring(inpConfirm) :
+    string armTxt = armedBuy  ? "  · ▲ armed " + str.tostring(bar_index - armBuyBar + 1) + "/" + str.tostring(inpConfirm) :
          armedSell ? "  · ▼ armed " + str.tostring(bar_index - armSellBar + 1) + "/" + str.tostring(inpConfirm) : ""
     f_row(tb, 2, " declaration",
          not stackOk ? "paused · " + stackWhy :
-         (decl ==  1 ? (sigV9 ? "▲ capitulation · " : "BUY ▲ · ") + str.tostring(bar_index - declBar) + "b ago" :
-          decl == -1 ? (sigV9 ? "▼ distribution · " : "SELL ▼ · ") + str.tostring(bar_index - declBar) + "b ago" : "none yet") + armTxt,
+         (decl ==  1 ? "BUY ▲ · " + str.tostring(bar_index - declBar) + "b ago" :
+          decl == -1 ? "SELL ▼ · " + str.tostring(bar_index - declBar) + "b ago" : "none yet") + armTxt,
          not stackOk ? C_GOLD : decl == 1 ? C_BULL : decl == -1 ? C_BEAR : C_SOFT,
-         "The last ▲ or ▼ and how many bars ago. v9 (default): ▲ a CAPITULATION TURN, ▼ DISTRIBUTION, both read from the grid. It stands until the opposite event and has no exit; as a held position it carried no edge, so read the grid row for where the name stands now.\n\nOn the legacy TURN source, '▲ armed n/N' means Samanvaya's crossing has armed a ▲ and the other layers have N bars to confirm it.\n\nPAUSED means a layer of the stack is missing and no signal can fire; the reason is named, and the same reason is drawn at the pane's right edge.")
+         "The standing declaration: BUY from a ▲ until the next ▼, SELL from a ▼ until the next ▲, with bars since it was made. A statement about the market at that bar, not a position - it has no exit, and its age is the reminder of how old the statement is.\n\n'▲ armed n/N' means Samanvaya's crossing has armed a ▲ and the other layers have N bars to confirm it.\n\nPAUSED means a layer of the stack is missing and no signal can fire; the reason is named, and the same reason is drawn at the pane's right edge.")
     f_row(tb, 3, " value · chart",
          f_num(unified_osc, "+#;-#") + " vs ±" + f_num(osc_entry, "#") + (svTradable ? "" : " · basket settling"),
          not svTradable ? C_GOLD : math.abs(unified_osc) >= osc_entry ? (unified_osc > 0 ? C_BULL : C_BEAR) : C_SOFT,
@@ -3849,7 +3692,7 @@ if tblOn and barstate.islast
 //  READS NOTHING INTO THE ENGINE. The oscillator, the divergence engine, the
 //  triggers and the profile are untouched by everything below; this block only
 //  fetches the chart symbol's open-interest companion series and reports what it
-//  says. ONE DISPLAY COUPLING EXISTS: the pane's gold cast (oiCast, on by
+//  says. ONE DISPLAY COUPLING EXISTS: the pane's opt-in gold cast (oiCast, off by
 //  default) reads oiHas, oiRoll, oiTrust and the exit/build counts from here, so
 //  deleting this block means deleting oiCast too. No signal changes either way.
 //
@@ -4057,7 +3900,108 @@ oiPrevChar := oiHas ? oiChar : ""
 //           chart alone would stand. The engine above them is the port.
 // ══════════════════════════════════════════════════════════════════════════════
 var string G_GR = "11 · Conviction-Value Grid · price chart"
-bool   inpGrid    = input.bool(true, "Grid row", group=G_GR, tooltip="The CVG row of the readout - Pragyam's Conviction-Value Grid, read for this chart.\n\nSTATE - the action its family implies (Buy, Accumulate, Hold, Wait, Trim, Exit - v8's measured units, kept in v9) and the units the grid holds. WHY - what separates its 5 × 5 cell from its neighbours: each momentum tape's phase on its own edge. PUSH - conviction's own histogram as it runs the rows, Pragyam's gate. CHART - where this chart alone would put the name. SPAN - how long in the action.\n\nDRAWN ON THE PRICE CHART, in the readout under OI; '10 · Open interest' sets where the readout sits. Switching the ROW off hides it; the grid is still computed, because v9's ▲▼ are read from it.\n\nThe defaults read both tapes on D · W on a daily chart - exactly what Pragyam sizes from.", display=display.none)
+bool   inpGrid    = input.bool(true, "Grid row", group=G_GR, tooltip="The CVG row of the readout - Pragyam's Conviction-Value Grid, read for this chart.\n\nSTATE - the action its family implies (Buy, Accumulate, Hold, Wait, Trim, Exit - v8's measured units) and the units the grid holds. WHY - what separates its 5 × 5 cell from its neighbours: each momentum tape's phase on its own edge. PUSH - conviction's own histogram as it runs the rows, Pragyam's gate. CHART - where this chart alone would put the name. SPAN - how long in the action.\n\nDRAWN ON THE PRICE CHART, in the readout under OI; '10 · Open interest' sets where the readout sits. Display only: no signal, tape or pane value reads it.\n\nPragyam reads both tapes on D · W. On a daily chart, set both ladders to Ladder up to read exactly what Pragyam sizes from.", display=display.none)
+
+// ── conviction's histogram gate, exactly as Pragyam reads it ─────────────────
+// Conviction's own histogram, whichever trace the pane draws - the pane's
+// columns only on the Conviction trace.
+// Tier from the column's own channels, whatever the shading display is set to:
+// 0 impulse · 1 building · 2 decelerating · 3 turning. The drawn intensity -
+// direction × ink × saturation - is what a HELD row keeps its cell by.
+bool  gQuiet = cvReady and not na(rawSdPr) and rawSdPr < 20.0
+int   gTier  = cvExpand and cvImp ? 0 : cvExpand ? 1 : cvWith ? 2 : 3
+float gGate  = not cvReady ? na : gTier != 3 and not gQuiet ? (cvAbove ? 1.0 : -1.0) : 0.0
+f_gInk(float m, float lo, float hi, float t0, float t1) =>
+    float f = hi - lo > 1e-12 ? math.max(0.0, math.min(1.0, (m - lo) / (hi - lo))) : 0.0
+    1.0 - (t0 + (t1 - t0) * f) / 100.0
+float gInk   = gTier == 0 ? f_gInk(cvMag, cvThr, cvHi, 18.0, 0.0) : gTier == 1 ? f_gInk(cvMag, 0.0, math.max(cvThr, 1e-9), 60.0, 38.0) : gTier == 2 ? f_gInk(cvMag, 0.0, cvHi, 70.0, 50.0) : f_gInk(cvMag, 0.0, cvHi, 88.0, 72.0)
+float gPush  = not cvReady ? na : (cvAbove ? 1.0 : -1.0) * gInk * (gQuiet ? 0.45 : 1.0)
+
+// ── the grid's pieces: units, names, the map read at a position ──────────────
+// v8's measured units - see the v8 block at the top. v5 (Pragyam's seed) had
+// UP 3 · 3 · 1.5 and DOWN 1 · 0.5 · 0.25.
+f_gUnit(int r, int c) =>
+    r == 1 ? (c == 0 ? 3.0 : c == 1 ? 1.5 : 0.75) : r == 0 ? (c == 0 ? 1.5 : c == 1 ? 1.0 : 0.75) : (c == 0 ? 3.0 : c == 1 ? 1.5 : 0.25)
+f_gName(int r, int c) =>
+    r == 1 ? (c == 0 ? "TURNED" : c == 1 ? "BUILDING" : "PAID") : r == 0 ? (c == 0 ? "BASING" : c == 1 ? "IDLE" : "STALLING") : (c == 0 ? "DISLOCATED" : c == 1 ? "FADING" : "DISTRIBUTION")
+// The nine units read at a position on the map - rows −1 … +1 (DOWN … UP),
+// columns −1 … +1 (CHEAP … RICH) - bilinear between the cells, as Pragyam does.
+f_gAt(float rp, float cp) =>
+    float r  = math.max(-1.0, math.min(1.0, rp))
+    float c  = math.max(-1.0, math.min(1.0, cp))
+    int   r0 = r < 0 ? -1 : 0
+    int   c0 = c < 0 ? -1 : 0
+    float wr = r - r0
+    float wc = c - c0
+    float lo = (1.0 - wc) * f_gUnit(r0, c0 + 1) + wc * f_gUnit(r0, c0 + 2)
+    float hi = (1.0 - wc) * f_gUnit(r0 + 1, c0 + 1) + wc * f_gUnit(r0 + 1, c0 + 2)
+    (1.0 - wr) * lo + wr * hi
+// A tape's ink on the Pine's own ramp: faint 0.12 → 0.45 inside the knee, a
+// step, bright 0.65 → 1.0 toward solid.
+f_gTapeInk(float x, float knee, float solid) =>
+    float a = math.abs(x)
+    a >= knee ? 0.65 + 0.35 * math.max(0.0, math.min(1.0, (a - knee) / math.max(solid - knee, 1e-9))) : 0.12 + 0.33 * math.max(0.0, math.min(1.0, a / math.max(knee, 1e-9)))
+// A momentum's standing side, its own knee the hysteresis; the sign until the
+// knee is calibrated; no side without a reading.
+f_gSide(float prev, float m, float knee) =>
+    na(m) ? 0.0 : na(knee) or knee <= 0.0 ? math.sign(m) : m >= knee ? 1.0 : m <= -knee ? -1.0 : prev != 0.0 ? prev : math.sign(m)
+
+// ── the state engine: the row memory and the two momentum sides ──────────────
+bool  gRead = mtfCOk and mtfVOk
+int   gTgt  = mC >= inpZ1 ? 1 : mC <= -inpZ1 ? -1 : 0
+int   gCol  = mV <= -osc_entry ? 0 : mV >= osc_entry ? 2 : 1
+var int   gRow   = na
+var float gSideC = 0.0
+var float gSideV = 0.0
+if not gRead
+    gRow   := na
+    gSideC := 0.0
+    gSideV := 0.0
+else
+    if na(gRow) or na(gGate)
+        gRow := gTgt
+    else if gTgt > gRow and gGate > 0
+        gRow := gTgt
+    else if gTgt < gRow and gGate < 0
+        gRow := gTgt
+    gSideC := f_gSide(gSideC, ladMomReady ? ladMom : na, ladMomThr)
+    gSideV := f_gSide(gSideV, tpReady ? tpMom : na, tpThr)
+bool  gHeld = gRead and gRow != gTgt
+// phases: +1 confirmed, −1 not, 0 no edge or no reading
+int   gCPh  = not gRead or gRow == 0 or gSideC == 0.0 ? 0 : gSideC == gRow ? 1 : -1
+int   gVPh  = not gRead or gCol == 1 or gSideV == 0.0 ? 0 : gSideV == (gCol == 0 ? 1.0 : -1.0) ? 1 : -1
+
+// ── where the graded map places it, and what it holds there ─────────────────
+f_gPos() =>
+    float posR = 0.0
+    float posC = 0.0
+    if gRead
+        if gHeld
+            float gHs = gRow > gTgt ? 1.0 : -1.0
+            float gHh = na(gPush) ? 0.0 : math.max(0.0, math.min(1.0, gPush * gHs))
+            int   gNb = gRow + (gTgt > gRow ? 1 : -1)
+            posR := gRow * (0.5 + 0.5 * gHh) + gNb * (0.5 - 0.5 * gHh)
+        else if gRow != 0
+            posR := gRow * f_gTapeInk(mC, inpZ1, inpZ2)
+        else
+            posR := (mC > 0 ? 1.0 : -1.0) * (f_gTapeInk(mC, inpZ1, inpZ2) - 0.12)
+        posC := gCol != 1 ? (gCol - 1) * f_gTapeInk(mV, osc_entry, 70.0) : (mV > 0 ? 1.0 : -1.0) * (f_gTapeInk(mV, osc_entry, 70.0) - 0.12)
+        if gRow != 0 and gCPh == -1
+            posR := posR * 0.5
+        if gCol != 1 and gVPh == -1
+            posC := posC * 0.5
+    [posR, posC]
+[gRPos, gCPos] = f_gPos()
+
+float  gUnits = gRead ? f_gAt(gRPos, gCPos) : na
+float  gCell  = gRead ? f_gAt(gRow * (gCPh == -1 ? 0.5 : 1.0), (gCol - 1) * (gVPh == -1 ? 0.5 : 1.0)) : na
+string gName  = gRead ? f_gName(gRow, gCol) : ""
+
+// days in the family, committed at each close - never counted twice live
+var string gPrevName = ""
+var int    gDays     = 0
+gDays     := gName != "" and gName == gPrevName ? gDays + 1 : gName != "" ? 1 : 0
+gPrevName := gName
 
 // ── the readout's words ──────────────────────────────────────────────────────
 // ACTION - each family named for what it says to do, at its own units, so the
@@ -4167,7 +4111,7 @@ f_readout() =>
         string oiBook = oiHas and not na(oiRank) ? " · book " + f_num(oiRank, "#") + " pct" : ""
         table.cell(rdTb, 0, 1, " OI", text_color = C_SOFT, text_size = size.tiny,
              text_halign = text.align_left,
-             tooltip = "WHAT KIND of positioning this bar represents, which volume cannot tell you. Volume answers how much traded; open interest answers whether the trading created open risk or destroyed it.\n\nLONG BUILDUP   price up, book growing — new longs, risk committed.\nSHORT BUILDUP  price down, book growing — new shorts, risk committed.\nSHORT COVERING price up, book shrinking — a rally paid for by exits.\nLONG UNWINDING price down, book shrinking — a decline paid for by exits.\nBALANCED       the change is inside " + f_num(OI_DEAD, "0.0") + "σ of zero; nothing to read.\nEXPIRY / ROLLOVER  the book moved more than " + f_num(OI_STRU * 100, "#") + "% in one bar, or more than " + f_num(OI_ROLL, "0.0") + "σ AND more than " + f_num(OI_ROLL_ABS * 100, "#") + "%. Structural, not positioning - and kept out of the statistics.\n\nThe word always agrees with the book: BUILDUP means open interest ROSE on this bar, COVERING and UNWINDING mean it FELL.\n\nTHE COLOUR FOLLOWS GENUINENESS, NOT DIRECTION. Builds take the side's own colour. Covering and unwinding take GOLD even though one of them is a rally, because closing flow is finite — the move is consuming the very positions propelling it. That is a practitioner reading: the academic open-interest evidence (Hong & Yogo 2012) is monthly and aggregate. MEASURED (v9 audit, 187 NSE F&O stocks, 2019-26): short-covering rallies lagged in both halves - the gold is borne out; but LONG and SHORT BUILDUPS did not predict continuation either - 'genuine' here means risk was committed, not that the move will carry on. Gold here means what it means everywhere in this script: read with caution. Painting short covering green reads as a bullish claim and is close to the opposite one.\n\nDisplay-only: nothing here reaches the oscillator below.")
+             tooltip = "WHAT KIND of positioning this bar represents, which volume cannot tell you. Volume answers how much traded; open interest answers whether the trading created open risk or destroyed it.\n\nLONG BUILDUP   price up, book growing — new longs, risk committed.\nSHORT BUILDUP  price down, book growing — new shorts, risk committed.\nSHORT COVERING price up, book shrinking — a rally paid for by exits.\nLONG UNWINDING price down, book shrinking — a decline paid for by exits.\nBALANCED       the change is inside " + f_num(OI_DEAD, "0.0") + "σ of zero; nothing to read.\nEXPIRY / ROLLOVER  the book moved more than " + f_num(OI_STRU * 100, "#") + "% in one bar, or more than " + f_num(OI_ROLL, "0.0") + "σ AND more than " + f_num(OI_ROLL_ABS * 100, "#") + "%. Structural, not positioning - and kept out of the statistics.\n\nThe word always agrees with the book: BUILDUP means open interest ROSE on this bar, COVERING and UNWINDING mean it FELL.\n\nTHE COLOUR FOLLOWS GENUINENESS, NOT DIRECTION. Builds take the side's own colour. Covering and unwinding take GOLD even though one of them is a rally, because closing flow is finite — the move is consuming the very positions propelling it. That is a practitioner reading, not an established result: the academic open-interest evidence (Hong & Yogo 2012) is monthly and aggregate, and says nothing about a single bar. Gold here means what it means everywhere in this script: read with caution. Painting short covering green reads as a bullish claim and is close to the opposite one.\n\nDisplay-only: nothing here reaches the oscillator below.")
         table.cell(rdTb, 1, 1, " " + oiState + " ", text_color = oiStC, text_size = size.tiny,
              text_halign = text.align_left, bgcolor = color.new(oiCharCol, 86))
         table.cell(rdTb, 2, 1, " " + oiWho + oiBook + " ", text_color = oiCrowd and not oiFade ? C_GOLD : oiTxC,
@@ -4185,7 +4129,7 @@ f_readout() =>
         int rGr = inpOi ? 2 : 1
         table.cell(rdTb, 0, rGr, " CVG", text_color = C_SOFT, text_size = size.tiny,
              text_halign = text.align_left,
-             tooltip = "THE CONVICTION-VALUE GRID - the portfolio style Pragyam builds from this indicator, read for this chart. v9's ▲▼ are read from it: ▲ when Buy · capitulation turns (value momentum reverting), ▼ on entering Exit · distribution.\n\nTHE 3 × 3 FAMILIES. Rows by the conviction tape: UP past +inner zone, DOWN past −inner zone, FAINT between. Columns by the value tape: CHEAP past −θ, RICH past +θ, FAIR between. Each is named for what it says to do, at its own units - the word is the weight:\n                 cheap · fair · rich\n   UP      Buy 3 · Hold 1.5 · Trim 0.75\n   FAINT   Accumulate 1.5 · Wait 1 · Trim 0.75\n   DOWN    Buy 3 · Accumulate 1.5 · Exit 0.25\n(v8's units, measured: sellers in control at a cheap or fair price was followed by gains in both eras on every class but crypto; buyers in control at a fair price lagged.)\nEvery name is held: the action says how much, never whether.\n\nCONVICTION'S HISTOGRAM RUNS THE ROWS: a row changes only while conviction's own histogram - Pragyam's gate, the pane's own on the Conviction trace - confirms a push that way - on the move's side, not TURNING, not QUIET. Otherwise the row is HELD against its tape.\n\nTHE 5 × 5. Each momentum tape confirms its own instrument's edge; an unconfirmed edge sits half-way to the middle (WHY says which).\n\nThe defaults read both tapes on D · W on a daily chart - what Pragyam sizes from. Measured (v9 audit, scored without look-ahead): the graded units positive in all three eras (2006-13, 2014-19, 2020-26) outside crypto; Buy · capitulation +0.06 to +0.08σ over 10-20 bars in each, daily and weekly; Exit · distribution followed by underperformance in each. The other cells are near zero. In Pragyam's allocator the v8 units beat the seed in both eras on Nifty 50 and Dow 30.")
+             tooltip = "THE CONVICTION-VALUE GRID - the portfolio style Pragyam builds from this indicator, read for this chart. Display only: no signal, tape or pane value reads it.\n\nTHE 3 × 3 FAMILIES. Rows by the conviction tape: UP past +inner zone, DOWN past −inner zone, FAINT between. Columns by the value tape: CHEAP past −θ, RICH past +θ, FAIR between. Each is named for what it says to do, at its own units - the word is the weight:\n                 cheap · fair · rich\n   UP      Buy 3 · Hold 1.5 · Trim 0.75\n   FAINT   Accumulate 1.5 · Wait 1 · Trim 0.75\n   DOWN    Buy 3 · Accumulate 1.5 · Exit 0.25\n(v8's units, measured: sellers in control at a cheap or fair price was followed by gains in both eras on every class but crypto; buyers in control at a fair price lagged.)\nEvery name is held: the action says how much, never whether.\n\nCONVICTION'S HISTOGRAM RUNS THE ROWS: a row changes only while conviction's own histogram - Pragyam's gate, the pane's own on the Conviction trace - confirms a push that way - on the move's side, not TURNING, not QUIET. Otherwise the row is HELD against its tape.\n\nTHE 5 × 5. Each momentum tape confirms its own instrument's edge; an unconfirmed edge sits half-way to the middle (WHY says which).\n\nPragyam reads both tapes on D · W. On a daily chart, set both ladders to Ladder up to read exactly what Pragyam sizes from. Measured (v8 audit): as a position the grid scored +0.039σ over 10 bars after 2018 against v5's −0.027σ; in Pragyam's allocator the v8 units beat the seed in both eras on Nifty 50 and Dow 30.")
         table.cell(rdTb, 1, rGr, " " + gState + " ", text_color = gTone, text_size = size.tiny,
              text_halign = text.align_left, bgcolor = color.new(gTone, 86),
              tooltip = gRead ? "PRAGYAM'S FAMILY  " + gName + "\n5 × 5 CELL  " + gR5 + "  ×  " + gC5 + "\n\n" + f_num(gUnits, "0.00") + " UNITS - what Pragyam sizes this name from, before the book normalises across its universe: the family's units read at the name's position on the map, shaded inside its cell by how intensely each tape is drawn, half a cell toward the middle for an unconfirmed edge" + (gHeld ? ", and between half and all of the HELD row by how firmly the push holding it is drawn" : "") + ". The cell itself, unshaded, holds " + f_num(gCell, "0.00") + ".\n\nColoured by the side the action works: green buying, red selling, neutral for Hold and Wait, which change nothing." :
@@ -4404,8 +4348,8 @@ float ySigU = rails ?  trIn  : osc
 float ySigD = rails ? -trIn  : osc
 
 // Every marker is sized automatically, so the rails stay legible at any zoom.
-// Evidence weight is carried by intensity instead: the ▲▼ - the measured events -
-// solid; R, H and the ◆, none of which held up in the v9 audit, lighter.
+// Evidence weight is carried by intensity instead: R and the ▲▼ solid, the
+// instrument-dependent ◆ and the edgeless H lighter.
 //
 // Every marker FADES when it is drawn in a quiet regime. The engine still fires -
 // no signal logic changes - but a trigger on an amplified reading now says so on
@@ -4415,17 +4359,17 @@ float ySigD = rails ? -trIn  : osc
 // the chart, MTF conviction and MTF value agreed on its bar. There is no grade
 // to show, so there is no separate confirmation mark.
 plotshape(divBear ? yDivU : na, "Regular bearish divergence", shape.labeldown,
-     location.absolute, f_q(C_BEAR, 45), text = "R", textcolor = C_INK, size = size.auto, display = display.pane)
+     location.absolute, f_q(C_BEAR, 0), text = "R", textcolor = C_INK, size = size.auto, display = display.pane)
 plotshape(divBull ? yDivD : na, "Regular bullish divergence", shape.labelup,
-     location.absolute, f_q(C_BULL, 45), text = "R", textcolor = C_INK, size = size.auto, display = display.pane)
+     location.absolute, f_q(C_BULL, 0), text = "R", textcolor = C_INK, size = size.auto, display = display.pane)
 plotshape(hidBear ? yDivU : na, "Hidden bearish divergence", shape.labeldown,
      location.absolute, f_q(C_BEAR, 45), text = "H", textcolor = C_INK, size = size.auto, display = display.pane)
 plotshape(hidBull ? yDivD : na, "Hidden bullish divergence", shape.labelup,
      location.absolute, f_q(C_BULL, 45), text = "H", textcolor = C_INK, size = size.auto, display = display.pane)
 
-plotshape(sellSig ? ySigU : na, "▼ Distribution (legacy: SELL TURN)", shape.triangledown,
+plotshape(sellSig ? ySigU : na, "SELL declaration ▼", shape.triangledown,
      location.absolute, f_q(C_BEAR, 0), size = size.auto, display = display.pane)
-plotshape(buySig  ? ySigD : na, "▲ Capitulation turn (legacy: BUY TURN)", shape.triangleup,
+plotshape(buySig  ? ySigD : na, "BUY declaration ▲", shape.triangleup,
      location.absolute, f_q(C_BULL, 0), size = size.auto, display = display.pane)
 // Both directions share one plot: an up-impulse and a down-impulse cannot occur
 // on the same bar, and a series colour costs the plot budget two either way.
@@ -4435,10 +4379,10 @@ plotshape(conShort ? ySigU : conLong ? ySigD : na, "Continuation", shape.diamond
 // ═══════════════════════════════════════════════════════════════════════════
 //  ALERTS
 // ═══════════════════════════════════════════════════════════════════════════
-alertcondition(buySig, title="Pragati · ▲ capitulation turn",
-     message="▲ CAPITULATION TURN. The Conviction-Value Grid entered its capitulation state's turn: sellers in control across the ladder at a price cheap past θ, and value momentum has turned back toward fair. The v9 audit's one robust event - a lean, not a trade (about +0.05σ over 10-20 bars; not on crypto). On the legacy TURN source this alert is v8's BUY TURN instead.")
-alertcondition(sellSig, title="Pragati · ▼ distribution",
-     message="▼ DISTRIBUTION. Sellers have taken control across the ladder of a price rich past θ - the grid's Exit cell. As a state it was followed by underperformance in every era of the v9 audit; the entry itself is too rare to measure alone. On the legacy TURN source this alert is v8's SELL TURN instead.")
+alertcondition(buySig, title="Pragati · BUY declared ▲",
+     message="BUY declared. The trace crossed back up through −θ (on the Conviction trace, Samanvaya's value on this chart did) with the value basket settled, and within the confirmation window the MTF value ladder had been cheap past θ, the trace's histogram turned above zero, the conviction tape was above zero or rising and (if enabled) participation had been absorbed - effort exhausted. A declaration about the market at this bar, standing until a SELL. Not a trade.")
+alertcondition(sellSig, title="Pragati · SELL declared ▼",
+     message="SELL declared. The trace crossed back down through +θ (on the Conviction trace, Samanvaya's value on this chart did) with the value basket settled, and within the confirmation window the MTF value ladder had been rich past θ, the trace's histogram turned below zero, the conviction tape was below zero or falling and (if enabled) participation had been absorbed - effort exhausted. A declaration about the market at this bar, standing until a BUY. Not a trade.")
 alertcondition(conLong, title="Pragati · continuation long ◆",
      message="Buyer control held through a pullback and the push resumed past k·σ, with the conviction tape past the inner zone, the MTF value ladder not rich past θ and (if enabled) the push producing result rather than being absorbed. If the marker is faded it fired in a quiet regime.")
 alertcondition(conShort, title="Pragati · continuation short ◆",

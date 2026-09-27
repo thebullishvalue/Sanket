@@ -1,7 +1,7 @@
 # Sanket — Engine Architecture & Research Basis
 
 > This document records *why* the engine is built the way it is. Sanket screens a universe with
-> **Pragati** (`pragati.pine` v8, conviction × value) — the indicator Pragyam's Conviction-Value
+> **Pragati** (`pragati.pine` v9, conviction × value) — the indicator Pragyam's Conviction-Value
 > Grid reads — ported in `pragati.py`, `samanvaya.py`, `pine_v5.py` and `cvgrid.py`, and surfaced by `engine.py`.
 >
 > Two kinds of number appear below. Numbers about **the source indicator** come from the Pine's
@@ -36,7 +36,7 @@ targets — directional, not decisive). Pragati does one level up what Samanvaya
                                 │
         ┌───────────────────────┼─────────────────────────┐
         ▼                       ▼                         ▼
-  ▲▼ TURN / ◆ RESUME       3 × 3 GRID STATE           edge.py
+  ▲▼ (from the grid) / ◆   3 × 3 GRID STATE           edge.py
   (events)                 (where a name stands)      (measured on your universe)
 ```
 
@@ -104,30 +104,39 @@ second normalization, so agreement across frames is **rarer** than any one frame
 
 ## The signals
 
-**▲ TURN** — the trace crosses back up through −θ with the value basket settled (21 bars since
-the last rotation) and at least 30 anchor observations in the fit; that opens a 5-bar window.
-Inside it, on one closed bar: the value tape reached −θ inside the last 20 bars and is not rich past
-+θ now; the conviction tape is above zero or rising two bars running; the histogram is above zero;
-and the push failed — effort absorbed inside the same 20 bars (v6 also took a divergence; v8, as
-v5, does not — the audit found the two paired ≈ 0).
-Falling back below −θ closes the window. **▼** mirrors.
+**v9 reads the ▲▼ from the grid** (`pragati.v9_signals`; the Pine's section 8b).
+
+**▲ CAPITULATION** — the first closed bar on which the grid stands in Buy · capitulation (the
+conviction tape past −30, held there by conviction's own histogram; the value tape past −θ) with
+the value momentum tape reverting (the 5 × 5 value phase +1). **▼ DISTRIBUTION** — the first bar in
+Exit · distribution (sellers in control of a price past +θ). 10-bar cooldown per side; the last one
+stands as the declaration. Measured (studies/pragati_v9_audit.md, three eras, daily and weekly, no
+look-ahead): the ▲ +0.046 / +0.056 / +0.046σ at 10 bars; the distribution state followed by
+underperformance in every era.
+
+**Legacy · v8's TURN** (`signal_source="turn"`) — the trace crosses back up through −θ with the
+value basket settled, opening a 5-bar window; inside it the value tape reached −θ in the last 20
+bars and is not rich now, the conviction tape is above zero or rising two bars, the histogram is
+above zero, and effort was absorbed inside the 20 bars. Measured in v9: no edge after 2020 on daily
+bars, negative on weekly, and on daily only positive after a capitulation.
 
 **◆ RESUME** — the histogram dipped below zero inside 6 bars and crosses +0.5σ; chart conviction
 is above zero; the conviction tape is at or past +30; the value tape is below +θ; effort is not
-absorbed on the bar. Short mirrors. **Off by default in v8**: negative in both eras of the audit
-outside crypto (−0.021σ / −0.041σ at h 10).
+absorbed on the bar. Short mirrors. **Off by default since v8** (negative outside crypto; negative or
+mixed again in v9).
 
-A TURN takes precedence over a RESUME on the same bar; ▲ and long ◆ share one 10-bar cooldown.
+A ▲▼ takes precedence over a ◆ on the same bar; ▲ and long ◆ share one 10-bar cooldown.
 
-**Divergence is drawn, not traded** (v8: the audit found R without a stable edge and H negative
-in both eras), and it is found on **conviction's own pivots** (5/5,
+**Divergence is off by default in v9** (R about zero in every era, daily and weekly; H negative or
+mixed), and when switched on it is found on **conviction's own pivots** (5/5,
 separated by 5 … 60 bars), not on the trace — whose pivots would be a new, unmeasured object. It
 counts only when zone-gated (the earlier pivot beyond ±30) and when value at the pivot was
 stretched the right way. Price is sampled at the swing's true extreme.
 
-**Why every layer on one bar.** The trace blends two things, so its crossing alone cannot say which
-of them moved — a stretch can release because price came back to fair while sellers kept selling.
-The trace opens a TURN; each ingredient confirms on its own tape.
+**Why the grid, not the trace.** The trace blends two things, so its crossing alone cannot say
+which of them moved. The grid keeps them apart — who controls across the ladder, where price
+stands — and the audit found the edge exactly there: sellers still in control of a price already
+cheap, with value starting to turn.
 
 ## What the source measured
 
@@ -143,7 +152,7 @@ Quoted from the Pine, at face value, including what does not flatter it:
 | Continuation | +0.036R on the primaries, −0.016R elsewhere |
 | Anything, overlap-corrected | **Nothing reaches significance**; best t = 1.9 of 48 cells |
 | Fitted vs unseen edge, 900 configurations | correlation ≈ 0 |
-| Trace, histogram, TURN / RESUME, grid | unmeasured by the source — measured since by `pine_audit.py` (`studies/pine_audit.md`) |
+| Trace, histogram, the ▲▼ / ◆, grid | unmeasured by the source — measured since by the v8 and v9 audits (`studies/`) |
 
 Method: next-bar entry, 2 ATR target / 1 ATR stop, 20 bars max, edge in R over a matched
 baseline; 60/40 split plus eight held-out instruments; 26 years daily, ~730 days hourly, 60 days
@@ -194,7 +203,7 @@ neither fires on it nor, since the trace study, ranks by it.**
 
 ```
 long side                                   short side
-5 + s   ▲ TURN on this bar                  5 + s'  ▼ TURN on this bar
+5 + s   ▲ on this bar                       5 + s'  ▼ on this bar
 s       every other name, by stretch        s'      every other name, by stretch
 
 s = −trace / 200 ∈ (−½, ½)   (stretched furthest DOWN leads the long side)   s' = −s
@@ -224,20 +233,20 @@ cost gate is a flag on the row.
 `edge.py` measures the event set on the symbols on screen, through `engine.compute_frame` — the
 exact call the screener makes — so warm-up, the stack gate, the basket gate and the cooldowns apply
 to the study by construction. Six slices: Long · all and Short · all (the screen's sides), and each
-kind alone (▲ TURN, ▼ TURN, ◆ RESUME ↑, ◆ RESUME ↓).
+kind alone (▲ capitulation, ▼ distribution, ◆ RESUME ↑, ◆ RESUME ↓).
 
 | # | Step | The failure it prevents |
 |:--|:---|:---|
 | 1 | Event study: enter the bar after the signal, hold 10 | Measuring a continuous form nobody trades |
-| 2 | Drift removal, within era | Beta read as edge |
-| 3 | Vol normalisation by the symbol's own σ | Incomparable instruments |
+| 2 | Drift removal, **causal**: the mean of the 500 h-bar returns realised before the event (v9; was in-era, a look-ahead) | Beta read as edge |
+| 3 | Vol normalisation by the symbol's own trailing σ | Incomparable instruments |
 | 4 | Sign folding | Two sides on opposite conventions |
 | 5 | Block bootstrap over dates | Overlap and a correlated cross-section inflating significance |
 | 6 | Cost in the same vol units | The same bps costing 4× more on a low-vol name |
 | 7 | Power stated: `n_eff = (dates / h) × participation ratio`, and an MDE | "No edge" from a test that could never have seen one |
 
-`UNDERPOWERED` (the MDE exceeds 0.036) is distinct from `NO EDGE`. TURNs need every layer on one
-bar, so their slices will often be underpowered even over 15 years; the pooled sides less so.
+`UNDERPOWERED` (the MDE exceeds 0.036) is distinct from `NO EDGE`. The ▲ is worth about +0.05σ, so
+its slice will often be underpowered even over 15 years; the pooled sides less so.
 
 **Memory.** Streaming in chunks of 20 symbols, lean (no volume profile, no regime engine),
 universes above 80 sampled with a fixed seed. The macro drivers are one deep batch for the whole
