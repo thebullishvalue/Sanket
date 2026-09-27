@@ -1,10 +1,10 @@
-# Pragati · a from-scratch audit, and what v7 changed
+# Pragati · a from-scratch audit — v7, v5, and the final v8
 
 **Scope.** Every output of `pragati.pine` v6, through its Python port (bar for bar with the Pine), measured on real data with no reliance on the script's own claims. 380 instruments: 237 NSE stocks, 40 US large caps, 38 world indices, 23 commodities, 23 FX pairs, 19 cryptocurrencies; daily bars back to 2006 where they exist. **Discovery** = before 2018-01-01, **holdout** = from it.
 
 **Scoring.** Each output becomes a position p ∈ [−1, 1] (+ = the output's own "up"). Score = p × the forward return from the next open over h bars, minus the instrument's own mean and divided by its own σ inside the era — timing skill in σ, drift removed, so simply holding a rising asset scores zero. `**` = 95% block-bootstrap interval (blocks of whole dates) excludes zero.
 
-Reproduce: `pine_audit.py` (`baseline`, `sweep`, `experiments`, `capitulation`, `oi`).
+Reproduce: `pine_audit.py` (`baseline`, `sweep`, `experiments`, `capitulation`, `oi`; `v5`, `oi5` for sections 9–10). Sections 1–8 audit v6 → v7; **sections 9–11 audit the user's v5, compare it with v7, and record the decision: v8.**
 
 ## 1 · The defaults, every output (h = 10 bars)
 
@@ -276,3 +276,70 @@ No OI character and not 'crowded' keeps its sign across the two eras. The gold c
   where to lean — which is how the grid is meant to be read.
 - **Limits:** crypto trends and the reversion reading fails there; NSE stocks show the weakest
   effects of the non-crypto classes; OI history covers 2019 onward only.
+
+## 9 · v5 against v7 — the same audit, head to head
+
+The user's `pragati.pine` v5 (kept at `archive/pragati_v5.pine`) was ported where it differs from v6/v7 (`pine_v5.py`: its ▲▼ with absorption as the only failed-push evidence, its ◆ without the in-zone requirement, its R / H divergence marks, its graded 3 × 3 grid with the 5 × 5 phases, its OI quadrant) and checked bar for bar: the port's signals match `pine_v5.signals` exactly on the test names, and the graded units match Pragyam's `cvgrid.graded_units` to 1e-15 wherever the phases do not halve an edge. Same 380 instruments, same scoring, same split.
+
+**Signals (h = 10; avg = mean of the five non-crypto classes)**
+
+| | disc avg | hold avg | holdout by class (NSE · US · Idx · Cmd · FX · Crypto) |
+|---|---|---|---|
+| v5 ▲▼ TURN | +0.032 | +0.033 | -0.024 · +0.066 · +0.125 · -0.030 · +0.027 · -0.094 |
+| v7 ▲▼ TURN | +0.029 | +0.041 | -0.020 · +0.071 · +0.131** · -0.019 · +0.041 · -0.083 |
+| v5 ◆ RESUME | -0.021 | -0.041 | +0.016 · -0.083** · -0.042 · -0.002 · -0.095 · +0.068 |
+| v7 ◆ RESUME | -0.019 | -0.050 | +0.017 · -0.083** · -0.056 · -0.027 · -0.100 · +0.043 |
+| v5 declaration held | +0.004 | +0.005 | |
+| v7 declaration held | +0.003 | +0.007 | |
+| v5 R divergence | -0.031 | +0.024 | |
+| v5 H divergence | -0.049 | -0.089 | |
+
+The signal sets **tie** — paired by date, v5 − v7 is ≈ 0 for TURN and for the declaration. ◆ RESUME is negative in both eras in both versions, significantly on US stocks in both. R has no stable sign; H is negative in both eras. The source's claim that regular divergence "ranked first" did not reproduce.
+
+**The grid read as a position (graded units, centred on Wait; avg of non-crypto classes)**
+
+| | h 10 disc | h 10 hold | h 20 disc | h 20 hold |
+|---|---|---|---|---|
+| v5, its own units (U0) | -0.007 | -0.027 | -0.003 | -0.043 |
+| v7 4 × 4 | +0.016 | +0.002 | +0.019 | +0.003 |
+| **v5 grid, units U4** | **+0.039** | **+0.039** | **+0.044** | **+0.051** |
+
+U4 — DOWN·cheap 3, DOWN·fair 1½, UP·fair 1½, UP·rich ¾ — was chosen among five pre-registered unit sets (U0–U4) **on the discovery era alone**, from section 5's finding, and read once on the holdout. U4 by class on the holdout at h 10: NSE +0.006, US +0.050, indices +0.063, commodities +0.044, FX +0.029, crypto -0.003. Paired by date on the holdout: **U4 − v7 = +0.017σ** (h 10) and **+0.020σ** (h 20), both significant (discovery +0.007 / +0.009); U4 − U0 = +0.040σ / +0.052σ, significant.
+
+## 10 · Open interest, v5's reading
+
+v5 reads OI as a quadrant on the push and casts a gold histogram when a push is made mostly by exits. Same 240 F&O stocks, same split (h = 10):
+
+| | Discovery | Holdout |
+|---|---|---|
+| Long build-up | -0.007 | -0.029 |
+| Short build-up | -0.040 | -0.001 |
+| Short covering | +0.004 | -0.021 |
+| Long unwinding | +0.024 | +0.063 |
+| Push with the gold cast | +0.027 | **-0.060\*\*** |
+| Push without it | +0.041 | -0.018 |
+
+No quadrant carries a stable edge of its own; long unwinding (a move against exiting longs) was followed by gains in both eras, but neither is significant. The cast does what a caution colour should: pushes made by exits did worse than other pushes **in both eras** (−0.014 and −0.042). As a colour it earns its place; as a veto on the grid (v6) it did not.
+
+## 11 · The decision — Pragati v8
+
+**v8 = v5, plus exactly what the data backed in both eras:**
+
+1. **Grid units U4**, with the actions renamed to what was measured: DOWN·cheap *Buy · capitulation 3*, DOWN·fair *Accumulate · washout 1½*, UP·fair *Hold · building 1½*, UP·rich *Trim · paid ¾*.
+2. **◆ RESUME off by default** — negative in both eras. It stays in the code and can be switched on.
+3. **Conviction ladder default: Ladder up** (the ports have always run it; Ladder down needs intraday history no free feed carries, so it is unmeasured here).
+4. **OI gold cast on by default**, colour only.
+5. **R and H** keep their defaults and are drawn; their tooltips now say what the audit found.
+
+Why v5 over v7: the signals tie, and v5's 3 × 3 grid with U4 beats v7's 4 × 4 on the holdout, paired and significant at both horizons. v7 is kept at `archive/pragati_v7.pine` and `cvgrid4.py` so this comparison stays reproducible.
+
+**Confirmed in Pragyam's allocator** (`research/cvg_reweight.py` there; monthly, every name held, net of 10bp India / 3bp US costs, decided before 2018 and confirmed once after), %/yr:
+
+| | v8 − seed, <2018 | v8 − seed, ≥2018 | v8 − EW, <2018 | v8 − EW, ≥2018 | turnover v8 / seed |
+|---|---|---|---|---|---|
+| Nifty 50 | +0.42 (t 0.6) | +0.98 (t 1.5) | +0.83 (t 2.1) | +0.47 (t 1.3) | 1.28x / 1.47x |
+| Dow 30 | +0.55 (t 1.0) | +0.89 (t 1.0) | -0.23 | +0.90 (t 2.4) | 1.17x / 1.47x |
+
+Positive in both eras on both panels at lower turnover, so Pragyam's units changed to match. No single t against the seed clears 2; it is shipped as consistent, not proven. The ETF book (1–27 funds, from 2012) is too thin to split and was not tested.
+
+**Limits, restated for v8.** Crypto trends and the reversion reading fails there. NSE stocks show the weakest effects. Nothing was tuned — section 2 still holds. The `.pine` file cannot be compiled here: load it in TradingView and check it compiles before relying on it.

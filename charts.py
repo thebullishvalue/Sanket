@@ -50,11 +50,13 @@ COLORS = _LivePalette()
 TONE_SYMBOL = {"emerald": "triangle-up", "cyan": "circle", "amber": "square",
                "rose": "triangle-down", "slate": "diamond"}
 #: Legend wording for each tone, in the order a book reads them.
-TONE_LABEL = {"emerald": "Buy / Add — capitulation, turn, trend below fair",
-              "cyan": "Accumulate — washout, base, deep value",
+TONE_LABEL = {"emerald": "Buy — capitulation or a turn",
+              "cyan": "Accumulate — washout or base",
               "slate": "Wait — no edge",
-              "amber": "Hold / Trim — extended, rich or stalling",
-              "rose": "Trim / Reduce / Exit — sellers in control"}
+              "amber": "Hold / Trim — building, stalling or paid",
+              "rose": "Exit — distribution"}
+#: The trace's push in five levels, for the hover.
+_PUSH5 = {2: "impulse ↑", 1: "push ↑", 0: "no push", -1: "push ↓", -2: "impulse ↓"}
 TONE_ORDER = ("emerald", "cyan", "slate", "amber", "rose")
 
 _MONO = "JetBrains Mono, monospace"
@@ -63,15 +65,15 @@ _LIM = 100.0
 
 def _cell_edges():
     th = sv.THETA_OSC
-    return (-_LIM, -30.0, 0.0, 30.0, _LIM), (-_LIM, -th, 0.0, th, _LIM)
+    return (-_LIM, -30.0, 30.0, _LIM), (-_LIM, -th, th, _LIM)
 
 
 def create_conviction_value_map(df: "pd.DataFrame | None") -> go.Figure:
-    """Every name placed by its two tapes — the grid as a plane (Pragyam's CVG map, 4 × 4).
+    """Every name placed by its two tapes — the grid as a plane (Pragyam's CVG map, 3 × 3).
 
     Conviction across (sellers ← → buyers), value up (+ rich). The dotted lines are
-    each tape's own knee — ±30 conviction, ±θ value — and the faint solid lines their
-    zero; together they cut the plane into the sixteen cells. A cell is tinted with its
+    each tape's own knee — ±30 conviction, ±θ value — and they cut the plane into the
+    nine cells; the faint solid lines are each tape's zero. A cell is tinted with its
     tone and named in its corner. A point sits where its TAPES are; its colour and shape
     are its STATE. The histogram moves a name's row only on a confirmed push, so a
     HOLLOW point — a held row — can sit in a region it is not coloured for. A point
@@ -88,9 +90,9 @@ def create_conviction_value_map(df: "pd.DataFrame | None") -> go.Figure:
     xs, ys = _cell_edges()
 
     # Region tints, faint: the plane's structure without competing with the points.
-    for r in range(4):
-        for c in range(4):
-            cell = r * 4 + c
+    for r in range(cg.N_ROWS):
+        for c in range(cg.N_COLS):
+            cell = r * cg.N_COLS + c
             tone = cg.TONES[cell]
             if tone == "slate":
                 continue                      # a cell with nothing to say stays panel
@@ -129,7 +131,7 @@ def create_conviction_value_map(df: "pd.DataFrame | None") -> go.Figure:
                 names.loc[part.index],
                 [cg.NAMES[k] for k in cells.loc[part.index]],
                 pd.to_numeric(part.get("Signal_Score"), errors="coerce").round(0).fillna(np.nan),
-                [cg.PUSH_TEXT.get(int(p) if pd.notna(p) else 0, "no push")
+                [_PUSH5.get(int(p) if pd.notna(p) else 0, "no push")
                  for p in pd.to_numeric(part.get("PRG_Push"), errors="coerce")],
                 ["<br>row HELD — the push is not behind the tape yet" if x else "" for x in h],
             ], axis=-1),

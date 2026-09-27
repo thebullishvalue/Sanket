@@ -1,56 +1,39 @@
 """
-SANKET — the Conviction-Value Grid, 4 × 4 (pragati.pine section 10)
+SANKET — the Conviction-Value Grid, 3 × 3 · Pragati v8 (pragati.pine, the "CVG" block)
 ══════════════════════════════════════════════════════════════════════════════
 
-Pragyam's CVG, grown from its 3 × 3 seed into the 4 × 4 the indicator now draws.
-Where a name stands BETWEEN signals, as something to DO about it. A state, not a
-signal: signals are events, the grid is where the name stands between them, and
-neither reads the other.
+Pragyam's grid, read for one chart — the grid pragati.pine v8 draws and Pragyam sizes
+its book from. A state, not a signal: where a name stands BETWEEN signals, as something
+to DO about it, at a weight.
 
-FOUR READINGS, FOUR JOBS
-    conviction tape   the ROW     who controls
-    value tape        the COLUMN  where price stands
-    histogram         the PUSH    whether the row may change
-    trace's parts     the CHART   whether the chart already stands elsewhere
+THE AXES are the two ladder tapes:
+    rows     UP (buyers in control) past +30 · FAINT between · DOWN (sellers) past −30
+    columns  cheap past −θ · fair between · rich past +θ
 
-THE AXES are the tapes, split at their knee and at zero — their step and their
-hue — so every cell is a pair of colours actually drawn on the pane:
-    rows     buyers firm ≥ +30 · buyers edge · sellers edge · sellers firm ≤ −30
-    columns  cheap ≤ −θ · below fair · above fair · rich ≥ +θ
+CONVICTION'S OWN HISTOGRAM RUNS THE ROWS. A row moves to its tape only while
+conviction's histogram confirms a push that way — on the move's side, not TURNING, not
+QUIET. Otherwise the row is HELD against its tape.
 
-HOW A NAME MOVES. Columns move freely — price is where it is. Rows are a claim
-about control, so the push must stand behind the claim in proportion to its
-size: a push moves the row ONE step toward the tape, an impulse all the way, no
-push holds it. A row the tape has left is HELD. Before the histogram is
-calibrated the row follows the tape.
+THE 5 × 5 PHASES. Each momentum tape confirms its own instrument's edge: conviction's
+row edge while the faster view RUNS on the row's side, value's column edge once the fast
+end is REVERTING toward fair. An unconfirmed edge sits half-way to the middle.
 
-WHAT EACH CELL SAYS TO DO. The seed's nine states became nine ACTIONS, each
-keeping its seed units, so the word is the weight:
+GRADED UNITS. The name's units are the nine cells' units read at its shaded position on
+the map (the Pine's own tape ramps; a held row keeps between half and all of its cell
+by how firmly the push holding it is drawn) — Pragyam's graded map, bit for bit.
 
-    Buy 3 · Add 3 · Hold 1.5 · Accumulate 1.5 · Wait 1 · Watch 1 ·
-    Trim 0.75 · Reduce 0.5 · Exit 0.25
+THE UNITS — v8, measured (studies/pine_audit.md, research in Pragyam):
 
-                   CHEAP              BELOW FAIR         ABOVE FAIR         RICH
-    buyers firm    Buy·turn           Add·trend          Hold·extended      Hold·don't add
-    buyers edge    Accumulate·basing  Accumulate·        Wait·drifting      Trim·stalling
-                                      early turn
-    sellers edge   Accumulate·        Wait·no edge       Trim·rolling over  Trim·topping
-                   deep value
-    sellers firm   Buy·capitulation   Accumulate·washout Reduce·breakdown   Exit·distribution
+                   CHEAP                FAIR                  RICH
+    UP  buyers     Buy · turned 3       Hold · building 1½    Trim · paid ¾
+    FAINT          Accumulate · basing 1½  Wait · idle 1      Trim · stalling ¾
+    DOWN sellers   Buy · capitulation 3 Accumulate · washout 1½  Exit · distribution ¼
 
-v7 — THREE CELLS CHANGED BY MEASUREMENT (pine_audit.py, studies/pine_audit.md). The
-v6 map was chosen by meaning. Measured on 380 instruments in six asset classes over
-~20 years, split before / after 2018:
-  · sellers firm × cheap  was Watch 1u   → Buy · capitulation 3u
-  · sellers firm × below  was Reduce ½u  → Accumulate · washout 1½u
-    Both cells were followed by gains in BOTH eras on NSE, US, indices, commodities
-    and FX (holdout +0.10 to +0.35σ over 10–20 bars, significant on four of the five);
-    the stack adds to plain oversold — oversold names OUTSIDE these cells lagged.
-  · buyers firm × above fair  was Add 3u → Hold · extended 1½u — no support in
-    either era (negative after 2018 on US, indices and FX).
-Every other cell is unchanged: nothing measured held in both eras. Crypto trends
-and is the exception — the capitulation cells carried nothing there. The units are
-a weight, not a forecast.
+v5 / Pragyam's seed had DOWN·cheap Watch 1, DOWN·fair Reduce ½, UP·fair Add 3 and
+UP·rich Hold 1½. Chosen on data before 2018 across 380 instruments in six classes and
+confirmed after it; in Pragyam's own allocator (monthly, every name held) the same four
+moves beat the seed units in both eras on Nifty 50 and Dow 30, at lower turnover.
+Crypto trends and is the stated exception.
 
 Author: @thebullishvalue
 """
@@ -60,92 +43,80 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-UNREAD = 16
+import pine_v5
 
-# Cell = row · 4 + column. Rows: 0 sellers firm, 1 sellers edge, 2 buyers edge,
-# 3 buyers firm. Columns: 0 cheap, 1 below fair, 2 above fair, 3 rich. 16 UNREAD.
+N_ROWS, N_COLS = 3, 3
+UNREAD = N_ROWS * N_COLS          # 9
+
+# Cell = row · 3 + column. Rows: 0 DOWN (sellers), 1 FAINT, 2 UP (buyers).
+# Columns: 0 cheap, 1 fair, 2 rich.
 NAMES = (
-    "Buy · capitulation",      "Accumulate · washout",    "Reduce · breakdown",  "Exit · distribution",
-    "Accumulate · deep value", "Wait · no edge",          "Trim · rolling over", "Trim · topping",
-    "Accumulate · basing",     "Accumulate · early turn", "Wait · drifting",     "Trim · stalling",
-    "Buy · turn",              "Add · trend",             "Hold · extended",     "Hold · don't add",
+    "Buy · capitulation",  "Accumulate · washout", "Exit · distribution",
+    "Accumulate · basing", "Wait · idle",          "Trim · stalling",
+    "Buy · turned",        "Hold · building",      "Trim · paid",
     "Unread",
 )
-# Units are the action's, and each action's are its seed state's.
+#: Pragyam's name for each cell — the family its book sizes from.
+FAMILY = ("DISLOCATED", "FADING", "DISTRIBUTION", "BASING", "IDLE", "STALLING",
+          "TURNED", "BUILDING", "PAID", "UNREAD")
 UNITS = (
-    3.00, 1.50, 0.50, 0.25,
-    1.50, 1.00, 0.75, 0.75,
-    1.50, 1.50, 1.00, 0.75,
-    3.00, 3.00, 1.50, 1.50,
+    3.00, 1.50, 0.25,
+    1.50, 1.00, 0.75,
+    3.00, 1.50, 0.75,
     1.00,
 )
-# The side each action works: +1 builds the position, −1 cuts it, 0 neither.
+#: The same units keyed as pine_v5.grid reads them: (row −1 DOWN / 0 FAINT / +1 UP, column).
+UNITS_RC = {(r - 1, c): UNITS[r * 3 + c] for r in range(3) for c in range(3)}
+# The side each action works: +1 builds (Buy, Accumulate), −1 cuts (Trim, Exit), 0 neither.
 SIDES = (
-    1,  1, -1, -1,
-    1,  0, -1, -1,
-    1,  1,  0, -1,
-    1,  1,  0,  0,
+    1,  1, -1,
+    1,  0, -1,
+    1,  0, -1,
     0,
 )
 MEANING = (
-    "sellers firmly in control at a cheap price - capitulation; measured, this cell was followed by gains in both eras on every asset class but crypto",
-    "sellers firmly in control below fair - a washout; measured, followed by gains in both eras outside crypto",
-    "sellers firmly in control while price is still above fair - the market is breaking down",
-    "sellers firmly in control at a rich price - distribution; the floor",
-    "cheap, and the sellers are down to an edge - build slowly on value",
-    "sellers edging, price below fair - nothing decided; no edge either way",
-    "sellers edging in while price is above fair - the move is rolling over; take some off",
-    "rich, and the sellers are edging in - a top forming",
-    "cheap, and buyers edging in - the base is forming",
-    "buyers edging in below fair - the earliest turn; start building",
-    "buyers edging, price above fair - drifting without conviction",
-    "rich, and control has faded to an edge - the move has stalled",
-    "cheap, buyers now firmly in control - a dislocation that turned",
-    "buyers firmly in control below fair - the trend, with room to run",
-    "buyers firmly in control and price already above fair - extended; measured, adding here earned nothing in either era",
-    "buyers firmly in control of a rich price - hold it, do not add",
+    "sellers in control at a cheap price - capitulation; measured, followed by gains in both eras on every asset class but crypto",
+    "sellers in control at a fair price - a washout; measured, followed by gains in both eras outside crypto",
+    "sellers in control of a rich price - distribution",
+    "cheap, control not yet decided - the base is forming",
+    "fair price, control not yet decided - nothing to do",
+    "rich, and control has faded - the move has stalled",
+    "cheap, and buyers now in control - a dislocation that turned",
+    "buyers in control at a fair price - hold it; measured, adding here earned nothing in either era",
+    "buyers in control of a price already rich - paid for; take some off",
     "a tape not yet calibrated, or switched off",
 )
-# ── TONES — Pragyam's inference, one mapping for every surface ────────────────
-# Pragyam colours a grid state by what it means, not by the side it trades
-# (ui/shared.py · CVG_TONE), and a state is the same colour everywhere it appears —
-# the map, the census, the tables. Each tone keeps its app-wide meaning:
-#   emerald  the favourable end — buyers firmly in control below a rich price
-#   amber    CAUTION — a price already rich, the move stalling or topping
-#   cyan     information — a cheap name being watched for its turn
-#   slate    unclaimed — no edge either way, or unread
-#   rose     the unfavourable end — sellers in control, breaking down or distributing
+ROW_LABELS = ("sellers in control", "control undecided", "buyers in control")
+COL_LABELS = ("cheap", "fair", "rich")
+
+# ── TONES — one colour per meaning, everywhere the grid appears (Pragyam's CVG_TONE) ──
+#   emerald  build — capitulation, a turn        cyan   accumulate — washout, base
+#   amber    hold or trim — building, rich        slate  wait / unread
+#   rose     exit — distribution
 TONES = (
-    "emerald", "cyan",    "rose",    "rose",       # sellers firm: buy·capitulation · accumulate·washout · reduce · exit
-    "cyan",    "slate",   "rose",    "amber",      # sellers edge: accumulate · wait · trim·rolling · trim·topping
-    "cyan",    "cyan",    "slate",   "amber",      # buyers edge: accumulate · accumulate · wait · trim·stalling
-    "emerald", "emerald", "amber",   "amber",      # buyers firm: buy · add · hold·extended · hold
-    "slate",                                        # unread
+    "emerald", "cyan",  "rose",
+    "cyan",    "slate", "amber",
+    "emerald", "amber", "amber",
+    "slate",
 )
-#: The same, in render_chip / render_metric_card's vocabulary.
 TONE_CHIP = {"emerald": "success", "amber": "warning", "cyan": "info",
              "slate": "neutral", "rose": "danger"}
-#: Actions in the order a book reads them — build, hold, cut — with their tone.
-ACTION_TONE = {"Buy": "emerald", "Add": "emerald", "Accumulate": "cyan", "Hold": "amber",
-               "Wait": "slate", "Watch": "cyan", "Trim": "amber", "Reduce": "rose",
-               "Exit": "rose", "Unread": "slate"}
+ACTIONS = ("Buy", "Accumulate", "Hold", "Wait", "Trim", "Exit")
+ACTION_TONE = {"Buy": "emerald", "Accumulate": "cyan", "Hold": "amber", "Wait": "slate",
+               "Trim": "amber", "Exit": "rose", "Unread": "slate"}
+ACTION_UNITS = {"Buy": 3.0, "Accumulate": 1.5, "Hold": 1.5, "Wait": 1.0, "Trim": 0.75,
+                "Exit": 0.25, "Unread": 1.0}
 
-ROW_LABELS = ("sellers firm", "sellers edge", "buyers edge", "buyers firm")
-COL_LABELS = ("cheap", "below fair", "above fair", "rich")
-ACTIONS = ("Buy", "Add", "Accumulate", "Hold", "Wait", "Watch", "Trim", "Reduce", "Exit")
-ACTION_UNITS = {"Buy": 3.0, "Add": 3.0, "Hold": 1.5, "Accumulate": 1.5, "Wait": 1.0,
-                "Watch": 1.0, "Trim": 0.75, "Reduce": 0.5, "Exit": 0.25, "Unread": 1.0}
+PUSH_TEXT = {1: "push ↑", 0: "no push", -1: "push ↓"}
+PUSH_GLYPH = {1: "↑", 0: "·", -1: "↓"}
+READ_THE_PUSH = ("Conviction's histogram runs the rows: a row moves only on a push that way, "
+                 "and is HELD otherwise. Measured: inside the capitulation cells the push's "
+                 "direction made no consistent difference - the state carried the edge, not "
+                 "the timing - so Buy · capitulation and Accumulate · washout do not wait for "
+                 "a push ↑.")
 
-PUSH_TEXT = {2: "impulse ↑", 1: "push ↑", 0: "no push", -1: "push ↓", -2: "impulse ↓"}
-PUSH_GLYPH = {2: "↑↑", 1: "↑", 0: "·", -1: "↓", -2: "↓↓"}
-
-READ_THE_PUSH = ("The push says which way the row may move next. Measured: inside the "
-                 "capitulation cells its direction made no consistent difference - the state "
-                 "carried the edge, not the timing - so Buy · capitulation and Accumulate · "
-                 "washout do not wait for a push ↑. Hold, Wait and Watch change nothing.")
-
-COLUMNS = ("cvg_cell", "cvg_target_row", "cvg_held", "cvg_since", "cvg_from",
-           "cvg_chart", "cvg_lead")
+COLUMNS = ("cvg_cell", "cvg_units", "cvg_held", "cvg_since", "cvg_from", "cvg_chart",
+           "cvg_lead", "cvg_cph", "cvg_vph", "cvg_push")
 
 
 def action(cell: int) -> str:
@@ -158,79 +129,52 @@ def reason(cell: int) -> str:
 
 
 def row_of(c: float, z1: float) -> int:
-    """f_gRow: the conviction tape's row."""
-    return 3 if c >= z1 else 2 if c >= 0.0 else 1 if c > -z1 else 0
+    """The conviction tape's row: 2 UP, 1 FAINT, 0 DOWN."""
+    return 2 if c >= z1 else 0 if c <= -z1 else 1
 
 
 def col_of(v: float, theta: float) -> int:
-    """f_gCol: the value tape's column."""
-    return 0 if v <= -theta else 1 if v < 0.0 else 2 if v < theta else 3
+    """The value tape's column: 0 cheap, 1 fair, 2 rich."""
+    return 0 if v <= -theta else 2 if v >= theta else 1
 
 
-def classify(c_tape, v_tape, push, hist_ready, read, chart_conv, chart_value, chart_ok,
-             z1: float, theta: float, index=None) -> pd.DataFrame:
-    """Section 10, bar by bar: the grid state, its age, and the chart cell.
+def classify(out: pd.DataFrame, cv: pd.Series, raw_sd: pd.Series, cv_ready: np.ndarray,
+             p) -> pd.DataFrame:
+    """The grid, bar by bar, on pragati.compute's output (pine_v5.grid with v8's units).
 
-    c_tape / v_tape  the MTF conviction and value tapes (the axes)
-    push             the histogram in five levels, −2 … +2
-    hist_ready       the histogram's σ window is clean (else rows follow the tape)
-    read             both tapes can be read (else UNREAD)
-    chart_conv / chart_value / chart_ok   the trace's own ingredients on this
-                     chart — conviction ±100 and value ±100 — and whether both
-                     are calibrated, for the chart cell
-
-    Columns: cvg_cell (0-15, 16 unread), cvg_target_row (the tape's row),
-    cvg_held (1 when the row stands against its tape for want of a push),
-    cvg_since (bar the current cell began), cvg_from (the cell before),
-    cvg_chart (the chart cell) and cvg_lead (+1 the chart cell carries more
-    units than the state, −1 fewer, 0 the same or unread).
+    ``cv`` is chart conviction (the Nishchaya v3 oscillator), ``raw_sd`` its raw share's σ,
+    ``cv_ready`` its calibration gate. Columns: cvg_cell (0-8, 9 unread), cvg_units (the
+    graded units), cvg_held, cvg_since, cvg_from, cvg_chart (where this chart alone would
+    place the name), cvg_lead (+1 the chart cell carries more units, −1 fewer), cvg_cph /
+    cvg_vph (the 5 × 5 phases: +1 confirmed, −1 not, 0 no edge) and cvg_push (the drawn
+    push that runs the rows, −1 … +1).
     """
-    c = np.asarray(c_tape, dtype=float).tolist()
-    v = np.asarray(v_tape, dtype=float).tolist()
-    g = np.asarray(push, dtype=float).tolist()
-    rdy = np.asarray(hist_ready, dtype=bool).tolist()
-    rd = np.asarray(read, dtype=bool).tolist()
-    cc = np.asarray(chart_conv, dtype=float).tolist()
-    cv = np.asarray(chart_value, dtype=float).tolist()
-    cok = np.asarray(chart_ok, dtype=bool).tolist()
-    T = len(c)
-    cell = np.full(T, UNREAD, dtype=int)
-    tgt_row = np.full(T, -1, dtype=int)
-    held = np.zeros(T, dtype=bool)
+    g = pine_v5.grid(out, cv, raw_sd, cv_ready, p, UNITS_RC)
+    T = len(g)
+    row = g["v5_row"].to_numpy(dtype=float)
+    col = g["v5_col"].to_numpy(dtype=float)
+    ok = np.isfinite(row) & np.isfinite(col)
+    cell = np.where(ok, (np.nan_to_num(row) + 1) * 3 + np.nan_to_num(col), UNREAD).astype(int)
     since = np.zeros(T, dtype=int)
     frm = np.full(T, UNREAD, dtype=int)
-    chart = np.full(T, UNREAD, dtype=int)
-    lead = np.zeros(T, dtype=int)
-
-    g_row = None
-    g_cell, g_from, g_since = UNREAD, UNREAD, 0
+    cur, prev, st = UNREAD, UNREAD, 0
     for t in range(T):
-        now = UNREAD
-        if rd[t] and np.isfinite(c[t]) and np.isfinite(v[t]):
-            tgt = row_of(c[t], z1)
-            gp = int(g[t]) if np.isfinite(g[t]) else 0
-            if g_row is None or not rdy[t]:
-                g_row = tgt
-            elif tgt > g_row and gp >= 1:
-                g_row = tgt if gp == 2 else g_row + 1
-            elif tgt < g_row and gp <= -1:
-                g_row = tgt if gp == -2 else g_row - 1
-            held[t] = g_row != tgt
-            tgt_row[t] = tgt
-            now = g_row * 4 + col_of(v[t], theta)
-        else:
-            g_row = None
-        if now != g_cell:
-            g_from, g_cell, g_since = g_cell, now, t
-        cell[t], frm[t], since[t] = g_cell, g_from, g_since
-        if cok[t] and np.isfinite(cc[t]) and np.isfinite(cv[t]):
-            chart[t] = row_of(cc[t], z1) * 4 + col_of(cv[t], theta)
-        if g_cell != UNREAD and chart[t] != UNREAD:
-            du = UNITS[chart[t]] - UNITS[g_cell]
-            lead[t] = 1 if du > 0 else -1 if du < 0 else 0
-    return pd.DataFrame({"cvg_cell": cell, "cvg_target_row": tgt_row, "cvg_held": held,
-                         "cvg_since": since, "cvg_from": frm, "cvg_chart": chart,
-                         "cvg_lead": lead}, index=index)
+        if cell[t] != cur:
+            prev, cur, st = cur, cell[t], t
+        since[t], frm[t] = st, prev
+    th = float(p.theta)
+    cc = cv.to_numpy(dtype=float)
+    vv = out["value"].to_numpy(dtype=float)
+    cok = cv_ready & out["value_built"].fillna(False).to_numpy(bool) & np.isfinite(cc) & np.isfinite(vv)
+    chart = np.where(cok, np.array([row_of(a, p.z1) * 3 + col_of(b, th) if k else UNREAD
+                                    for a, b, k in zip(cc, vv, cok)]), UNREAD).astype(int)
+    u = np.asarray(UNITS)
+    lead = np.where((cell != UNREAD) & (chart != UNREAD), np.sign(u[chart] - u[cell]), 0).astype(int)
+    return pd.DataFrame({"cvg_cell": cell, "cvg_units": g["v5_units"].to_numpy(),
+                         "cvg_held": g["v5_held"].to_numpy(bool), "cvg_since": since,
+                         "cvg_from": frm, "cvg_chart": chart, "cvg_lead": lead,
+                         "cvg_cph": g["v5_cph"].to_numpy(), "cvg_vph": g["v5_vph"].to_numpy(),
+                         "cvg_push": g["v5_push"].to_numpy()}, index=out.index)
 
 
 def tooltip(cell: int, units: float, bars: int, frm: int, chart: int, lead: int,
@@ -239,23 +183,25 @@ def tooltip(cell: int, units: float, bars: int, frm: int, chart: int, lead: int,
     cell, frm, chart = int(cell), int(frm), int(chart)
     if cell == UNREAD:
         return MEANING[UNREAD]
-    s = (f"{NAMES[cell]} - {MEANING[cell]}.\n\n{units:.4g} units · {bars} bars here"
+    s = (f"{NAMES[cell]} ({FAMILY[cell]}) - {MEANING[cell]}.\n\n{units:.3g} units, graded · "
+         f"{UNITS[cell]:g} flat · {bars} bars here"
          + (f" · came from {NAMES[frm]}" if frm not in (UNREAD, cell) else ""))
     if chart != UNREAD:
-        s += (f"\n\nCHART CELL: {NAMES[chart]} - where the trace's own conviction and value "
-              "place it" + (". The chart is already in a better cell than the ladder: it LEADS ↑."
+        s += (f"\n\nCHART CELL: {NAMES[chart]} - where this chart's own conviction and value "
+              "place it" + (". The chart is already in a cell carrying more units: it LEADS ↑."
                             if lead > 0 else
-                            ". The chart is already in a weaker cell than the ladder: it LEADS ↓."
+                            ". The chart is already in a cell carrying fewer units: it LEADS ↓."
                             if lead < 0 else "."))
-    s += "\n\nREAD THE PUSH AGAINST THE ACTION. " + READ_THE_PUSH
+    s += "\n\n" + READ_THE_PUSH
     if held:
-        s += ("\n\nHELD: the conviction tape has moved to another row, but the push has not "
-              "confirmed it, so the state stands.")
+        s += ("\n\nHELD: the conviction tape has moved to another row, but conviction's "
+              "histogram has not confirmed a push that way, so the row stands.")
     return s
 
 
 __all__ = [
-    "ACTIONS", "ACTION_TONE", "ACTION_UNITS", "COLUMNS", "COL_LABELS", "MEANING", "NAMES", "PUSH_GLYPH",
-    "PUSH_TEXT", "READ_THE_PUSH", "ROW_LABELS", "SIDES", "TONES", "TONE_CHIP", "UNITS", "UNREAD",
-    "action", "classify", "col_of", "reason", "row_of", "tooltip",
+    "ACTIONS", "ACTION_TONE", "ACTION_UNITS", "COLUMNS", "COL_LABELS", "FAMILY", "MEANING",
+    "NAMES", "N_COLS", "N_ROWS", "PUSH_GLYPH", "PUSH_TEXT", "READ_THE_PUSH", "ROW_LABELS",
+    "SIDES", "TONES", "TONE_CHIP", "UNITS", "UNITS_RC", "UNREAD", "action", "classify",
+    "col_of", "reason", "row_of", "tooltip",
 ]
