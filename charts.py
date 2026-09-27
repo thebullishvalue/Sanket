@@ -50,10 +50,10 @@ COLORS = _LivePalette()
 TONE_SYMBOL = {"emerald": "triangle-up", "cyan": "circle", "amber": "square",
                "rose": "triangle-down", "slate": "diamond"}
 #: Legend wording for each tone, in the order a book reads them.
-TONE_LABEL = {"emerald": "Buy / Add — buyers firm below rich",
-              "cyan": "Accumulate / Watch — cheap, watched",
+TONE_LABEL = {"emerald": "Buy / Add — capitulation, turn, trend below fair",
+              "cyan": "Accumulate — washout, base, deep value",
               "slate": "Wait — no edge",
-              "amber": "Hold / Trim — rich or stalling",
+              "amber": "Hold / Trim — extended, rich or stalling",
               "rose": "Trim / Reduce / Exit — sellers in control"}
 TONE_ORDER = ("emerald", "cyan", "slate", "amber", "rose")
 

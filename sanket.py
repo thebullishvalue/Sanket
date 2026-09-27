@@ -5476,15 +5476,15 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
                               height=_census_iframe_height(n_un))
     ui.render_note("Rows are who controls (the conviction tape, split at ±30 and 0); columns "
                    "are where price stands (the value tape, split at ±θ and 0). A cell wears its "
-                   "tone: **emerald** builds below a rich price, **cyan** is cheap and watched, "
-                   "**amber** is rich or stalling, **rose** is sellers in control, grey has no "
-                   "edge. " + cg.READ_THE_PUSH)
-    ui.render_note("**Measured, read with care:** the grid's actions are Pragyam's allocator "
-                   "reading. As a *10-bar screen* on five NSE universes (~15 years, trace_study.py) "
-                   "the build cells — *Add · strong trend*, *Hold · don't add* — lagged the "
-                   "cross-section and the sellers-firm, cheap cells — *Watch · still falling*, "
-                   "*Reduce · downtrend* — led it. So the grid describes where a name stands; the "
-                   "screen's ranking reads the stretch as reversion instead.")
+                   "tone: **emerald** builds — a capitulation, a turn, a trend below fair; **cyan** "
+                   "accumulates a washout or a base; **amber** holds an extended or rich price; "
+                   "**rose** is sellers in control above fair; grey has no edge. " + cg.READ_THE_PUSH)
+    ui.render_note("**Measured (grid v7):** across 380 instruments in six asset classes over ~20 "
+                   "years (pine_audit.py), sellers-firm names at a cheap or below-fair price were "
+                   "followed by gains in *both* eras on every class but crypto — so those cells now "
+                   "read *Buy · capitulation* and *Accumulate · washout*, where v6 said Watch and "
+                   "Reduce. Buyers-firm above fair earned nothing in either era and now reads *Hold · "
+                   "extended*. Crypto trends; the capitulation cells carried nothing there.")
 
     # ── the watchlist: TURN windows open ──
     wl = results_df[armed != 0].copy()
