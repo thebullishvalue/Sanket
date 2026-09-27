@@ -27,13 +27,18 @@ THE UNITS — v8, measured (studies/pine_audit.md, research in Pragyam):
                    CHEAP                FAIR                  RICH
     UP  buyers     Buy · turned 3       Hold · building 1½    Trim · paid ¾
     FAINT          Accumulate · basing 1½  Wait · idle 1      Trim · stalling ¾
-    DOWN sellers   Buy · capitulation 3 Accumulate · washout 1½  Exit · distribution ¼
+    DOWN sellers   Buy · capitulation 4 Accumulate · washout 1½  Exit · distribution ¼
 
 v5 / Pragyam's seed had DOWN·cheap Watch 1, DOWN·fair Reduce ½, UP·fair Add 3 and
 UP·rich Hold 1½. Chosen on data before 2018 across 380 instruments in six classes and
 confirmed after it; in Pragyam's own allocator (monthly, every name held) the same four
 moves beat the seed units in both eras on Nifty 50 and Dow 30, at lower turnover.
 Crypto trends and is the stated exception.
+
+v9.1: Buy · capitulation 3 → 4. The one cell positive in every era of the v9 audit
+(look-ahead-free scoring); at 4 units the grid read as a position improved or tied in all
+three eras on both scorers, and in Pragyam's allocator it beat 3 in all three eras on
+Nifty 50 and Dow 30 (every-name and top-30 books, net of costs).
 
 Author: @thebullishvalue
 """
@@ -60,7 +65,7 @@ NAMES = (
 FAMILY = ("DISLOCATED", "FADING", "DISTRIBUTION", "BASING", "IDLE", "STALLING",
           "TURNED", "BUILDING", "PAID", "UNREAD")
 UNITS = (
-    3.00, 1.50, 0.25,
+    4.00, 1.50, 0.25,
     1.50, 1.00, 0.75,
     3.00, 1.50, 0.75,
     1.00,
@@ -104,7 +109,7 @@ TONE_CHIP = {"emerald": "success", "amber": "warning", "cyan": "info",
 ACTIONS = ("Buy", "Accumulate", "Hold", "Wait", "Trim", "Exit")
 ACTION_TONE = {"Buy": "emerald", "Accumulate": "cyan", "Hold": "amber", "Wait": "slate",
                "Trim": "amber", "Exit": "rose", "Unread": "slate"}
-ACTION_UNITS = {"Buy": 3.0, "Accumulate": 1.5, "Hold": 1.5, "Wait": 1.0, "Trim": 0.75,
+ACTION_UNITS = {"Buy": 4.0, "Accumulate": 1.5, "Hold": 1.5, "Wait": 1.0, "Trim": 0.75,
                 "Exit": 0.25, "Unread": 1.0}
 
 PUSH_TEXT = {1: "push ↑", 0: "no push", -1: "push ↓"}
@@ -149,7 +154,8 @@ def classify(out: pd.DataFrame, cv: pd.Series, raw_sd: pd.Series, cv_ready: np.n
     cvg_vph (the 5 × 5 phases: +1 confirmed, −1 not, 0 no edge) and cvg_push (the drawn
     push that runs the rows, −1 … +1).
     """
-    g = pine_v5.grid(out, cv, raw_sd, cv_ready, p, UNITS_RC)
+    ld = (out["c_ladder"] == "down").to_numpy() if "c_ladder" in out.columns else False
+    g = pine_v5.grid(out, cv, raw_sd, cv_ready, p, UNITS_RC, ladder_down=ld)
     T = len(g)
     row = g["v5_row"].to_numpy(dtype=float)
     col = g["v5_col"].to_numpy(dtype=float)

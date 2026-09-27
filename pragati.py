@@ -116,6 +116,10 @@ class Params:
     # (v9_signals, applied by engine.compute_frame once the grid is classified).
     # "turn" keeps v8's arm-then-confirm TURN (the Pine's 'TURN (v8, legacy)').
     signal_source: str = "capitulation"
+    # v9.1: the conviction ladder reads DOWN — the frames inside the chart bar (1m … 4h on a
+    # daily chart, from intraday.py); where a bar has no intraday history the tape falls
+    # back to Ladder up (W · D) and is marked ↺. "up" reads W · D everywhere (v8 / v9).
+    ladder: str = "down"
     confirm: int = 5            # confirmation window
     disloc: int = 20            # dislocation window
     resume: bool = False        # ◆ RESUME — OFF by default in v8: negative in both eras
@@ -417,6 +421,44 @@ def week_label(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return idx - pd.to_timedelta(idx.dayofweek, unit="D")
 
 
+def inside_rung(frame: pd.DataFrame, labels: pd.DatetimeIndex, chart_index: pd.DatetimeIndex,
+                p: Params = DEFAULT) -> pd.Series:
+    """A lower frame's z, participation-weighted inside each chart bar it belongs to (f_inside).
+
+    ``labels`` gives, per bar of ``frame``, the chart bar it sits inside (NaT: none). The
+    frame runs the full engine on its own history; its z is na until its own normalization
+    window is clean (f_child), so a rung joins only where it has calibrated."""
+    ch = chart_conviction(frame, p)
+    z = ch["z"].where(ch["sd_ok"])
+    w = ch["w"].fillna(1.0).clip(lower=1e-6)
+    lab = pd.DatetimeIndex(labels)
+    keep = ~lab.isna()
+    z, w, lab = z[keep], w[keep], lab[keep]
+    num = (z * w).groupby(lab).sum(min_count=1)
+    den = w.where(z.notna()).groupby(lab).sum(min_count=1)
+    y = (num / den).where(den > 0)
+    return y.reindex(pd.DatetimeIndex(chart_index).normalize()).set_axis(chart_index)
+
+
+def ladder_down_rungs(intraday: dict | None, chart_index: pd.DatetimeIndex, chart: str,
+                      p: Params = DEFAULT) -> pd.DataFrame:
+    """The intraday rungs of a Ladder-down conviction tape, one column per frame present."""
+    import intraday as _idm
+    cols = {}
+    if not intraday:
+        return pd.DataFrame(index=chart_index)
+    idx = pd.DatetimeIndex(chart_index)
+    days = idx.normalize()
+    for f, bars in intraday.items():
+        if bars is None or len(bars) == 0:
+            continue
+        lab = _idm.session_days(bars.index, days if chart == "D" else pd.date_range(days.min(), days.max() + pd.Timedelta(days=6), freq="D"))
+        if chart == "W":
+            lab = week_label(lab)
+        cols[f] = inside_rung(bars, lab, idx, p)
+    return pd.DataFrame(cols, index=chart_index)
+
+
 def child_rung(daily: pd.DataFrame, chart_index: pd.DatetimeIndex, p: Params = DEFAULT) -> pd.Series:
     """The daily frame's z, participation-weighted inside each weekly chart bar (f_inside)."""
     ch = chart_conviction(daily, p)
@@ -441,7 +483,7 @@ COLUMNS = (
     "trace", "trace_ok", "hist", "hist_sd", "hist_z", "thr", "hist_ready",
     "push", "push_tier", "quiet", "split", "settling",
     # the tapes
-    "c_tape", "c_ready", "c_rungs", "v_tape", "v_ready", "v_rungs",
+    "c_tape", "c_ready", "c_rungs", "c_ladder", "v_tape", "v_ready", "v_rungs",
     # the stack
     "stack_ok", "stack_why",
     # evidence
@@ -456,7 +498,7 @@ COLUMNS = (
 
 
 def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: str = "D",
-            daily: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+            daily: Optional[pd.DataFrame] = None, intraday: Optional[dict] = None) -> pd.DataFrame:
     """Every reading, piece of evidence and signal pragati.pine draws, per bar.
 
     df      the chart's OHLCV, lower-case columns, ascending
@@ -477,23 +519,51 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
 
     # ── the conviction ladder ──
     rec_err = pd.Series(np.nan, index=idx)
-    if chart == "W":
-        rung = child_rung(daily, idx, p) if daily is not None and len(daily) else pd.Series(np.nan, index=idx)
-        multi = daily is not None and len(daily) > 0
-    else:
-        rung, rec_err = parent_rung(df, "W", p.parent_norm, p)
-        multi = True
     z_chart = ch["z"]
-    if multi:
-        z_cnt = (1 + rung.notna().astype(int)).where(sd_ok, 0)
-        z_lad = ((z_chart + rung.fillna(0.0)) / z_cnt.where(z_cnt > 0, 1)).where(sd_ok, 0.0)
+    sdok_s = pd.Series(sd_ok, index=idx)
+    if chart == "W":
+        # Weekly: Ladder up has no frames above it, so the Pine reads DOWN — the daily bars
+        # inside the week (always available) and, where yfinance has them, 1h and 4h.
+        rung = child_rung(daily, idx, p) if daily is not None and len(daily) else pd.Series(np.nan, index=idx)
+        extra = ladder_down_rungs(intraday, idx, "W", p) if p.ladder == "down" else pd.DataFrame(index=idx)
+        R = pd.concat([rung.rename("D"), extra], axis=1)
+        multi = bool(R.notna().to_numpy().any()) or (daily is not None and len(daily) > 0)
+        n_child = R.notna().sum(axis=1)
+        z_cnt = (1 + n_child).where(sdok_s, 0)
+        z_lad = ((z_chart + R.sum(axis=1, min_count=1).fillna(0.0)) / z_cnt.where(z_cnt > 0, 1)).where(sdok_s, 0.0)
+        lad = 100.0 * _tanh(z_lad)
+        c_tape = _ema(lad, p.smooth) if p.smooth > 1 else lad
+        n_lad = np.cumsum(multi & sd_ok & (z_cnt.to_numpy() > 1))
+        c_ready = n_lad > p.norm + p.smooth
+        c_ladder = pd.Series(np.where(c_ready, "down", ""), index=idx)
     else:
-        z_cnt = pd.Series(0, index=idx)
-        z_lad = pd.Series(0.0, index=idx)
-    lad = 100.0 * _tanh(z_lad)
-    c_tape = _ema(lad, p.smooth) if p.smooth > 1 else lad
-    n_lad = np.cumsum(multi & sd_ok & (z_cnt.to_numpy() > 1))
-    c_ready = n_lad > p.norm + p.smooth
+        # Ladder up — W · D, the parent reconstructed on the chart. Always computed: it is the
+        # tape itself on "up", and the ↺ fallback on "down" wherever no intrabar exists.
+        rung, rec_err = parent_rung(df, "W", p.parent_norm, p)
+        z_cnt = (1 + rung.notna().astype(int)).where(sdok_s, 0)
+        z_lad = ((z_chart + rung.fillna(0.0)) / z_cnt.where(z_cnt > 0, 1)).where(sdok_s, 0.0)
+        lad = 100.0 * _tanh(z_lad)
+        c_tape = _ema(lad, p.smooth) if p.smooth > 1 else lad
+        n_lad = np.cumsum(sd_ok & (z_cnt.to_numpy() > 1))
+        c_ready = n_lad > p.norm + p.smooth
+        c_ladder = pd.Series(np.where(c_ready, "up", ""), index=idx)
+        if p.ladder == "down":
+            # Ladder DOWN — every lower frame yfinance carries, each averaged inside the day.
+            # It takes over once it has held a lower rung for the Pine's own warm-up
+            # (ladReady: norm + smooth bars); before that the tape reads Ladder up, marked ↺.
+            R = ladder_down_rungs(intraday, idx, "D", p)
+            n_child = R.notna().sum(axis=1) if R.shape[1] else pd.Series(0, index=idx)
+            cnt_d = (1 + n_child).where(sdok_s, 0)
+            z_dn = ((z_chart + (R.sum(axis=1, min_count=1).fillna(0.0) if R.shape[1] else 0.0))
+                    / cnt_d.where(cnt_d > 0, 1)).where(sdok_s, 0.0)
+            lad_dn = 100.0 * _tanh(z_dn)
+            tape_dn = _ema(lad_dn, p.smooth) if p.smooth > 1 else lad_dn
+            use_dn = np.cumsum(sd_ok & (n_child.to_numpy() > 0)) > p.norm + p.smooth
+            c_tape = pd.Series(np.where(use_dn, tape_dn, c_tape), index=idx)
+            z_cnt = pd.Series(np.where(use_dn, cnt_d, z_cnt), index=idx)
+            c_ready = np.where(use_dn, True, c_ready)
+            c_ladder = pd.Series(np.where(use_dn, "down", np.where(c_ready, "up↺", "")), index=idx)
+        multi = True
 
     # ── value ──
     built = value["model_built"].astype(bool).to_numpy()
@@ -723,7 +793,7 @@ def compute(df: pd.DataFrame, value: pd.DataFrame, p: Params = DEFAULT, chart: s
         "trace": trace.where(trace_ok), "trace_ok": trace_ok,
         "hist": hist, "hist_sd": hist_sd, "hist_z": hist_z, "thr": thr, "hist_ready": ready,
         "push": push, "push_tier": tier, "quiet": quiet, "split": split, "settling": ~tradable,
-        "c_tape": c_tape, "c_ready": c_ready, "c_rungs": z_cnt,
+        "c_tape": c_tape, "c_ready": c_ready, "c_rungs": z_cnt, "c_ladder": c_ladder,
         "v_tape": v_tape, "v_ready": v_ready, "v_rungs": value["tape_rungs"],
         "stack_ok": stack_ok, "stack_why": why,
         "abs_seen": abs_seen, "bull_div": bull_div, "bear_div": bear_div,

@@ -7,6 +7,27 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v9.1.0] · 2026-09-27
+### Conviction ladder DOWN in the Pine, Sanket and Pragyam · Buy · capitulation 4 units
+
+- **The conviction ladder reads DOWN.** Measured head to head on the same daily charts (377
+  instruments, Nov 2024 – Sep 2026, 1h + 4h rungs, value identical): the grid tied; the ▲ was as
+  good or better on Ladder down in every non-crypto class, significantly on indices, commodities
+  and FX pooled; tied on stocks. The Pine's default is now Ladder down (every timeframe's logic
+  unchanged). Sanket and Pragyam read it from yfinance (`intraday.py`: 1m 7d, 5m/15m/30m 60d,
+  1h 730d; 3m and 4h built), each rung joining where its history calibrates; bars older than the
+  intraday history fall back to Ladder up, marked ↺ (`PRG_Ladder`). The grid's conviction momentum
+  now follows each bar's ladder (fixes weekly, which read Ladder down with Ladder up's sign).
+  `ENGINE_SIG` prg3.
+- **CVG walkthrough on real data.** Buy · capitulation and Exit · distribution hold as stated in
+  every era; Accumulate · washout weakly; the other cells read ≈ 0. Tested in Pragyam's allocator
+  (pre-registered, three eras, both universes): a 200-day trend tilt HURT (−0.47 %/yr after 2020 on
+  Nifty) and was rejected; neutralising the ≈ 0 cells was a wash and rejected; **Buy · capitulation
+  4 units** beat 3 in all three eras on Nifty 50 and Dow 30 and improved the grid in the lab under
+  both scorers — adopted in the Pine, Sanket and Pragyam.
+
+---
+
 ## [v9.0.0] · 2026-09-27
 ### Pragati v9 — a fresh audit, the measuring stick fixed, the signals moved to where the edge is
 

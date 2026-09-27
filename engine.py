@@ -93,6 +93,7 @@ import numpy as np
 import pandas as pd
 
 import cvgrid as cg
+import intraday as idm
 import pragati as pg
 import samanvaya as sv
 
@@ -197,7 +198,9 @@ class EngineSettings:
 
     @property
     def ladder_label(self) -> str:
-        return "D inside · W" if self.chart == "W" else "W · D"
+        if self.params.ladder != "down":
+            return "D inside · W" if self.chart == "W" else "W · D"
+        return "1h·4h·D inside · W" if self.chart == "W" else "1m…4h inside · D (↺ W·D before intraday history)"
 
     @property
     def value_ladder_label(self) -> str:
@@ -329,8 +332,11 @@ def value_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
 
 def compute_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
                   settings: EngineSettings, daily: pd.DataFrame | None = None,
-                  value: pd.DataFrame | None = None) -> pd.DataFrame:
+                  value: pd.DataFrame | None = None, intraday: dict | None = None) -> pd.DataFrame:
     """The whole stack for one name, as a frame on the chart's own index.
+
+    The conviction ladder reads DOWN (v9.1): ``intraday`` is {frame: bars} from
+    intraday.py; when None it is taken from intraday.py's session cache (fetched on demand).
 
     ``df`` is the chart's OHLCV (Title-case, ascending). ``drivers`` the macro closes
     (samanvaya.prepare_drivers for the chart). ``daily`` the daily bars behind a weekly
@@ -341,7 +347,9 @@ def compute_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
     chart = settings.chart
     val = sv.compute_value(lo, drivers, symbol, chart=chart) if value is None else value
     dl = _lower(daily) if daily is not None and len(daily) else None
-    out = pg.compute(lo, val, settings.params, chart=chart, daily=dl)
+    if intraday is None and settings.params.ladder == "down":
+        intraday = idm.frames(symbol, idm.DAILY_FRAMES if chart == "D" else idm.WEEKLY_FRAMES)
+    out = pg.compute(lo, val, settings.params, chart=chart, daily=dl, intraday=intraday)
     # The grid (v8, 3 × 3): conviction's own histogram runs its rows, so it reads chart
     # conviction and its calibration gate beside the tapes.
     p = settings.params
@@ -369,6 +377,8 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
       PRG_Hist / PRG_Hist_Z      the trace's push (trace − EMA9), native and in its own σ
       PRG_Push / PRG_Push_Tier   the push in five levels (−2 … +2) and its drawn tier
       PRG_CTape / PRG_VTape      the MTF conviction and value tapes (the grid's axes)
+      PRG_Ladder                 the conviction ladder read on this bar: down, or up↺ where no
+                                 intraday history exists yet
       PRG_Raw / PRG_Raw_Sd       the raw participation-weighted share and its σ
       PRG_Eff_Pct / PRG_Absorbed effort → result percentile; absorbed = bottom fifth
       PRG_Hedge / PRG_Drivers    the macro hedge applied and the drivers in use
@@ -416,6 +426,7 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     df["PRG_Push_Tier"] = f["push_tier"]
     df["PRG_CTape"] = f["c_tape"].where(f["c_ready"].fillna(False).astype(bool))
     df["PRG_VTape"] = f["v_tape"].where(f["v_ready"].fillna(False).astype(bool))
+    df["PRG_Ladder"] = f["c_ladder"].fillna("")        # down · up↺ (no intraday yet) · '' warming
     df["PRG_Raw"] = f["raw"]
     df["PRG_Raw_Sd"] = f["raw_sd"]
     df["PRG_Eff_Pct"] = f["eff_pct"]

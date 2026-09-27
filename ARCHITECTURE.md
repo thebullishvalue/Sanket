@@ -174,7 +174,7 @@ with four cells measured (`studies/pine_audit.md`, chosen before 2018, confirmed
             CHEAP                     FAIR                      RICH
 UP          Buy · turned 3            Hold · building 1.5       Trim · paid 0.75
 FAINT       Accumulate · basing 1.5   Wait · idle 1             Trim · stalling 0.75
-DOWN        Buy · capitulation 3      Accumulate · washout 1.5  Exit · distribution 0.25
+DOWN        Buy · capitulation 4      Accumulate · washout 1.5  Exit · distribution 0.25
 ```
 
 The seed had DOWN·cheap 1, DOWN·fair 0.5, UP·fair 3, UP·rich 1.5. Read as a position outside

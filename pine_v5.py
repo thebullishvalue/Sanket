@@ -222,7 +222,7 @@ def _g_at(rp, cp, units: dict):
 
 
 def grid(out: pd.DataFrame, cv: pd.Series, raw_sd: pd.Series, cv_ready: np.ndarray,
-         p: pg.Params, units: dict | None = None) -> pd.DataFrame:
+         p: pg.Params, units: dict | None = None, ladder_down=False) -> pd.DataFrame:
     units = units or UNITS_V5
     T = len(out)
     th = float(p.theta)
@@ -254,12 +254,15 @@ def grid(out: pd.DataFrame, cv: pd.Series, raw_sd: pd.Series, cv_ready: np.ndarr
                     _g_ink(m, np.zeros(T), cv_hi, 88.0, 72.0))
     g_push = np.where(~cv_ready, np.nan, np.where(above, 1.0, -1.0) * ink * np.where(quiet, 0.45, 1.0))
 
-    # the momentum tapes (ladder up on both instruments: chart − tape)
+    # the momentum tapes: faster − slower. Ladder up (default): chart − tape; a conviction
+    # ladder looking DOWN is the faster view, so there it is tape − chart (the Pine's ladMom).
     m_c = out["c_tape"]
     m_v = out["v_tape"]
     c_ready = out["c_ready"].fillna(False).to_numpy(bool)
     v_ready = out["v_ready"].fillna(False).to_numpy(bool)
-    lad_mom = cv - m_c
+    ld = np.broadcast_to(np.asarray(ladder_down, dtype=bool), (T,))     # per bar: ↺ bars read up
+    lad_mom = pd.Series(np.where(ld, (m_c - cv).to_numpy(dtype=float), (cv - m_c).to_numpy(dtype=float)),
+                        index=cv.index)
     lm_ready = c_ready & cv_ready
     lm_sd = lad_mom.where(lm_ready).rolling(p.norm, min_periods=p.norm).std(ddof=0)
     lm_thr = (p.k * lm_sd.fillna(0.0)).to_numpy()

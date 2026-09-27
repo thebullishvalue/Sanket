@@ -39,6 +39,7 @@ import io
 import urllib3
 import engine as eng
 import edge
+import intraday as idm
 import samanvaya as sv
 import cvgrid as cg
 import charts
@@ -89,7 +90,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v9.0.0"
+VERSION = "v9.1.0"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -104,7 +105,8 @@ ENGINE_CODE = "PRAGATI"
 #   sid2  v7.0.1  counted warmup (452 bars, was 245); "Raw share" scaling removed
 #   prg1  v8.0.0  Pragati v6: trace, tapes, TURN / RESUME, the 4 × 4 grid
 #   prg2  v9.0.0  Pragati v9: the ▲▼ read from the grid; the Edge Study scored causally
-ENGINE_SIG = "prg2"
+#   prg3  v9.1.0  the conviction ladder reads DOWN from yfinance intraday (↺ W·D before it)
+ENGINE_SIG = "prg3"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -307,6 +309,7 @@ def get_universe_data(stock_list: list, end_date: datetime.date = None,
             f"Data registry HIT — {len(cached)} symbols available "
             f"(requested {len(stock_list)}, end_date={end_date})"
         )
+        _prefetch_intraday(list(cached))
         return cached, f"✓ {len(cached)} symbols (session registry)"
 
     console.detail(
@@ -318,7 +321,20 @@ def get_universe_data(stock_list: list, end_date: datetime.date = None,
     )
     if data_dict:
         _registry_put(stock_list, end_date, data_dict, days_back)
+        _prefetch_intraday(list(data_dict))
     return data_dict, msg
+
+
+def _prefetch_intraday(symbols: list) -> None:
+    """The conviction ladder reads DOWN (v9.1): batch-fetch every intraday frame yfinance
+    carries for the universe once, so each name's engine call reads from the cache."""
+    try:
+        t0 = time.time()
+        idm.prefetch(symbols)
+        console.detail(f"Intraday ladder frames for {len(symbols)} symbols in {time.time() - t0:.1f}s "
+                       "(1m 7d · 5m/15m/30m 60d · 1h 730d; 3m and 4h built)")
+    except Exception as e:
+        console.detail(f"Intraday prefetch failed ({type(e).__name__}: {e}) — the tape reads Ladder up ↺")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE INITIALIZATION
@@ -680,6 +696,7 @@ def _fetch_study_chunk(symbols: list, start, end):
         return {}
     if raw is None or (hasattr(raw, "empty") and raw.empty):
         return {}
+    _prefetch_intraday(list(symbols))
     out = {}
     if isinstance(raw, pd.DataFrame) and isinstance(raw.columns, pd.MultiIndex):
         for t in symbols:
@@ -1857,7 +1874,7 @@ def to_excel(df):
             ("PRG_Split / PRG_Quiet / PRG_Settling", "Read with caution: the trace's ingredients disagree; the regime is quiet (conviction amplifying a small imbalance); the value basket is settling after a rotation."),
             ("PRG_Stack_OK / PRG_Why", "Whether the signal set can judge this bar, and if not which layer is warming."),
             ("— THE STATE (CONVICTION-VALUE GRID · 3 × 3, v8) —", ""),
-            ("CVG_Action / CVG_Why / CVG_Units", "The grid cell as an action and its reason, with its GRADED units — the cell's units read at the name's shaded position, as Pragyam sizes. v8's measured cell units: Buy · capitulation 3 · Accumulate · washout 1.5 · Exit · distribution 0.25 · Accumulate · basing 1.5 · Wait · idle 1 · Trim · stalling 0.75 · Buy · turned 3 · Hold · building 1.5 · Trim · paid 0.75. A weight, not a forecast."),
+            ("CVG_Action / CVG_Why / CVG_Units", "The grid cell as an action and its reason, with its GRADED units — the cell's units read at the name's shaded position, as Pragyam sizes. v9.1's measured cell units: Buy · capitulation 4 · Accumulate · washout 1.5 · Exit · distribution 0.25 · Accumulate · basing 1.5 · Wait · idle 1 · Trim · stalling 0.75 · Buy · turned 3 · Hold · building 1.5 · Trim · paid 0.75. A weight, not a forecast."),
             ("CVG_Held", "The conviction tape has moved to another row but the push has not confirmed it, so the row is held."),
             ("CVG_Bars / CVG_From", "Bars in the current cell, and the cell before it."),
             ("CVG_Chart_Action / CVG_Lead", "Where the chart's own conviction and value would place the name, and whether that cell carries more (+1) or fewer (−1) units than the state."),
@@ -2538,7 +2555,7 @@ _SYSTEM_PANELS = (
      "of a rich price. ◆ RESUME is off by default (measured negative).",
      (("▲", "capitulation, value turning"),
       ("▼", "sellers take a rich price"),
-      ("Grid", "Buy 3 … Exit 0.25 (measured units)"),
+      ("Grid", "Buy 4 … Exit 0.25 (measured units)"),
       ("Ranking", "▲▼ today, then stretch"))),
     ("measured", "Measured, Not Inherited", "Expectancy on your symbols",
      "The v9 audit measured the stack on 380 instruments; the Edge Study measures it on "
@@ -4580,7 +4597,7 @@ _TH_TRACE = ("The trace, ±100: conviction × value on this chart — how far th
 _TH_PUSH = ("The trace's push, from its histogram: ↑↑ impulse · ↑ push · · none · ↓ push · ↓↓ "
             "impulse. 'held' (gold): the grid row stands against its tape for want of a push.")
 _TH_GRID = ("The conviction-value grid (3 × 3, v8): where the two tapes place this name, as an "
-            "action with its graded units (Buy 3 … Exit 0.25). ↑/↓: the chart's own cell carries "
+            "action with its graded units (Buy 4 … Exit 0.25). ↑/↓: the chart's own cell carries "
             "more / fewer units. Hover for the full reading.")
 _TH_C = "MTF conviction tape — who controls across the ladder. ±30 is the knee."
 _TH_V = "MTF value tape — rich (+) or cheap (−) across the ladder. ±43 (θ) is the knee."
