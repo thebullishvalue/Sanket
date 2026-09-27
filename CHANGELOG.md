@@ -24,8 +24,8 @@ stretch, and on NSE equities stretch reverts.
 **Fix** (`engine.priorities`, designed on the pre-2021 era only): a ▲/▼ TURN on this bar first, then
 every name by stretch — the long side leads with the names stretched furthest down, the short side
 with those stretched furthest up. RESUME and the hold / open-window bands no longer order the list
-(they cost edge in discovery); they are still computed and shown. Holdout: never worse than the old
-ranking in any run — Daily −0.007σ vs −0.043σ, Weekly +0.087σ vs −0.040σ, rank IC clearly positive on
+(they cost edge in discovery); they are still computed and shown. Holdout: better than the old ranking on average and in 6 of 8 runs; slightly worse on Midcap 100 (both timeframes, neither ranking significant there).
+Averages: Daily −0.007σ vs −0.043σ, Weekly +0.087σ vs −0.040σ, rank IC clearly positive on
 NIFTY 50 and NIFTY 100.
 
 **Stated plainly.** Once a name's own 20-bar return is removed, the trace, tapes and push carry

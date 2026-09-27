@@ -56,7 +56,7 @@ trace, the push, the grid weight) carried the same negative sign. Designed on th
 pre-2021 era only: stretch +0.058σ, TURN kept on top +0.059σ; RESUME (continuation)
 and the hold / open-window bands, which pin stale names to the top, cost edge
 (+0.056σ, +0.032σ) and no longer order the list. On the sealed 2021–2026 holdout the
-stretch ranking was never worse than the grid's (daily −0.007σ vs −0.043σ, weekly
+stretch ranking beat the grid's on average (daily −0.007σ vs −0.043σ, weekly
 +0.087σ vs −0.040σ). Stated plainly: once the name's own 20-bar return is removed,
 the trace carries ~0 information — on NSE equities this ranking IS short-term
 reversal, read through the indicator.
