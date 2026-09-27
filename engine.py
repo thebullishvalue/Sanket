@@ -294,8 +294,22 @@ def _lower(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _chart_bars(df: pd.DataFrame) -> pd.DataFrame:
+    lo = _lower(df)
+    return lo[lo["close"].notna() & lo["high"].notna() & lo["low"].notna()]
+
+
+def value_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
+                settings: EngineSettings) -> pd.DataFrame:
+    """Samanvaya's value engine for one name — the part of the stack the trace setting
+    never touches, so a study comparing trace settings computes it ONCE and passes it to
+    :func:`compute_frame` / :func:`add_pragati_features` as ``value=``."""
+    return sv.compute_value(_chart_bars(df), drivers, symbol, chart=settings.chart)
+
+
 def compute_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
-                  settings: EngineSettings, daily: pd.DataFrame | None = None) -> pd.DataFrame:
+                  settings: EngineSettings, daily: pd.DataFrame | None = None,
+                  value: pd.DataFrame | None = None) -> pd.DataFrame:
     """The whole stack for one name, as a frame on the chart's own index.
 
     ``df`` is the chart's OHLCV (Title-case, ascending). ``drivers`` the macro closes
@@ -303,10 +317,9 @@ def compute_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
     chart, for its Ladder-down conviction rung. Returns pragati's columns, the value
     engine's, and the grid's, prefixed — see add_pragati_features for the contract.
     """
-    lo = _lower(df)
-    lo = lo[lo["close"].notna() & lo["high"].notna() & lo["low"].notna()]
+    lo = _chart_bars(df)
     chart = settings.chart
-    val = sv.compute_value(lo, drivers, symbol, chart=chart)
+    val = sv.compute_value(lo, drivers, symbol, chart=chart) if value is None else value
     dl = _lower(daily) if daily is not None and len(daily) else None
     out = pg.compute(lo, val, settings.params, chart=chart, daily=dl)
     grid = cg.classify(out["c_tape"], out["v_tape"], out["push"], out["hist_ready"],
@@ -320,7 +333,8 @@ def compute_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
 
 def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
                          symbol: str = "", settings: EngineSettings | None = None,
-                         daily: pd.DataFrame | None = None) -> pd.DataFrame:
+                         daily: pd.DataFrame | None = None,
+                         value: pd.DataFrame | None = None) -> pd.DataFrame:
     """Attach the Pragati stack to one symbol's OHLCV frame. Columns written:
 
     READINGS
@@ -357,7 +371,7 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     df.index = pd.to_datetime(df.index)
     if df.index.tz is not None:
         df.index = df.index.tz_convert(None)
-    f = compute_frame(df, drivers, symbol, settings, daily).reindex(df.index)
+    f = compute_frame(df, drivers, symbol, settings, daily, value=value).reindex(df.index)
     T = len(df)
     horizon = int(settings.horizon)
 
@@ -529,6 +543,32 @@ def grid_weight(units, side: int = 1):
     return np.clip(g, 0.0, 0.999)
 
 
+def priorities(tb, ts, rl, rs, units, ready, armed, a_age, h_dir, h_age, push,
+               horizon: float, confirm: float) -> tuple:
+    """The banded priority for each side, on plain arrays of any shape (÷100 of the column).
+
+    Bands, highest first: a TURN on this bar (5 + g) > a RESUME (4 + g) > inside an
+    event's hold window (3 + time left) > an open TURN window (2 + window left) > the grid
+    state (g − ½, the push breaking ties inside a cell). ``g`` is the grid weight. Shared by
+    :func:`compute_ranking` and the trace study, so the study ranks exactly as the screen.
+    """
+    units = np.where(np.isfinite(units), units, 1.0)
+    remain = np.clip(1.0 - np.nan_to_num(h_age, nan=horizon) / horizon, 0.0, 1.0)
+    a_left = np.clip(1.0 - (np.nan_to_num(a_age) - 1.0) / confirm, 0.0, 1.0)
+
+    def _one(side: int, turn, res):
+        g = grid_weight(units, side)
+        held = (h_dir == side) & np.isfinite(h_age) & ~(turn | res)
+        arm = (armed == side) & ~(turn | res)
+        # context: the grid weight, with the push as a tie-break inside a cell
+        ctx = g - 0.5 + 0.004 * np.clip(side * push, -2, 2)
+        pr = np.where(turn, 5.0 + g, np.where(res, 4.0 + g,
+             np.where(held, 3.0 + remain * 0.99, np.where(arm, 2.0 + a_left * 0.99, ctx))))
+        return np.where(ready, pr, np.nan)
+
+    return _one(1, tb, rl), _one(-1, ts, rs)
+
+
 RANK_CONTRACT = ("Side", "Signal_Kind", "Priority_Long", "Priority_Short",
                  "Priority_Long_pct", "Priority_Short_pct", "Trace_Rank_Pct",
                  "Grid_Weight", "Cost_OK", "Signal_Reason")
@@ -571,21 +611,10 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
 
     df["Side"] = np.where(tb | rl, "Buy", np.where(ts | rs, "Sell", "—"))
     df["Signal_Kind"] = np.where(tb | ts, "TURN", np.where(rl | rs, "RESUME", ""))
-    remain = np.clip(1.0 - np.nan_to_num(h_age, nan=horizon) / horizon, 0.0, 1.0)
-    a_left = np.clip(1.0 - (np.nan_to_num(a_age) - 1.0) / confirm, 0.0, 1.0)
-
-    def _priority(side: int, turn, res):
-        g = grid_weight(units, side)
-        held = (h_dir == side) & np.isfinite(h_age) & ~(turn | res)
-        arm = (armed == side) & ~(turn | res)
-        # context: the grid weight, with the push as a tie-break inside a cell
-        ctx = g - 0.5 + 0.004 * np.clip(side * push, -2, 2)
-        pr = np.where(turn, 5.0 + g, np.where(res, 4.0 + g,
-             np.where(held, 3.0 + remain * 0.99, np.where(arm, 2.0 + a_left * 0.99, ctx))))
-        return pd.Series(np.where(ready, pr, np.nan), index=idx)
-
-    p_long = _priority(1, tb, rl)
-    p_short = _priority(-1, ts, rs)
+    p_long, p_short = priorities(tb, ts, rl, rs, units, ready, armed, a_age, h_dir, h_age,
+                                 push, horizon, confirm)
+    p_long = pd.Series(p_long, index=idx)
+    p_short = pd.Series(p_short, index=idx)
     df["Priority_Long"] = p_long * 100.0
     df["Priority_Short"] = p_short * 100.0
     df["Priority_Long_pct"] = p_long.rank(pct=True) * 100

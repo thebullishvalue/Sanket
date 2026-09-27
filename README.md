@@ -276,6 +276,7 @@ pragati.py           ← pragati.pine v6: conviction, ladders, trace, histogram,
 samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
 cvgrid.py            ← the 4 × 4 conviction-value grid
 charts.py            ← chart builders: the conviction-value map, tone history, correlation heatmap
+trace_study.py       ← backtest: the screener under all three trace settings, paired, holdout-sealed
 edge.py              ← measured expectancy: event study, drift removal, block bootstrap, power
 research.py          ← LEGACY harness from an older momentum engine; validates nothing here
 logger.py            ← structured terminal logging

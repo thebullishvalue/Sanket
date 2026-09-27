@@ -7,6 +7,27 @@ Format: `[version] · date — release title`
 
 ---
 
+## [Unreleased]
+### Trace study — measure the three trace settings instead of assuming the default
+
+`trace_study.py` backtests the screener under each of pragati.pine's three trace settings —
+**Conviction × value** (the default Sanket shipped), **Conviction only**, **Value only** — on the
+same names, bars and value engine, and says which one screens names that work.
+
+- **Events** — ▲▼ TURN / ◆ RESUME under each setting, through the Edge Study's own `edge.measure`
+  (next-bar entry, drift removed within era, block bootstrap, costs, power).
+- **Screen** — every date, the top fifth of names by the screener's banded priority, long and
+  short, scored against the cross-section; long−short spread and rank IC per side.
+- **Paired** — each setting minus the default on the same dates, with a block-bootstrap CI.
+  Decision rule fixed in advance: switch only if the holdout paired long−short CI excludes zero.
+- `engine.priorities` (the ranking formula, shared by `compute_ranking` and the study) and
+  `engine.value_frame` / `value=` (compute Samanvaya once, reuse across settings) — no change
+  to any screener output.
+
+Run: `python trace_study.py --index "NIFTY 50"` (needs Yahoo Finance; NSE archives for `--index`).
+
+---
+
 ## [v8.1.0] · 2026-09-27
 ### The Grid in Pragyam's Grammar — tones, the map, and tables that fit
 
