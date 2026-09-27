@@ -337,16 +337,26 @@ def decide(res: dict) -> dict:
         h = eras.get("holdout", {})
         agree[m] = {k: ("better" if v["lo"] > 0 else "worse" if v["hi"] < 0 else "tie")
                     for k, v in h.items() if np.isfinite(v["lo"])}
+    # Does any setting's screen WORK on its own — holdout long−short CI above zero?
+    works = {m: bool(np.isfinite(v["holdout"]["ls"]["lo"]) and v["holdout"]["ls"]["lo"] > 0)
+             for m, v in res["screen"].items()}
+    backwards = [m for m, v in res["screen"].items()
+                 if np.isfinite(v["holdout"]["ls"]["hi"]) and v["holdout"]["ls"]["hi"] < 0]
     if better:
         _, win = max(better)
         disc = res["paired"][win].get("discovery", {}).get("ls", {})
         both = bool(disc) and np.isfinite(disc.get("lo", np.nan)) and disc["lo"] > 0
-        return {"winner": win, "agree": agree, "worse": worse,
+        own = ("and its own screen works (holdout long−short CI above zero)" if works[win] else
+               "BUT its own screen shows no edge on the holdout — it loses less than the "
+               "default, it does not pick winners")
+        return {"winner": win, "agree": agree, "worse": worse, "works": works,
+                "backwards": backwards,
                 "reason": (f"{MODES[win][0]} beats {MODES[DEFAULT_MODE][0]} on the holdout "
-                           f"long−short spread, paired, CI excluding zero"
-                           + (" — and in discovery too" if both else
-                              " — discovery does not confirm, so treat it as provisional"))}
-    return {"winner": DEFAULT_MODE, "agree": agree, "worse": worse,
+                           f"long−short spread, paired, CI excluding zero, {own}"
+                           + ("; discovery confirms the difference" if both else
+                              "; discovery does not confirm the difference"))}
+    return {"winner": DEFAULT_MODE, "agree": agree, "worse": worse, "works": works,
+            "backwards": backwards,
             "reason": ("no trace setting beats the default on the holdout long−short spread "
                        "beyond noise — the default stays")}
 
@@ -367,7 +377,12 @@ def report_md(res: dict, title: str) -> str:
          f"{m['split_date']} ({int(m['holdout_frac'] * 100)}%) · hold {m['horizon']} bars · "
          f"book = top {int(m['quantile'] * 100)}% · participation ratio {m['part_ratio']:.1f} · "
          f"macro drivers {'on' if m['drivers'] else 'OFF (unhedged)'} · measured {m['measured_at']}",
-         "", f"**Decision:** {res['decision']['reason']}.", "",
+         "", f"**Decision:** {res['decision']['reason']}.", ""]
+    if res["decision"].get("backwards"):
+        L += [f"**Warning:** the screen ranks BACKWARDS on the holdout under "
+              f"{', '.join(MODES[k][0] for k in res['decision']['backwards'])} — the long book "
+              "trailed the short book beyond noise.", ""]
+    L += [
          "Scores are in σ of each name's own h-bar return (drift removed within era). "
          "Brackets are 95% block-bootstrap intervals.", ""]
     for era in ("holdout", "discovery"):
@@ -417,8 +432,9 @@ def index_constituents(index: str) -> list:
             "NIFTY SMLCAP 100": "niftysmallcap100", "NIFTY BANK": "niftybank"}.get(index.upper())
     if slug is None:
         raise SystemExit(f"unknown index {index!r}; pass --tickers instead")
-    hdr = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    for host in ("nsearchives.nseindia.com", "archives.nseindia.com"):
+    hdr = {"User-Agent": "Mozilla/5.0"}   # NSE refuses some full browser strings; the short one passes
+    # NSE throttles bursts with a 403 — retry each host with backoff before giving up.
+    for host in [h for _ in range(3) for h in ("nsearchives.nseindia.com", "archives.nseindia.com")]:
         try:
             r = requests.get(f"https://{host}/content/indices/ind_{slug}list.csv", headers=hdr, timeout=20)
             r.raise_for_status()
@@ -427,6 +443,7 @@ def index_constituents(index: str) -> list:
             return [f"{s}.NS" for s in d[col].astype(str).str.strip() if s]
         except Exception as e:
             print(f"  {host}: {type(e).__name__}: {e}", file=sys.stderr)
+            time.sleep(5)
     raise SystemExit("could not fetch the index constituents; pass --tickers instead")
 
 
