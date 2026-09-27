@@ -268,6 +268,13 @@ def block_bootstrap_ci(scores: np.ndarray, date_codes: np.ndarray, n_dates: int,
 # ════════════════════════════════════════════════════════════════════════════════════════
 # RESULT TYPES
 # ════════════════════════════════════════════════════════════════════════════════════════
+
+def _ci(r) -> str:
+    """A result's bootstrap interval, or a plain note when it could not be resampled."""
+    if not (np.isfinite(r.ci_lo) and np.isfinite(r.ci_hi)):
+        return "[CI n/a]"
+    return f"[{r.ci_lo:+.3f},{r.ci_hi:+.3f}]"
+
 @dataclass
 class SideResult:
     """One slice (a side, or a side × kind) measured in one era."""
@@ -362,15 +369,15 @@ class EdgeStudy:
         if hold is not None and hold.significant:
             if hold.net > 0:
                 return ("CONFIRMED", "success",
-                        f"holdout {hold.edge:+.3f} [{hold.ci_lo:+.3f},{hold.ci_hi:+.3f}] "
+                        f"holdout {hold.edge:+.3f} {_ci(hold)} "
                         f"· net {hold.net:+.3f} after {self.cost_bps:.1f}bp")
             return ("GROSS ONLY", "warning",
                     f"holdout {hold.edge:+.3f} gross but {hold.net:+.3f} net after "
                     f"{self.cost_bps:.1f}bp")
         if disc is not None and disc.significant:
             return ("DISCOVERY ONLY", "warning",
-                    f"discovery {disc.edge:+.3f} [{disc.ci_lo:+.3f},{disc.ci_hi:+.3f}] "
-                    f"· holdout " + (f"{hold.edge:+.3f} [{hold.ci_lo:+.3f},{hold.ci_hi:+.3f}]"
+                    f"discovery {disc.edge:+.3f} {_ci(disc)} "
+                    f"· holdout " + (f"{hold.edge:+.3f} {_ci(hold)}"
                                      if hold is not None else "n/a") + " did not confirm")
         # Report against the holdout when we have one — it is the era that counts — else
         # whichever era we did manage to measure. `present` is non-empty by the guard above,
@@ -378,10 +385,10 @@ class EdgeStudy:
         ref = hold or full or present[0]
         if ref.anti:
             return ("ANTI-PREDICTS", "danger",
-                    f"{ref.era} {ref.edge:+.3f} [{ref.ci_lo:+.3f},{ref.ci_hi:+.3f}] — "
+                    f"{ref.era} {ref.edge:+.3f} {_ci(ref)} — "
                     f"the interval excludes zero on the wrong side")
         return ("NO EDGE", "danger",
-                f"{ref.era} {ref.edge:+.3f} [{ref.ci_lo:+.3f},{ref.ci_hi:+.3f}] · "
+                f"{ref.era} {ref.edge:+.3f} {_ci(ref)} · "
                 f"resolvable down to {ref.mde:.3f}")
 
     def to_dict(self) -> dict:

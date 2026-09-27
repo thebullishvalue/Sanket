@@ -25,6 +25,13 @@ Format: `[version] · date — release title`
   Nifty) and was rejected; neutralising the ≈ 0 cells was a wash and rejected; **Buy · capitulation
   4 units** beat 3 in all three eras on Nifty 50 and Dow 30 and improved the grid in the lab under
   both scorers — adopted in the Pine, Sanket and Pragyam.
+- **Terminal log and progress bar.** The intraday ladder is fetched in its own progress step
+  (screener 15→20 %, range 5→15 %; it takes ~20 s for 50 names) and logged once with per-frame
+  coverage (`Intraday ladder: 1m 50 · … of 50 symbols`, weekly lists only 1h · 4h), with a warning
+  for names that have none. The edge study prefetches silently. Each name shows `C↓` (Ladder down)
+  or `C↺` (W · D fallback), and the screen closes with a `Conviction ladder` census. The signal line
+  names the source (capitulation); bootstrap intervals that cannot be resampled print `[CI n/a]`
+  instead of `[+nan,+nan]`.
 
 ---
 

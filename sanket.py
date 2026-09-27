@@ -2,7 +2,7 @@
 Sanket - Market Signal Screener | A Pragyam Product Family Member
 Pragati · Conviction × Value — Quantitative Signal Screener Terminal
 
-Engine: PRAGATI (pragati.pine v6), the indicator Pragyam's Conviction-Value Grid
+Engine: PRAGATI (pragati.pine v9.1), the indicator Pragyam's Conviction-Value Grid
 reads. One trace — conviction × value, how far a move is stretched in one-sided
 effort and in price against fair value — its histogram (the trace's push), and
 its two ingredients read across horizons on two tapes. One state: the 3 × 3
@@ -309,7 +309,6 @@ def get_universe_data(stock_list: list, end_date: datetime.date = None,
             f"Data registry HIT — {len(cached)} symbols available "
             f"(requested {len(stock_list)}, end_date={end_date})"
         )
-        _prefetch_intraday(list(cached))
         return cached, f"✓ {len(cached)} symbols (session registry)"
 
     console.detail(
@@ -321,20 +320,39 @@ def get_universe_data(stock_list: list, end_date: datetime.date = None,
     )
     if data_dict:
         _registry_put(stock_list, end_date, data_dict, days_back)
-        _prefetch_intraday(list(data_dict))
     return data_dict, msg
 
 
-def _prefetch_intraday(symbols: list) -> None:
+def _ladder_frames(timeframe: str = "Daily") -> tuple:
+    """The intraday rungs of a timeframe's Ladder down: 1m…4h under a daily bar, 1h · 4h
+    (beside the daily rung) under a weekly one."""
+    return idm.WEEKLY_FRAMES if str(timeframe) == "Weekly" else idm.DAILY_FRAMES
+
+
+def _prefetch_intraday(symbols: list, progress=None, timeframe: str = "Daily") -> None:
     """The conviction ladder reads DOWN (v9.1): batch-fetch every intraday frame yfinance
-    carries for the universe once, so each name's engine call reads from the cache."""
+    carries for the universe once, so each name's engine call reads from the cache.
+
+    ``progress(i, n, frame)`` drives the caller's progress bar, one step per frame. Logs the
+    coverage per frame. On a daily chart a name with no intraday frame reads Ladder up (↺
+    W · D) throughout; on a weekly chart it still reads down, on the daily rung alone."""
+    weekly = str(timeframe) == "Weekly"
+    fallback = "their weekly ladder reads the daily rung only" if weekly else "their conviction reads W · D (↺)"
+    wanted = _ladder_frames(timeframe)
     try:
         t0 = time.time()
-        idm.prefetch(symbols)
-        console.detail(f"Intraday ladder frames for {len(symbols)} symbols in {time.time() - t0:.1f}s "
-                       "(1m 7d · 5m/15m/30m 60d · 1h 730d; 3m and 4h built)")
+        cov = idm.prefetch(symbols, frames=idm.sources(wanted), on_frame=progress, report=wanted)
+        n = len(symbols)
+        if cov:
+            console.item("Intraday ladder", " · ".join(f"{f} {cov.get(f, 0)}" for f in wanted)
+                         + (f" of {n} symbols [{_dt:.1f}s]" if (_dt := time.time() - t0) >= 0.1 else f" of {n} symbols [cached]"))
+            none = n - max(cov.values())
+            if none:
+                console.warning(f"{none} symbol(s) have no intraday history — {fallback}")
+        else:
+            console.item("Intraday ladder", f"disabled — {fallback}")
     except Exception as e:
-        console.detail(f"Intraday prefetch failed ({type(e).__name__}: {e}) — the tape reads Ladder up ↺")
+        console.warning(f"Intraday prefetch failed ({type(e).__name__}: {e}) — {fallback}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE INITIALIZATION
@@ -518,7 +536,9 @@ def _study_summary_line(study, side: str = "buy") -> str:
     r = study.get(side, "holdout") or study.get(side, "full")
     if r is None:
         return "no events measured for this side"
-    return (f"{r.edge:+.3f} [{r.ci_lo:+.3f},{r.ci_hi:+.3f}] vol · {r.hit:.1f}% hit · "
+    _ci = (f"[{r.ci_lo:+.3f},{r.ci_hi:+.3f}]" if np.isfinite(r.ci_lo) and np.isfinite(r.ci_hi)
+           else "[CI n/a — too few dates]")
+    return (f"{r.edge:+.3f} {_ci} vol · {r.hit:.1f}% hit · "
             f"n_eff {r.n_eff:.0f} · resolves ≥{r.mde:.3f}")
 
 
@@ -680,7 +700,7 @@ def _study_sample(symbols: list, cap: int = _STUDY_SYMBOL_CAP) -> list:
     return [symbols[i] for i in sorted(idx)]
 
 
-def _fetch_study_chunk(symbols: list, start, end):
+def _fetch_study_chunk(symbols: list, start, end, timeframe: str = "Daily"):
     """Deep-history OHLCV for one chunk of symbols. Returns {ticker: frame}.
 
     Separate from ``fetch_batch_data`` because that path is tuned for the screener: it caps
@@ -696,7 +716,11 @@ def _fetch_study_chunk(symbols: list, start, end):
         return {}
     if raw is None or (hasattr(raw, "empty") and raw.empty):
         return {}
-    _prefetch_intraday(list(symbols))
+    try:   # the ladder's intraday rungs, batched and silent (the screen already logged them)
+        wanted = _ladder_frames(timeframe)
+        idm.prefetch(list(symbols), frames=idm.sources(wanted), report=wanted)
+    except Exception:
+        pass
     out = {}
     if isinstance(raw, pd.DataFrame) and isinstance(raw.columns, pd.MultiIndex):
         for t in symbols:
@@ -765,7 +789,7 @@ def run_edge_study(universe, selected_index, timeframe, sid: eng.EngineSettings,
     for ci, chunk in enumerate(chunks):
         _p(3 + (ci / max(len(chunks), 1)) * 82, "Measuring Edge",
            f"chunk {ci + 1}/{len(chunks)} · {len(baselines)} symbols reduced")
-        data = _fetch_study_chunk(chunk, start, end)
+        data = _fetch_study_chunk(chunk, start, end, timeframe)
         if not data:
             n_failed_chunks += 1
             continue
@@ -2926,6 +2950,13 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     console.success(f"Successfully downloaded data for {len(data_dict)} stocks")
 
+    # The conviction ladder's intraday frames — one batch per frame, its own progress step.
+    def _ip(i, n, frame):
+        if show_progress or external_progress_slot is not None:
+            progress_bar(progress_slot, progress_offset + (15 + 5 * i / max(n, 1)) * progress_scale / 100,
+                         "Fetching Intraday Ladder", f"{frame} bars · {i + 1} / {n} frames")
+    _prefetch_intraday(list(data_dict), progress=_ip, timeframe=timeframe)
+
     # The macro drivers behind the value ingredient — one batch for the whole universe.
     drivers = _drivers_for(end_date, timeframe)
     if drivers is None:
@@ -2944,8 +2975,9 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.item("Trace", f"conviction × value · signal EMA {_p.signal} · θ ±{sid.theta:.1f} "
                           f"(histogram calibrated after {sid.min_bars} bars)")
     console.item("Ladders", f"conviction {sid.ladder_label} · value {sid.value_ladder_label}")
-    console.item("Signals", f"{sid.trigger_label} · confirm {_p.confirm} · dislocation {_p.disloc} · "
-                            f"cooldown {_p.cool} · hold {sid.horizon} bars · entry next open")
+    console.item("Signals", f"{sid.trigger_label} · source {_p.signal_source} · cooldown {_p.cool} · "
+                            f"hold {sid.horizon} bars · entry next open"
+                            + (f" · confirm {_p.confirm} · dislocation {_p.disloc}" if _p.signal_source == "turn" else ""))
     console.item("Macro drivers", "prepared" if drivers is not None else "unavailable (unhedged)")
     _vl, _vk, _vd = _study_state(study, "buy")
     console.item("Measured edge (buy)", f"{_vl} — {_study_summary_line(study, 'buy')}")
@@ -2971,6 +3003,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     _cache_hits = 0
 
     _tf_label = "weekly" if timeframe == "Weekly" else "daily"
+    _ladders = {}
     console.section(f"Signal Analysis — {len(data_dict)} {_tf_label} instruments")
 
     for i, (ticker, df) in enumerate(data_dict.items()):
@@ -3103,13 +3136,17 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
             console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: trace={_num('PRG_Trace', float('nan')):+.1f}  "
                            f"state={last_row.get('PRG_State', '—')}  grid={last_row.get('CVG_Action', '—')}  "
-                           f"C={_num('PRG_CTape', float('nan')):+.0f} V={_num('PRG_VTape', float('nan')):+.0f}")
+                           f"C{ {'down': '↓', 'up↺': '↺'}.get(str(last_row.get('PRG_Ladder', '')), '')}={_num('PRG_CTape', float('nan')):+.0f} "
+                           f"V={_num('PRG_VTape', float('nan')):+.0f}")
+            _ladders[str(last_row.get('PRG_Ladder', '') or 'warming')] = _ladders.get(str(last_row.get('PRG_Ladder', '') or 'warming'), 0) + 1
 
         except Exception as e:
             console.failure(f"Analysis Failed: {ticker}", str(e))
             _failed_symbols.append(ticker)
             continue
 
+    if _ladders:
+        console.item("Conviction ladder", " · ".join(f"{k} {v}" for k, v in sorted(_ladders.items())))
     console.end_phase("SIGNAL SCREEN")
     if _cache_hits:
         console.detail(f"Analyzed-frame cache: reused {_cache_hits}/{len(data_dict)} frames from the range harvest (skipped re-analysis)")
@@ -3250,6 +3287,10 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         return
 
     console.success(f"Downloaded depth for {len(data_dict)} entities")
+    _prefetch_intraday(list(data_dict),
+                       progress=lambda i, n, f: _p(5 + 10 * i / max(n, 1), "Fetching Intraday Ladder",
+                                                   f"{f} bars · {i + 1} / {n} frames"),
+                       timeframe=timeframe)
     drivers = _drivers_for(end_date, timeframe)
     if drivers is None:
         console.warning("Macro drivers unavailable — the value ingredient runs unhedged")
@@ -5632,7 +5673,7 @@ def main():
     if is_first_render:
         console.header("SANKET TERMINAL — Session Start", VERSION)
         console.item("Started", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        console.item("Signal engine", f"{ENGINE_CODE} — {ENGINE_NAME} (pragati.pine v6)")
+        console.item("Signal engine", f"{ENGINE_CODE} — {ENGINE_NAME} (pragati.pine v9.1)")
 
     # Render sidebar and get parameters + run button state
     sbs = render_sidebar()
