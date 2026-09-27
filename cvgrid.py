@@ -31,18 +31,26 @@ keeping its seed units, so the word is the weight:
     Trim 0.75 · Reduce 0.5 · Exit 0.25
 
                    CHEAP              BELOW FAIR         ABOVE FAIR         RICH
-    buyers firm    Buy·turn           Add·trend          Add·strong trend   Hold·don't add
+    buyers firm    Buy·turn           Add·trend          Hold·extended      Hold·don't add
     buyers edge    Accumulate·basing  Accumulate·        Wait·drifting      Trim·stalling
                                       early turn
     sellers edge   Accumulate·        Wait·no edge       Trim·rolling over  Trim·topping
                    deep value
-    sellers firm   Watch·still        Reduce·downtrend   Reduce·breakdown   Exit·distribution
-                   falling
+    sellers firm   Buy·capitulation   Accumulate·washout Reduce·breakdown   Exit·distribution
 
-Chosen by meaning in the seed, not fitted — do not tune them. Pragyam measured
-the 3 × 3 seed through a real allocator: within half a percent a year of equal
-weight in every universe, never above it, none of the gaps significant. The
-units are a weight, not a forecast.
+v7 — THREE CELLS CHANGED BY MEASUREMENT (pine_audit.py, studies/pine_audit.md). The
+v6 map was chosen by meaning. Measured on 380 instruments in six asset classes over
+~20 years, split before / after 2018:
+  · sellers firm × cheap  was Watch 1u   → Buy · capitulation 3u
+  · sellers firm × below  was Reduce ½u  → Accumulate · washout 1½u
+    Both cells were followed by gains in BOTH eras on NSE, US, indices, commodities
+    and FX (holdout +0.10 to +0.35σ over 10–20 bars, significant on four of the five);
+    the stack adds to plain oversold — oversold names OUTSIDE these cells lagged.
+  · buyers firm × above fair  was Add 3u → Hold · extended 1½u — no support in
+    either era (negative after 2018 on US, indices and FX).
+Every other cell is unchanged: nothing measured held in both eras. Crypto trends
+and is the exception — the capitulation cells carried nothing there. The units are
+a weight, not a forecast.
 
 Author: @thebullishvalue
 """
@@ -57,31 +65,31 @@ UNREAD = 16
 # Cell = row · 4 + column. Rows: 0 sellers firm, 1 sellers edge, 2 buyers edge,
 # 3 buyers firm. Columns: 0 cheap, 1 below fair, 2 above fair, 3 rich. 16 UNREAD.
 NAMES = (
-    "Watch · still falling",   "Reduce · downtrend",      "Reduce · breakdown",  "Exit · distribution",
+    "Buy · capitulation",      "Accumulate · washout",    "Reduce · breakdown",  "Exit · distribution",
     "Accumulate · deep value", "Wait · no edge",          "Trim · rolling over", "Trim · topping",
     "Accumulate · basing",     "Accumulate · early turn", "Wait · drifting",     "Trim · stalling",
-    "Buy · turn",              "Add · trend",             "Add · strong trend",  "Hold · don't add",
+    "Buy · turn",              "Add · trend",             "Hold · extended",     "Hold · don't add",
     "Unread",
 )
 # Units are the action's, and each action's are its seed state's.
 UNITS = (
-    1.00, 0.50, 0.50, 0.25,
+    3.00, 1.50, 0.50, 0.25,
     1.50, 1.00, 0.75, 0.75,
     1.50, 1.50, 1.00, 0.75,
-    3.00, 3.00, 3.00, 1.50,
+    3.00, 3.00, 1.50, 1.50,
     1.00,
 )
 # The side each action works: +1 builds the position, −1 cuts it, 0 neither.
 SIDES = (
-    0, -1, -1, -1,
+    1,  1, -1, -1,
     1,  0, -1, -1,
     1,  1,  0, -1,
-    1,  1,  1,  0,
+    1,  1,  0,  0,
     0,
 )
 MEANING = (
-    "sellers firmly in control at a cheap price - still falling; the watchlist, do not catch it",
-    "sellers firmly in control below fair - the downtrend is running",
+    "sellers firmly in control at a cheap price - capitulation; measured, this cell was followed by gains in both eras on every asset class but crypto",
+    "sellers firmly in control below fair - a washout; measured, followed by gains in both eras outside crypto",
     "sellers firmly in control while price is still above fair - the market is breaking down",
     "sellers firmly in control at a rich price - distribution; the floor",
     "cheap, and the sellers are down to an edge - build slowly on value",
@@ -94,7 +102,7 @@ MEANING = (
     "rich, and control has faded to an edge - the move has stalled",
     "cheap, buyers now firmly in control - a dislocation that turned",
     "buyers firmly in control below fair - the trend, with room to run",
-    "buyers firmly in control and price already above fair - a strong trend",
+    "buyers firmly in control and price already above fair - extended; measured, adding here earned nothing in either era",
     "buyers firmly in control of a rich price - hold it, do not add",
     "a tape not yet calibrated, or switched off",
 )
@@ -108,10 +116,10 @@ MEANING = (
 #   slate    unclaimed — no edge either way, or unread
 #   rose     the unfavourable end — sellers in control, breaking down or distributing
 TONES = (
-    "cyan",    "rose",    "rose",    "rose",       # sellers firm: watch · reduce · reduce · exit
+    "emerald", "cyan",    "rose",    "rose",       # sellers firm: buy·capitulation · accumulate·washout · reduce · exit
     "cyan",    "slate",   "rose",    "amber",      # sellers edge: accumulate · wait · trim·rolling · trim·topping
     "cyan",    "cyan",    "slate",   "amber",      # buyers edge: accumulate · accumulate · wait · trim·stalling
-    "emerald", "emerald", "emerald", "amber",      # buyers firm: buy · add · add · hold
+    "emerald", "emerald", "amber",   "amber",      # buyers firm: buy · add · hold·extended · hold
     "slate",                                        # unread
 )
 #: The same, in render_chip / render_metric_card's vocabulary.
@@ -131,10 +139,10 @@ ACTION_UNITS = {"Buy": 3.0, "Add": 3.0, "Hold": 1.5, "Accumulate": 1.5, "Wait": 
 PUSH_TEXT = {2: "impulse ↑", 1: "push ↑", 0: "no push", -1: "push ↓", -2: "impulse ↓"}
 PUSH_GLYPH = {2: "↑↑", 1: "↑", 0: "·", -1: "↓", -2: "↓↓"}
 
-READ_THE_PUSH = ("Buy, Add and Accumulate are best done on a push ↑; with no push, wait for "
-                 "one; against a push ↓, not yet. Trim, Reduce and Exit can be done now, or "
-                 "into a push ↑. Hold, Wait and Watch change nothing - the push says which "
-                 "way the row may move next.")
+READ_THE_PUSH = ("The push says which way the row may move next. Measured: inside the "
+                 "capitulation cells its direction made no consistent difference - the state "
+                 "carried the edge, not the timing - so Buy · capitulation and Accumulate · "
+                 "washout do not wait for a push ↑. Hold, Wait and Watch change nothing.")
 
 COLUMNS = ("cvg_cell", "cvg_target_row", "cvg_held", "cvg_since", "cvg_from",
            "cvg_chart", "cvg_lead")

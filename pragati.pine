@@ -1,7 +1,42 @@
 //@version=6
 // ═══════════════════════════════════════════════════════════════════════════
-//  PRAGATI · प्रगति  ·  CONVICTION × VALUE OSCILLATOR                       v6
+//  PRAGATI · प्रगति  ·  CONVICTION × VALUE OSCILLATOR                       v7
 //  "Is the push paid for - and at what price?"
+//
+//  ═══ v7 · WHAT CHANGED, AND THE MEASUREMENT BEHIND IT ════════════════════════
+//  v7 changes THREE CELLS of the conviction-value grid and nothing else. Every
+//  engine, signal, input and default is v6's.
+//
+//  HOW IT WAS MEASURED. A from-scratch audit (pine_audit.py in the Sanket repo),
+//  not this script's own claims: the Python port - bar for bar with this script -
+//  run on 380 instruments in six classes (NSE and US stocks, world indices,
+//  commodities, FX, crypto), ~20 years of daily bars, split before / after 2018.
+//  Every output was turned into a position and scored on the NEXT bars' return,
+//  the instrument's own drift removed, in σ; intervals block-bootstrapped by date.
+//
+//  WHAT IT FOUND.
+//    · The readings - trace, conviction, value, both tapes - track plain 20-bar
+//      momentum and their sign FLIPPED between eras: they paid before 2018 and
+//      cost after, on US stocks, indices and FX. No parameter fixes a sign flip.
+//    · Tuning does not transfer. 161 random parameter sets: a set's pre-2018 edge
+//      correlated +0.10 with its post-2018 edge; picking the best tenth on the
+//      pre-2018 data did WORSE afterwards than a typical set. Defaults kept.
+//    · ▲▼ TURN: the full rule beat every reduced version after 2018 on indices
+//      (+0.13σ at 10 bars, the only significant cell) - its gates earn their place.
+//      Still negative on NSE in both eras. Unchanged.
+//    · THE GRID: sellers FIRMLY in control at a CHEAP or BELOW-FAIR price was
+//      followed by gains in BOTH eras on every class but crypto - +0.10 to +0.35σ
+//      after 2018 over 10-20 bars, significant on US, indices, commodities, FX -
+//      and it adds to plain oversold: oversold names OUTSIDE those cells lagged.
+//      The push's direction inside them made no consistent difference. v6 called
+//      those cells Watch and Reduce.
+//
+//  THE THREE CELLS.
+//      sellers firm · cheap        Watch · still falling  1   →  Buy · capitulation    3
+//      sellers firm · below fair   Reduce · downtrend     ½   →  Accumulate · washout  1½
+//      buyers firm  · above fair   Add · strong trend     3   →  Hold · extended       1½
+//  The third because adding there earned nothing in either era. Crypto trends and
+//  is the exception: the capitulation cells carried nothing there.
 //
 //  ONE TRACE, ITS PUSH, AND ITS TWO INGREDIENTS ACROSS HORIZONS:
 //
@@ -33,7 +68,7 @@
 //  AND ONE STATE - THE CONVICTION-VALUE GRID, 4 × 4. The two tapes place the
 //  name, the histogram decides when it may change row, the trace says whether
 //  the chart already stands elsewhere. Each cell is named as an ACTION - Buy,
-//  Add, Accumulate, Hold, Wait, Watch, Trim, Reduce, Exit - with the seed CVG's
+//  Add, Accumulate, Hold, Wait, Trim, Reduce, Exit - with the seed CVG's
 //  units. A state, not a signal: signals are events, the grid is where the
 //  name stands between them, and neither reads the other. One line on the
 //  price chart - a row of the readout, under OI.
@@ -445,19 +480,21 @@
 //
 //  WHAT EACH CELL SAYS TO DO. The seed's nine states become nine ACTIONS, and
 //  each keeps its seed units, so the word is the weight:
-//      Buy 3 · Add 3 · Hold 1.5 · Accumulate 1.5 · Wait 1 · Watch 1 ·
+//      Buy 3 · Add 3 · Hold 1.5 · Accumulate 1.5 · Wait 1 ·
 //      Trim 0.75 · Reduce 0.5 · Exit 0.25
 //  Each cell takes the action of the seed cell it lies inside, plus the reason
 //  that separates it from its neighbour:
 //
 //                   CHEAP              BELOW FAIR         ABOVE FAIR         RICH
-//      buyers firm  Buy·turn           Add·trend          Add·strong trend   Hold·don't add
+//      buyers firm  Buy·turn           Add·trend          Hold·extended      Hold·don't add
 //      buyers edge  Accumulate·basing  Accumulate·        Wait·drifting      Trim·stalling
 //                                      early turn
 //      sellers edge Accumulate·        Wait·no edge       Trim·rolling over  Trim·topping
 //                   deep value
-//      sellers firm Watch·still        Reduce·downtrend   Reduce·breakdown   Exit·distribution
-//                   falling
+//      sellers firm Buy·capitulation   Accumulate·washout Reduce·breakdown   Exit·distribution
+//
+//  v7 MEASURED THREE CELLS: sellers firm at a cheap or below-fair price, and
+//  buyers firm above fair. See the v7 block at the top.
 //
 //  ONE REFINEMENT, AND WHY. The seed's Wait - undecided at a fair price - is the
 //  only seed cell that says nothing, so it is the only one the hue refines.
@@ -465,14 +502,14 @@
 //  turn or a top begins - the cell takes the mildest action they lean toward:
 //  buyers edging in below fair Accumulate (early turn), sellers edging in above
 //  fair Trim (rolling over). Where they lean the same way it stays Wait.
-//  Weight never falls as buyers firm up and never rises as price gets richer.
-//  Every name is held: the state sets how much, never whether. Chosen by
-//  meaning in the seed, not fitted - do not tune them.
+//  Every name is held: the state sets how much, never whether. v6 chose every
+//  cell by meaning; v7 changed the three the measurement contradicted in both
+//  eras and left the rest, which it could not separate from noise.
 //
-//  READ THE PUSH AGAINST THE ACTION. Buy, Add and Accumulate are best done on
-//  a push ↑; with no push, wait for one; against a push ↓, not yet. Trim,
-//  Reduce and Exit can be done now, or into a push ↑. Hold, Wait and Watch
-//  change nothing - the push says which way the row may move next.
+//  READ THE PUSH. It says which way the row may move next. Measured in v7:
+//  inside the capitulation cells the push's direction made no consistent
+//  difference - the state carried the edge, not the timing - so Buy ·
+//  capitulation and Accumulate · washout do not wait for a push ↑.
 //
 //  THE TRACE AS THE CHART CELL. The trace is not an axis - it is the tapes'
 //  chart rungs blended, so as an axis it would count each tape twice. Its two
@@ -480,14 +517,12 @@
 //  the CHART CELL: where this chart alone would put the name. The trace is
 //  where that cell sits along the grid's stretch diagonal. When the chart cell
 //  carries more units than the state, the chart LEADS ↑ - it has moved into a
-//  better cell before the ladder; fewer, it LEADS ↓. A Watch with the chart
-//  leading ↑ and a push ↑ is the earliest a turn shows here. Display only.
+//  better cell before the ladder; fewer, it LEADS ↓. Display only.
 //
 //  THE GRID AND THE SIGNALS meet by construction, not by wiring. A ▲ TURN
 //  needs the value tape to have been cheap and the push up - the push that
-//  lifts a row - so it tends to carry a name up the cheap column, from Watch
-//  toward Accumulate and Buy. A ◆ RESUME needs control held and room left:
-//  Add · trend and Add · strong trend. The grid is unmeasured, like the seed.
+//  lifts a row - so it tends to carry a name up the cheap column. A ◆ RESUME
+//  needs control held and room left: Add · trend and Hold · extended.
 //
 //  THE READOUT. One table on the price chart, a row per layer and a column per
 //  question, so every column means the same thing on every row:
@@ -3536,7 +3571,7 @@ bool  oiCast  = inpOiCast and oiSelf and ready and (hAbove ? oiSC > oiLU : oiLU 
 //
 //  WHAT EACH CELL SAYS TO DO. The seed's nine states become nine ACTIONS, each
 //  keeping its seed units - Buy 3 · Add 3 · Hold 1.5 · Accumulate 1.5 · Wait 1
-//  · Watch 1 · Trim 0.75 · Reduce 0.5 · Exit 0.25 - so the word is the weight.
+//  · Trim 0.75 · Reduce 0.5 · Exit 0.25 - so the word is the weight.
 //  Each cell takes the action of the seed cell it lies inside, plus the reason
 //  that separates it from its neighbour. One refinement: the seed's Wait -
 //  undecided at a fair price - is the only seed cell that says nothing, so it
@@ -3553,30 +3588,30 @@ bool  oiCast  = inpOiCast and oiSelf and ready and (hAbove ? oiSC > oiLU : oiLU 
 // Cell = row · 4 + column. Rows: 0 sellers firm, 1 sellers edge, 2 buyers edge,
 // 3 buyers firm. Columns: 0 cheap, 1 below fair, 2 above fair, 3 rich. 16 UNREAD.
 var array<string> G_NAME = array.from(
-     "Watch · still falling",   "Reduce · downtrend",    "Reduce · breakdown",  "Exit · distribution",
+     "Buy · capitulation",      "Accumulate · washout",  "Reduce · breakdown",  "Exit · distribution",
      "Accumulate · deep value", "Wait · no edge",        "Trim · rolling over", "Trim · topping",
      "Accumulate · basing",     "Accumulate · early turn", "Wait · drifting",   "Trim · stalling",
-     "Buy · turn",              "Add · trend",           "Add · strong trend",  "Hold · don't add",
+     "Buy · turn",              "Add · trend",           "Hold · extended",     "Hold · don't add",
      "Unread")
 // Units are the action's, and each action's are its seed state's:
-// Buy 3 · Add 3 · Hold 1.5 · Accumulate 1.5 · Wait 1 · Watch 1 · Trim 0.75 ·
-// Reduce 0.5 · Exit 0.25.
+// Buy 3 · Add 3 · Hold 1.5 · Accumulate 1.5 · Wait 1 · Trim 0.75 · Reduce 0.5 ·
+// Exit 0.25. v7 moved three cells by measurement: 0, 1 and 14.
 var array<float> G_UNITS = array.from(
-     1.00, 0.50, 0.50, 0.25,
+     3.00, 1.50, 0.50, 0.25,
      1.50, 1.00, 0.75, 0.75,
      1.50, 1.50, 1.00, 0.75,
-     3.00, 3.00, 3.00, 1.50,
+     3.00, 3.00, 1.50, 1.50,
      1.00)
 // the side each action works: +1 builds the position, −1 cuts it, 0 neither
 var array<int> G_SIDE = array.from(
-      0, -1, -1, -1,
+      1,  1, -1, -1,
       1,  0, -1, -1,
       1,  1,  0, -1,
-      1,  1,  1,  0,
+      1,  1,  0,  0,
       0)
 var array<string> G_MEAN = array.from(
-     "sellers firmly in control at a cheap price - still falling; the watchlist, do not catch it",
-     "sellers firmly in control below fair - the downtrend is running",
+     "sellers firmly in control at a cheap price - capitulation; measured in v7, followed by gains in both eras on every asset class but crypto",
+     "sellers firmly in control below fair - a washout; measured in v7, followed by gains in both eras outside crypto",
      "sellers firmly in control while price is still above fair - the market is breaking down",
      "sellers firmly in control at a rich price - distribution; the floor",
      "cheap, and the sellers are down to an edge - build slowly on value",
@@ -3589,7 +3624,7 @@ var array<string> G_MEAN = array.from(
      "rich, and control has faded to an edge - the move has stalled",
      "cheap, buyers now firmly in control - a dislocation that turned",
      "buyers firmly in control below fair - the trend, with room to run",
-     "buyers firmly in control and price already above fair - a strong trend",
+     "buyers firmly in control and price already above fair - extended; measured in v7, adding here earned nothing in either era",
      "buyers firmly in control of a rich price - hold it, do not add",
      "a tape not yet calibrated, or switched off")
 
@@ -3644,7 +3679,7 @@ string gTip  = gCell == 16 ? array.get(G_MEAN, 16) :
      (gChart == 16 ? "" : "\n\nCHART CELL: " + array.get(G_NAME, gChart) + " - where the trace's own conviction and value place it" +
       (gLead > 0 ? ". The chart is already in a better cell than the ladder: it LEADS ↑." :
        gLead < 0 ? ". The chart is already in a weaker cell than the ladder: it LEADS ↓." : ".")) +
-     "\n\nREAD THE PUSH AGAINST THE ACTION. Buy, Add and Accumulate are best done on a push ↑; with no push, wait for one; against a push ↓, not yet. Trim, Reduce and Exit can be done now, or into a push ↑. Hold, Wait and Watch change nothing - the push says which way the row may move next." +
+     "\n\nREAD THE PUSH. It says which way the row may move next. Measured in v7: inside the capitulation cells its direction made no consistent difference, so Buy · capitulation and Accumulate · washout do not wait for a push ↑." +
      (gHeld ? "\n\nHELD: the conviction tape has moved to another row, but the push has not confirmed it, so the state stands." : "")
 
 // ── THE READOUT · on the price chart ─────────────────────────────────────────

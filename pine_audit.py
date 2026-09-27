@@ -138,11 +138,13 @@ def run_port(df: pd.DataFrame, val: pd.DataFrame, params: pg.Params):
 # PER-INSTRUMENT SCORING  (returns per-date sums on the global calendar)
 # ════════════════════════════════════════════════════════════════════════════════════════
 def score_instrument(lo: pd.DataFrame, pos: dict, cal_pos: np.ndarray, n_cal: int,
-                     strats=STRATS, horizons=HORIZONS, by_date: bool = True) -> dict:
+                     strats=STRATS, horizons=HORIZONS, by_date: bool = True,
+                     split: pd.Timestamp | None = None) -> dict:
     """{(strat, h, era): (sum_pz, sum_|p|, n, sum_pz², [per-date sum_pz, per-date sum_|p|])}."""
     op = lo["open"].where(lo["open"] > 0, lo["close"]).to_numpy(dtype=float)
     dates = lo.index
-    era_mask = {"disc": np.asarray(dates < SPLIT), "hold": np.asarray(dates >= SPLIT)}
+    split = SPLIT if split is None else split
+    era_mask = {"disc": np.asarray(dates < split), "hold": np.asarray(dates >= split)}
     res = {}
     for h in horizons:
         entry = np.roll(op, -1)
@@ -517,3 +519,158 @@ def oi_character(close: pd.Series, oi: pd.Series, n: int = 10) -> pd.DataFrame:
                          "self": (tot > 0) & ((sc + lu) / tot.where(tot > 0) >= OI_EXIT),
                          "sc_gt_lu": sc > lu, "lb": lb, "sb": sb, "sc": sc, "lu": lu},
                         index=close.index)
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════
+# E4 · CAPITULATION  (sellers firm × price cheap / below fair — the audit's robust finding)
+# ════════════════════════════════════════════════════════════════════════════════════════
+def _cap_positions(lo, out, grid) -> dict:
+    cell = grid["cvg_cell"].fillna(cg.UNREAD).astype(int).to_numpy()
+    push = out["push"].fillna(0).to_numpy(dtype=float)
+    ct = out["c_tape"].to_numpy(dtype=float)
+    vt = out["v_tape"].to_numpy(dtype=float)
+    ready = np.isfinite(out["trace"].to_numpy(dtype=float))
+    in01 = np.isin(cell, (0, 1))
+    prev = np.concatenate([[False], in01[:-1]])
+    c = lo["close"]
+    r20 = c / c.shift(20) - 1.0
+    z20 = ((r20 - r20.rolling(252, min_periods=126).mean())
+           / r20.rolling(252, min_periods=126).std()).to_numpy()
+    rich = np.isin(cell, (14, 15))
+    one = lambda m: np.where(m & ready, 1.0, np.nan)          # noqa: E731
+    return {
+        "cap_state": one(in01),
+        "cap_cell0": one(cell == 0),
+        "cap_cell1": one(cell == 1),
+        "cap_entry": one(in01 & ~prev),
+        "cap_push_up": one(in01 & (push > 0)),
+        "cap_push_dn": one(in01 & (push < 0)),
+        # the same thresholds read off the tapes directly, without the grid's push-gated row
+        "cap_tapes": one((ct <= -30.0) & (vt < 0.0)),
+        # benchmark: plain oversold — the 20-bar return ≤ −1.5σ of its own year
+        "bench_oversold": one(z20 <= -1.5),
+        "bench_oversold_1": one(z20 <= -1.0),
+        # the grid's opposite corner, for the short side
+        "rich_state": np.where(rich & ready, -1.0, np.nan),
+        # does the grid add to plain oversold? capitulation AND oversold vs oversold alone
+        "cap_and_oversold": one(in01 & (z20 <= -1.0)),
+        "oversold_not_cap": one(~in01 & (z20 <= -1.0)),
+    }
+
+
+def _cap_job(args):
+    g, tkr, df = args
+    cal = _W["cal"]
+    try:
+        lo0 = eng._chart_bars(df)
+        val = sv.compute_value(lo0, _W["drv"], tkr, chart="D")
+        lo, out, grid = run_port(df, val, eng.settings_for(None, None, "Daily").params)
+    except Exception as e:
+        return g, tkr, None, f"{type(e).__name__}: {e}"
+    pos = _cap_positions(lo, out, grid)
+    sc = score_instrument(lo, pos, cal.get_indexer(lo.index), len(cal),
+                          strats=tuple(pos), horizons=(5, 10, 20))
+    strat = {k: strategy_returns(lo, np.nan_to_num(pos[k]), COST_BPS[g])
+             for k in ("cap_state", "bench_oversold")}
+    strat["hold"] = strategy_returns(lo, np.ones(len(lo)), 0.0)
+    return g, tkr, (sc, strat), None
+
+
+def main_capitulation(tag: str = "cap"):
+    cal = calendar()
+    jobs = [(g, t, df) for g in GROUPS for t, df in load_group(g).items()]
+    accum, errs, strat_rets = Accumulator(len(cal)), [], {}
+    with Pool(4, initializer=_init, initargs=(cal,)) as pool:
+        for i, (g, tkr, payload, err) in enumerate(pool.imap_unordered(_cap_job, jobs, chunksize=2)):
+            if err:
+                errs.append((g, tkr, err)); continue
+            accum.add(g, payload[0]); strat_rets[(g, tkr)] = payload[1]
+    tab = accum.table()
+    pickle.dump({"table": tab, "strat": strat_rets, "errors": errs},
+                open(os.path.join(CACHE, f"audit_{tag}.pkl"), "wb"))
+    print(f"done · {len(jobs) - len(errs)} instruments · {len(errs)} errors")
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["capitulation"]:
+    main_capitulation()
+
+
+OI_SPLIT = pd.Timestamp("2023-01-01")     # OI history starts 2019: discovery 2019-22, holdout 2023+
+
+
+def load_oi_panel(folder: str) -> pd.DataFrame:
+    """Total stock-futures OI (all expiries), date × symbol, from the daily bhavcopy extracts."""
+    import glob
+    parts = {}
+    for f in sorted(glob.glob(os.path.join(folder, "*.pkl"))):
+        d = pd.Timestamp(os.path.basename(f)[:8])
+        parts[d] = pd.read_pickle(f)["oi"]
+    return pd.DataFrame(parts).T.sort_index()
+
+
+def _oi_job(args):
+    g, tkr, df, oi = args
+    cal = _W["cal"]
+    try:
+        lo0 = eng._chart_bars(df)
+        val = sv.compute_value(lo0, _W["drv"], tkr, chart="D")
+        lo, out, grid = run_port(df, val, eng.settings_for(None, None, "Daily").params)
+    except Exception as e:
+        return g, tkr, None, f"{type(e).__name__}: {e}"
+    o = oi.reindex(lo.index)
+    have = o.notna().to_numpy()
+    ch = oi_character(lo["close"].where(o.notna()), o.ffill(), 10)
+    char = ch["char"].to_numpy()
+    self_ = ch["self"].fillna(False).to_numpy(bool)
+    crowd = ch["crowd"].fillna(False).to_numpy(bool)
+    hist = out["hist"].to_numpy(dtype=float)
+    push = out["push"].fillna(0).to_numpy(dtype=float)
+    r10 = (lo["close"] / lo["close"].shift(10) - 1.0).to_numpy()
+    one = lambda m, v=1.0: np.where(m & have, v, np.nan)     # noqa: E731
+    pos = {
+        "LB": one(char == "Long build-up"), "SB": one(char == "Short build-up"),
+        "SC": one(char == "Short covering"), "LU": one(char == "Long unwinding"),
+        "oi_dir": np.where(have & (char == "Long build-up"), 1.0,
+                           np.where(have & (char == "Short build-up"), -1.0, np.nan)),
+        "price_dir10": np.where(have & np.isfinite(r10) & (r10 != 0), np.sign(r10), np.nan),
+        "price_up10": one(r10 > 0), "price_dn10": one(r10 < 0),
+        "crowd": one(crowd), "not_crowd": one(~crowd),
+        "crowd_LB": one(crowd & (char == "Long build-up")),
+        "crowd_SB": one(crowd & (char == "Short build-up")),
+        # the gold cast: does a push made mostly by exits continue less?
+        "push_exits": np.where(have & (push != 0) & self_, np.sign(hist), np.nan),
+        "push_not_exits": np.where(have & (push != 0) & ~self_, np.sign(hist), np.nan),
+    }
+    sc = score_instrument(lo, pos, cal.get_indexer(lo.index), len(cal), strats=tuple(pos),
+                          horizons=(5, 10, 20), split=OI_SPLIT)
+    return g, tkr, sc, None
+
+
+def main_oi(oi_folder: str, tag: str = "oi"):
+    cal = calendar()
+    panel = load_oi_panel(oi_folder)
+    px = {**load_group("nse")}
+    extra = os.path.join(CACHE, "multi_fno_extra.pkl")
+    if os.path.exists(extra):
+        px.update(pickle.load(open(extra, "rb")))
+    jobs = []
+    for sym in panel.columns:
+        t = f"{sym}.NS"
+        if t in px and panel[sym].notna().sum() > 300:
+            jobs.append(("fno", t, px[t], panel[sym]))
+    cal = cal.union(pd.DatetimeIndex(sorted(set().union(*[set(j[2].index) for j in jobs]))))
+    accum, errs = Accumulator(len(cal)), []
+    with Pool(4, initializer=_init, initargs=(cal,)) as pool:
+        for g, tkr, sc, err in pool.imap_unordered(_oi_job, jobs, chunksize=2):
+            if err:
+                errs.append((tkr, err)); continue
+            accum.add(g, sc)
+    tab = accum.table()
+    pickle.dump({"table": tab, "errors": errs, "n": len(jobs),
+                 "span": (str(panel.index[0].date()), str(panel.index[-1].date()))},
+                open(os.path.join(CACHE, f"audit_{tag}.pkl"), "wb"))
+    print(f"done · {len(jobs) - len(errs)} F&O names · {len(errs)} errors · OI {panel.index[0].date()} → {panel.index[-1].date()}")
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["oi"]:
+    main_oi(sys.argv[2])
