@@ -168,27 +168,37 @@ Dow 30       −0.41%/yr (t −0.78)  +0.28%/yr (t +1.47)   +0.28%/yr (t +0.99)
 
 Within half a percent of equal weight everywhere, never above it. The histogram's gate earns its
 place on single stocks. The two tapes are about +0.6 correlated (value's breadth leg is momentum),
-so the corners that need them to disagree stay thin. **That is why Sanket uses the grid as a weight
-to order names, and never as a forecast to fire on.**
+so the corners that need them to disagree stay thin. **Sanket shows the grid as a name's state; it
+neither fires on it nor, since the trace study, ranks by it.**
 
 ## Ranking
 
 ```
 long side                                   short side
-5 + g   ▲ TURN on this bar                  5 + g'  ▼ TURN on this bar
-4 + g   ◆ RESUME ↑ on this bar              4 + g'  ◆ RESUME ↓ on this bar
-3 + r   a long event inside its hold        3 + r   a short event inside its hold
-2 + a   a ▲ TURN window open                2 + a   a ▼ TURN window open
-g − ½   the grid state alone                g' − ½  the grid state alone
+5 + s   ▲ TURN on this bar                  5 + s'  ▼ TURN on this bar
+s       every other name, by stretch        s'      every other name, by stretch
 
-g = (units − ¼) / 2¾,  g' = (3 − units) / 2¾
+s = −trace / 200 ∈ (−½, ½)   (stretched furthest DOWN leads the long side)   s' = −s
 ```
 
-Banded because the events are rare and the state is universal: sorting on any single continuous
-number would bury a fresh event among merely well-placed names. Inside every band the grid weight
-orders — Pragyam's inference that the state is the weight. Nothing measured enters: the Edge Study
-is reported, never applied, and the cost gate (the measured cost charge against the largest effect
-this family has shown, 0.036) is a flag on the row.
+**Read as reversion — measured, not inherited.** v8.0.0 ranked by the grid's weight, banded
+TURN > RESUME > hold window > open TURN window > grid state. `trace_study.py` measured that on five
+NSE universes over ~15 years and it ran **backwards**: long-minus-short −0.022σ before 2021 and
+−0.043σ after, clearly negative in 4 of 8 runs. Every ingredient — conviction, value, the trace,
+the push, the grid weight — correlated *negatively* with the next 5–40 bars; the buyers-firm cells
+the grid calls *Add* lagged, the sellers-firm cheap cells it calls *Watch* / *Reduce* led.
+
+The replacement was chosen on the pre-2021 era only: stretch +0.058σ, TURN kept on top +0.059σ;
+RESUME and the hold / open-window bands cost edge and no longer order the list. On the sealed
+2021–2026 holdout it was never worse than the grid ranking (Daily −0.007σ vs −0.043σ; Weekly
++0.087σ vs −0.040σ; rank IC clearly positive on NIFTY 50 / 100). Stated plainly: once a name's own
+20-bar return is removed the trace carries ~0 information — on NSE equities this ranking **is**
+short-term reversal, read through the indicator, and that effect has been weaker since 2021 on
+mid and small caps. The grid, RESUME and the windows are still computed and shown; they describe
+a name, they do not order the list. Reports: `studies/`.
+
+Nothing measured on YOUR universe enters: the Edge Study is reported, never applied, and the
+cost gate is a flag on the row.
 
 ## The Edge Study
 

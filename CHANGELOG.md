@@ -7,8 +7,38 @@ Format: `[version] · date — release title`
 
 ---
 
-## [Unreleased]
-### Trace study — measure the three trace settings instead of assuming the default
+## [v8.2.0] · 2026-09-27
+### The ranking, measured — stretch read as reversion
+
+`trace_study.py` was run on real NSE data: NIFTY 50 / 100 / 200, Midcap 100 and Smallcap 100 on
+Daily, and NIFTY 50 / 100 and Midcap 100 on Weekly, ~15 years, holdout sealed from late 2020.
+
+**Finding.** The v8.0.0 ranking — banded TURN > RESUME > hold > open window > grid state, ordered by
+the grid's weight — ran **backwards**: long-minus-short −0.022σ in discovery and −0.043σ on the
+holdout, clearly negative in 4 of 8 runs, under all three trace settings. Every component of the
+stack (conviction, value, trace, push, grid weight) correlated negatively with the next 5–40 bars,
+in both eras. The grid's buyers-firm cells (*Add · strong trend*, *Hold · don't add*) lagged; its
+sellers-firm cheap cells (*Watch · still falling*, *Reduce · downtrend*) led. The trace measures
+stretch, and on NSE equities stretch reverts.
+
+**Fix** (`engine.priorities`, designed on the pre-2021 era only): a ▲/▼ TURN on this bar first, then
+every name by stretch — the long side leads with the names stretched furthest down, the short side
+with those stretched furthest up. RESUME and the hold / open-window bands no longer order the list
+(they cost edge in discovery); they are still computed and shown. Holdout: never worse than the old
+ranking in any run — Daily −0.007σ vs −0.043σ, Weekly +0.087σ vs −0.040σ, rank IC clearly positive on
+NIFTY 50 and NIFTY 100.
+
+**Stated plainly.** Once a name's own 20-bar return is removed, the trace, tapes and push carry
+~0 information: on these universes this ranking *is* short-term reversal read through the
+indicator, and that effect weakened after 2021 on mid and small caps (holdout ≈ 0 there).
+Push-confirmation (waiting for the stretch to turn) destroyed the edge, +0.058σ → +0.008σ.
+
+**Trace setting.** Re-measured under the new ranking: keep **Conviction × value**. Conviction only
+beat it in 1 of 8 runs and was worse on NIFTY 200 in discovery; Value only never beat it.
+
+UI: ranking descriptions rewritten; the Grid tab now states the measurement. Reports in `studies/`.
+
+### The trace study tool — measure the three trace settings instead of assuming the default
 
 `trace_study.py` backtests the screener under each of pragati.pine's three trace settings —
 **Conviction × value** (the default Sanket shipped), **Conviction only**, **Value only** — on the

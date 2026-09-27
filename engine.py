@@ -35,20 +35,34 @@ THREE KINDS OF OUTPUT, AND WHAT EACH CLAIMS
               Trim / Reduce / Exit — where the name stands BETWEEN signals.
               Every name has one. Neither signals nor state read each other.
 
-RANKING IS BANDED, because the events are rare and the state is universal:
+RANKING IS BY STRETCH, read as REVERSION — measured, not inherited:
 
     long side                              short side
-    5 + g   ▲ TURN on this bar              5 + g'  ▼ TURN on this bar
-    4 + g   ◆ RESUME ↑ on this bar          4 + g'  ◆ RESUME ↓ on this bar
-    3 + r   a long event inside its hold    3 + r   a short event inside its hold
-    2 + a   a ▲ TURN window open            2 + a   a ▼ TURN window open
-    g − ½   the grid state alone            g' − ½  the grid state alone
+    5 + s   ▲ TURN on this bar              5 + s'  ▼ TURN on this bar
+    s       everything else                 s'      everything else
 
-g is the name's grid weight, (units − ¼) / 2¾ ∈ [0, 1) — Pragyam's inference: the
-state IS the weight, so among names that fired the same event, the one the grid
-calls Buy · turn ranks above the one it calls Watch · still falling. g' mirrors
-it for the short side ((3 − units) / 2¾). r is the fraction of the hold left, a
-the fraction of the confirmation window left. Bands cannot overlap.
+s = −trace / 200 ∈ (−½, ½): the name stretched furthest DOWN (sellers in control,
+priced cheap) leads the long side; s' = −s, so the most stretched UP leads the
+short side. A ▲▼ TURN on this bar — the indicator's own declaration that a stretch
+is releasing — stays on top of its side.
+
+Why not the grid's weight (v8.0.0 ranked by it, banded TURN > RESUME > hold >
+open window > grid state): trace_study.py measured it on five NSE universes over
+~15 years and the ranking ran BACKWARDS — long-minus-short −0.022σ before 2021 and
+−0.043σ after, clearly negative in 4 of 8 runs. The grid reads buyers-firm as
+Buy / Add; over 5–40 bars those names LAGGED the cross-section and sellers-firm,
+cheap names led — the stretch reverts, and every ingredient (conviction, value, the
+trace, the push, the grid weight) carried the same negative sign. Designed on the
+pre-2021 era only: stretch +0.058σ, TURN kept on top +0.059σ; RESUME (continuation)
+and the hold / open-window bands, which pin stale names to the top, cost edge
+(+0.056σ, +0.032σ) and no longer order the list. On the sealed 2021–2026 holdout the
+stretch ranking was never worse than the grid's (daily −0.007σ vs −0.043σ, weekly
++0.087σ vs −0.040σ). Stated plainly: once the name's own 20-bar return is removed,
+the trace carries ~0 information — on NSE equities this ranking IS short-term
+reversal, read through the indicator.
+
+The grid, RESUME, the hold and the TURN window are still computed and shown — they
+describe a name; they do not order the list.
 
 WHAT IS NOT CLAIMED
 ───────────────────
@@ -543,30 +557,19 @@ def grid_weight(units, side: int = 1):
     return np.clip(g, 0.0, 0.999)
 
 
-def priorities(tb, ts, rl, rs, units, ready, armed, a_age, h_dir, h_age, push,
-               horizon: float, confirm: float) -> tuple:
-    """The banded priority for each side, on plain arrays of any shape (÷100 of the column).
+def priorities(tb, ts, trace, ready) -> tuple:
+    """(long, short) priority on plain arrays of any shape (÷100 of the column).
 
-    Bands, highest first: a TURN on this bar (5 + g) > a RESUME (4 + g) > inside an
-    event's hold window (3 + time left) > an open TURN window (2 + window left) > the grid
-    state (g − ½, the push breaking ties inside a cell). ``g`` is the grid weight. Shared by
-    :func:`compute_ranking` and the trace study, so the study ranks exactly as the screen.
+    ▲ / ▼ TURN on this bar ranks first on its side (5 + s); every other name by its
+    stretch, s = −trace/200 for the long side and +trace/200 for the short side. See
+    the module docstring for the measurement behind this. Shared by
+    :func:`compute_ranking` and trace_study.py, so the study ranks exactly as the screen.
     """
-    units = np.where(np.isfinite(units), units, 1.0)
-    remain = np.clip(1.0 - np.nan_to_num(h_age, nan=horizon) / horizon, 0.0, 1.0)
-    a_left = np.clip(1.0 - (np.nan_to_num(a_age) - 1.0) / confirm, 0.0, 1.0)
-
-    def _one(side: int, turn, res):
-        g = grid_weight(units, side)
-        held = (h_dir == side) & np.isfinite(h_age) & ~(turn | res)
-        arm = (armed == side) & ~(turn | res)
-        # context: the grid weight, with the push as a tie-break inside a cell
-        ctx = g - 0.5 + 0.004 * np.clip(side * push, -2, 2)
-        pr = np.where(turn, 5.0 + g, np.where(res, 4.0 + g,
-             np.where(held, 3.0 + remain * 0.99, np.where(arm, 2.0 + a_left * 0.99, ctx))))
-        return np.where(ready, pr, np.nan)
-
-    return _one(1, tb, rl), _one(-1, ts, rs)
+    tr = np.asarray(trace, dtype=float)
+    s = np.clip(-tr / 200.0, -0.5, 0.5)
+    pl = np.where(tb, 5.0 + s, s)
+    ps = np.where(ts, 5.0 - s, -s)
+    return np.where(ready, pl, np.nan), np.where(ready, ps, np.nan)
 
 
 RANK_CONTRACT = ("Side", "Signal_Kind", "Priority_Long", "Priority_Short",
@@ -607,12 +610,10 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
     a_age = _f("PRG_Armed_Age", 0.0)
     h_dir = _f("PRG_Hold_Dir", 0.0)
     h_age = _f("PRG_Hold_Age")
-    push = _f("PRG_Push", 0.0)
 
     df["Side"] = np.where(tb | rl, "Buy", np.where(ts | rs, "Sell", "—"))
     df["Signal_Kind"] = np.where(tb | ts, "TURN", np.where(rl | rs, "RESUME", ""))
-    p_long, p_short = priorities(tb, ts, rl, rs, units, ready, armed, a_age, h_dir, h_age,
-                                 push, horizon, confirm)
+    p_long, p_short = priorities(tb, ts, _f("PRG_Trace"), ready)
     p_long = pd.Series(p_long, index=idx)
     p_short = pd.Series(p_short, index=idx)
     df["Priority_Long"] = p_long * 100.0

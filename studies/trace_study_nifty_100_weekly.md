@@ -1,6 +1,6 @@
 # Trace study · NIFTY 100 · Weekly
 
-76 names · Weekly · 2012-03-05 → 2026-09-21 · holdout from 2020-11-30 (40%) · hold 10 bars · book = top 20% · participation ratio 11.4 · macro drivers on · measured 2026-09-27 12:38
+76 names · Weekly · 2012-03-05 → 2026-09-21 · holdout from 2020-11-30 (40%) · hold 10 bars · book = top 20% · participation ratio 11.4 · macro drivers on · measured 2026-09-27 12:51
 
 **Decision:** no trace setting beats the default on the holdout long−short spread beyond noise — the default stays.
 
@@ -10,43 +10,43 @@ Scores are in σ of each name's own h-bar return (drift removed within era). Bra
 
 | Metric | Conviction × value | Conviction only | Value only |
 |---|---|---|---|
-| Long − short spread | -0.031 [-0.104, +0.038] | -0.019 [-0.091, +0.052] | -0.008 [-0.082, +0.058] |
-| Long book vs cross-section | -0.010 [-0.064, +0.041] | -0.003 [-0.058, +0.048] | -0.001 [-0.056, +0.050] |
-| Short book vs cross-section | -0.021 [-0.065, +0.024] | -0.016 [-0.060, +0.026] | -0.007 [-0.048, +0.030] |
-| IC · long priority | -0.031 [-0.061, -0.004] | -0.025 [-0.056, +0.006] | -0.039 [-0.073, -0.008] |
-| IC · short priority | -0.052 [-0.078, -0.026] | -0.036 [-0.062, -0.010] | -0.045 [-0.073, -0.018] |
+| Long − short spread | +0.128 [-0.005, +0.254] | +0.143 [+0.001, +0.275] | +0.104 [+0.013, +0.192] |
+| Long book vs cross-section | +0.080 [+0.015, +0.145] | +0.097 [+0.019, +0.168] | +0.062 [+0.012, +0.113] |
+| Short book vs cross-section | +0.048 [-0.027, +0.123] | +0.046 [-0.031, +0.126] | +0.042 [-0.006, +0.088] |
+| IC · long priority | +0.070 [+0.020, +0.121] | +0.072 [+0.018, +0.124] | +0.049 [+0.009, +0.086] |
+| IC · short priority | +0.070 [+0.019, +0.121] | +0.071 [+0.017, +0.123] | +0.049 [+0.010, +0.086] |
 | IC · the trace level | -0.070 [-0.121, -0.020] | -0.072 [-0.124, -0.018] | -0.048 [-0.086, -0.009] |
 
 **Paired against Conviction × value** (mode − default, same dates):
 
 | Metric | Conviction only | Value only |
 |---|---|---|
-| Long − short spread | +0.012 [-0.053, +0.085] | +0.023 [-0.033, +0.077] |
-| Long book vs cross-section | +0.007 [-0.043, +0.062] | +0.010 [-0.032, +0.050] |
-| Short book vs cross-section | +0.005 [-0.043, +0.056] | +0.014 [-0.026, +0.052] |
-| IC · long priority | +0.006 [-0.019, +0.033] | -0.008 [-0.037, +0.019] |
-| IC · short priority | +0.016 [-0.012, +0.043] | +0.008 [-0.020, +0.033] |
+| Long − short spread | +0.015 [-0.032, +0.067] | -0.024 [-0.095, +0.049] |
+| Long book vs cross-section | +0.016 [-0.010, +0.042] | -0.018 [-0.051, +0.015] |
+| Short book vs cross-section | -0.002 [-0.033, +0.031] | -0.006 [-0.053, +0.041] |
+| IC · long priority | +0.002 [-0.016, +0.020] | -0.021 [-0.049, +0.006] |
+| IC · short priority | +0.001 [-0.017, +0.019] | -0.021 [-0.049, +0.006] |
 
 ## The screen · discovery
 
 | Metric | Conviction × value | Conviction only | Value only |
 |---|---|---|---|
-| Long − short spread | -0.037 [-0.086, +0.010] | +0.022 [-0.059, +0.122] | -0.016 [-0.070, +0.040] |
-| Long book vs cross-section | -0.036 [-0.077, +0.003] | +0.024 [-0.037, +0.089] | -0.027 [-0.079, +0.029] |
-| Short book vs cross-section | +0.003 [-0.044, +0.044] | -0.003 [-0.037, +0.032] | +0.020 [-0.037, +0.073] |
-| IC · long priority | -0.012 [-0.034, +0.008] | -0.006 [-0.030, +0.017] | -0.021 [-0.045, +0.002] |
-| IC · short priority | +0.000 [-0.023, +0.021] | -0.011 [-0.038, +0.013] | -0.014 [-0.039, +0.010] |
+| Long − short spread | +0.089 [-0.006, +0.167] | +0.096 [-0.013, +0.178] | +0.041 [-0.024, +0.115] |
+| Long book vs cross-section | +0.014 [-0.036, +0.062] | +0.026 [-0.038, +0.085] | +0.012 [-0.022, +0.052] |
+| Short book vs cross-section | +0.075 [+0.018, +0.118] | +0.071 [+0.002, +0.120] | +0.029 [-0.014, +0.072] |
+| IC · long priority | +0.045 [+0.002, +0.081] | +0.047 [+0.001, +0.083] | +0.029 [+0.001, +0.059] |
+| IC · short priority | +0.045 [+0.002, +0.081] | +0.048 [+0.002, +0.084] | +0.029 [+0.001, +0.060] |
 | IC · the trace level | -0.045 [-0.081, -0.003] | -0.047 [-0.083, -0.001] | -0.029 [-0.059, -0.001] |
 
 **Paired against Conviction × value** (mode − default, same dates):
 
 | Metric | Conviction only | Value only |
 |---|---|---|
-| Long − short spread | +0.050 [-0.024, +0.142] | +0.015 [-0.047, +0.077] |
-| Long book vs cross-section | +0.050 [-0.009, +0.107] | -0.010 [-0.057, +0.037] |
-| Short book vs cross-section | -0.006 [-0.059, +0.060] | +0.021 [-0.018, +0.070] |
-| IC · long priority | +0.005 [-0.018, +0.026] | -0.013 [-0.036, +0.009] |
-| IC · short priority | -0.012 [-0.034, +0.014] | -0.015 [-0.038, +0.010] |
+| Long − short spread | +0.007 [-0.037, +0.040] | -0.049 [-0.086, +0.001] |
+| Long book vs cross-section | +0.011 [-0.020, +0.038] | -0.012 [-0.033, +0.011] |
+| Short book vs cross-section | -0.004 [-0.035, +0.020] | -0.037 [-0.065, +0.001] |
+| IC · long priority | +0.002 [-0.011, +0.014] | -0.015 [-0.031, +0.006] |
+| IC · short priority | +0.003 [-0.010, +0.014] | -0.014 [-0.030, +0.007] |
 
 ## The events (Edge Study method)
 
