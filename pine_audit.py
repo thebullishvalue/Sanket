@@ -478,3 +478,42 @@ def main_experiments(tag: str = "exp"):
 
 if __name__ == "__main__" and sys.argv[1:2] == ["experiments"]:
     main_experiments()
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════
+# OPEN INTEREST  (the Pine's OI character, ported, measured on NSE stock futures)
+# ════════════════════════════════════════════════════════════════════════════════════════
+OI_JUMP, OI_SDLEN, OI_EXIT, OI_CROWD, OI_RANK = 4.0, 100, 0.60, 90.0, 250
+OI_STATES = ("Long build-up", "Short build-up", "Short covering", "Long unwinding")
+
+
+def oi_character(close: pd.Series, oi: pd.Series, n: int = 10) -> pd.DataFrame:
+    """The Pine's f_oiState on one name: the window's weighted character, 'crowded', exits share.
+
+    Mirrors pragati.pine section 9b line for line: roll-sized OI jumps (> 4σ of |ΔOI| over
+    100 periods) are ignored; each period's |ΔOI| is filed under price direction × OI
+    direction and summed over the last ``n``; the largest bucket names the character.
+    """
+    dO = oi.diff()
+    dP = close.diff().fillna(0.0)
+    aO = dO.abs()
+    sdO = dO.fillna(0.0).rolling(OI_SDLEN, min_periods=OI_SDLEN).std(ddof=0)
+    roll = dO.notna() & sdO.notna() & (sdO > 0) & (aO > OI_JUMP * sdO)
+    use = aO.where(~roll & dO.notna(), 0.0).fillna(0.0)
+    up, dn = dP > 0, dP < 0
+    oiu, oid = dO.fillna(0) > 0, dO.fillna(0) < 0
+    lb = use.where(up & oiu, 0.0).rolling(n, min_periods=1).sum()
+    sb = use.where(dn & oiu, 0.0).rolling(n, min_periods=1).sum()
+    sc = use.where(up & oid, 0.0).rolling(n, min_periods=1).sum()
+    lu = use.where(dn & oid, 0.0).rolling(n, min_periods=1).sum()
+    tot = lb + sb + sc + lu
+    mx = pd.concat([lb, sb, sc, lu], axis=1).max(axis=1)
+    char = np.select([tot <= 0, lb >= mx, sb >= mx, sc >= mx],
+                     ["OI flat", OI_STATES[0], OI_STATES[1], OI_STATES[2]], OI_STATES[3])
+    # ta.percentrank(o, 250): % of the previous 250 values at or below the current one
+    rk = oi.rolling(OI_RANK + 1, min_periods=OI_RANK + 1).apply(
+        lambda w: 100.0 * (w[:-1] <= w[-1]).sum() / OI_RANK, raw=True)
+    return pd.DataFrame({"char": char, "crowd": rk >= OI_CROWD,
+                         "self": (tot > 0) & ((sc + lu) / tot.where(tot > 0) >= OI_EXIT),
+                         "sc_gt_lu": sc > lu, "lb": lb, "sb": sb, "sc": sc, "lu": lu},
+                        index=close.index)
