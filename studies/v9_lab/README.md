@@ -32,3 +32,17 @@ python expOI.py                                       # §8  open interest
 250-bar mean, return over trailing volatility) and `mode="xs"` (return net of the group's
 same-date mean), both checked to read ≈ 0 on random walks; `score` is the v8 stick, kept only
 so `null1.py` can show its bias.
+
+## Post-v9.2 tests (2026-09-28) — both rejected, nothing shipped
+
+- **`expMOM.py` — a momentum-styled grid.** Four momentum unit maps (trend, strength, trend
+  pullback, confirmed trend) against the shipped reversion units, plus 12-1 momentum for
+  reference. Daily time-series: every momentum map negative before 2014 and after 2020 at every
+  horizon, while the shipped units stay positive in all three eras. Cross-sectionally momentum
+  beat the shipped units only after 2020 at 40-60 bars. Crypto is the exception (momentum
+  strongly positive). Pragyam's allocator (`research/cvg_mom.py`): every map lost in every era.
+- **`expFLIP.py` — the grid state plus the histogram flipping green.** The flip alone reads
+  0.000 in every era. Conditioned on the grid: washout +0.02 to +0.04σ in every era under both
+  scorers (about half the ▲); capitulation and the cheap column fail 2014-19; buyers-in-control
+  ≈ 0; the red-flip shorts lose. Pragyam's allocator (`research/cvg_flip.py`): no tilt beats the
+  shipped units in all eras.
