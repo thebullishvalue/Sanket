@@ -1,5 +1,5 @@
 """
-Sanket v5.1.0 — Logger configuration: direct console output system.
+Sanket — Logger configuration: direct console output system.
 संकेत (Sanketa) — "Signal / Indicator"
 
 CORE — Bypasses Python logging, writes colored output to stdout for clean terminal analysis pipeline.
