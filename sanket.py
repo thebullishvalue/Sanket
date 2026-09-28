@@ -8,7 +8,7 @@ effort and in price against fair value — its histogram (the trace's push), and
 its two ingredients read across horizons on two tapes. One state: the 3 × 3
 conviction-value grid, named as an action with its measured units. Two events,
 read from the grid (v9): ▲ CAPITULATION (sellers in control of a cheap price, value
-turning back toward fair) and ▼ DISTRIBUTION (sellers taking control of a rich
+turning back toward fair, conviction not in its quiet regime) and ▼ DISTRIBUTION (sellers taking control of a rich
 price); ◆ RESUME is off by default. `edge.py` measures the signal set on the symbols
 actually on screen. See engine.py, pragati.py, samanvaya.py, cvgrid.py and
 ARCHITECTURE.md.
@@ -2576,7 +2576,7 @@ _SYSTEM_PANELS = (
     ("events", "Two Signals, One State", "Events, and where a name stands",
      "The 3 × 3 grid names each name's state as an action, and v9 reads the events from it: "
      "▲ CAPITULATION — sellers in control of a cheap price, value turning back toward fair, "
-     "the one event measured positive in every era; ▼ DISTRIBUTION — sellers taking control "
+     "outside conviction's quiet regime — the one event measured positive in every era; ▼ DISTRIBUTION — sellers taking control "
      "of a rich price. ◆ RESUME is off by default (measured negative).",
      (("▲", "capitulation, value turning"),
       ("▼", "sellers take a rich price"),
@@ -3867,7 +3867,8 @@ def render_timeseries_dashboard():
             col_precision={"Avg Trace": 1, "Units at Fire": 2, "Build %": 0, "Cut %": 0},
             footer=_glossary({
                 "▲ / ▼": "Symbols firing a ▲ capitulation (sellers in control of a cheap price, "
-                         "value turning back toward fair) or a ▼ distribution on this bar.",
+                         "value turning back toward fair, not in a quiet regime) or a ▼ "
+                         "distribution on this bar.",
                 "◆ ↑ / ↓": "Symbols firing a RESUME — a trend resuming from inside the zone.",
                 "Avg Trace": "Cross-sectional mean trace (±100) — how stretched the universe is, "
                              "on balance. θ is ±42.9 for a single name.",
@@ -4800,7 +4801,7 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
     if not rows:
         rows.append(f'<tr><td class="empty" colspan="{_NCOLS}">— no {_pal["label"]} events in the last 5 bars —</td></tr>')
     head = (_th("Symbol", numeric=False) + _th("Price") + _th("% Change")
-            + _th("Event", "▲ CAPITULATION — sellers in control of a cheap price, value turning back toward fair · ▼ DISTRIBUTION — sellers taking control of a rich price · ◆ RESUME — a trend resuming")
+            + _th("Event", "▲ CAPITULATION — sellers in control of a cheap price, value turning back toward fair, not in a quiet regime · ▼ DISTRIBUTION — sellers taking control of a rich price · ◆ RESUME — a trend resuming")
             + _th("Grid", _TH_GRID, numeric=False) + _th("Push", _TH_PUSH)
             + _th("Trace", "The trace at the bar that FIRED this event. " + _TH_TRACE)
             + _th("C", _TH_C) + _th("V", _TH_V)
