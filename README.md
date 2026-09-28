@@ -316,10 +316,10 @@ Per symbol, on each run:
 ```
 sanket.py            ← Streamlit entry point: UI, data + macro-driver fetch, screen routing
 engine.py            ← settings, per-symbol features, the snapshot row, ranking, cost gate
-pragati.py           ← pragati.pine v9.2: conviction, ladders, trace, histogram, the ◆'s condition, signals() (▲▼ ◆)
+pragati.py           ← pragati.pine v9.3: conviction, ladders, trace, histogram, the ◆'s condition, signals() (▲▼ ◆)
 samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
 cvgrid.py            ← the 3 × 3 conviction-value grid: the state engine, names, units, tones — the ▲▼'s source
-pragati.pine         ← the indicator itself, v9.2 — the Pine the port mirrors (archive/: v5, v7, v8)
+pragati.pine         ← the indicator itself, v9.3 — the Pine the port mirrors (archive/: v5, v7, v8)
 intraday.py          ← the conviction ladder's lower frames from yfinance (1m … 4h), batched and cached
 studies/v9_lab/      ← the v9 audit: look-ahead-free scorers, feature caches, every experiment
 charts.py            ← chart builders: the conviction-value map, tone history, correlation heatmap
@@ -878,4 +878,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v9.1.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v9.3.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

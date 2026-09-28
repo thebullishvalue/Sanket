@@ -1,7 +1,7 @@
 """
 Sanket Signal Engine — PRAGATI · Conviction × Value.
 
-The screener's logical stack, rebuilt on pragati.pine v9.2 and on the inference
+The screener's logical stack, rebuilt on pragati.pine v9.3 and on the inference
 Pragyam already carries for it. It replaces the Siddhi zero-crossing engine that
 shipped through v7.x: Siddhi fired whenever conviction crossed its own signal
 line — ~113 times per 1000 bars, its source's weakest tested configuration
