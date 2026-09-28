@@ -3,7 +3,7 @@
 
 //@version=6
 // ═══════════════════════════════════════════════════════════════════════════
-//  PRAGATI · प्रगति  ·  MULTI-TIMEFRAME CONVICTION OSCILLATOR            v9.2
+//  PRAGATI · प्रगति  ·  MULTI-TIMEFRAME CONVICTION OSCILLATOR            v9.3
 //  "Is this move paid for - and is it paid for on every timeframe?"
 //
 //  ═══ v9 · A FRESH AUDIT, AND THE SIGNALS MOVED TO WHERE THE EDGE IS ════════
@@ -74,6 +74,15 @@
 //      Nifty 50 and Dow 30, net of costs (+0.29 / +0.13 / +0.10 %/yr, Nifty,
 //      every name held). A long-horizon trend axis (the 200-day mean) and
 //      neutralising the zero-edge cells were tested and rejected.
+//
+//  v9.3 · THE ▲ SKIPS THE QUIET REGIME. A three-round search (discovery 2006-19,
+//      2020-26 sealed until a shortlist was fixed, then weekly bars and the
+//      Ladder-down window; studies/v9_lab/SIGNAL_SEARCH.md) found one change that
+//      held everywhere: fire the capitulation turn only when conviction's σ is
+//      not in the bottom fifth of its history. Daily, sealed 2020-26: worst
+//      reading +0.052σ against +0.046σ; weekly 2020-26 +0.081 against +0.054;
+//      Ladder down better on indices, commodities, FX and stocks. ~5% fewer ▲.
+//      No short or exit event held in every reading - the ▼ is unchanged.
 //
 //  v9.2 · THE LEGACY GOES; THE SETTINGS SAY WHAT THEY MOVE. v8's TURN - the
 //      '▲ ▼ source' option and its confirmation and dislocation windows - is
@@ -803,7 +812,7 @@ bool   inpCustom = input.bool(false, "Add a custom macro driver", group=G_S, too
 string usy_sym   = input.symbol("", "    Custom driver symbol", group=G_S, tooltip="Leave empty unless you have a specific economic reason.", display=display.none)
 
 // ── 4 · signals ─────────────────────────────────────────────────────────────
-bool   inpState = input.bool(true, "Signals  ▲ ▼", group=G_T, tooltip="THE ▲▼ - v9 reads them FROM THE GRID, where the audit found the one robust edge.\n\n▲ CAPITULATION TURN - the first closed bar on which the Conviction-Value Grid stands in DOWN · cheap (sellers in control across the ladder, value cheap past θ) with value momentum REVERTING: the fast end of value has already turned back toward fair. Measured on 380 instruments in six classes, drift-free and scored without look-ahead: positive in all three eras (2006-13, 2014-19, 2020-26) on daily AND weekly bars, in four or five of the five non-crypto classes each time. It is a lean, not a trade: about +0.05σ over the next 10-20 bars.\n\n▼ DISTRIBUTION - the first closed bar on which sellers hold control of a price rich past θ (the grid's Exit cell). As a STATE it was followed by underperformance in every era on both timeframes; as a one-bar event it is too rare to measure on its own.\n\nThe standing declaration (the panel's row, the optional background) is the last ▲ or ▼, with no exit. Measured as a held position it carried no edge.\n\nCRYPTO is the stated exception: it trends, and the capitulation reading failed there.", display=display.none)
+bool   inpState = input.bool(true, "Signals  ▲ ▼", group=G_T, tooltip="THE ▲▼ - v9 reads them FROM THE GRID, where the audit found the one robust edge.\n\n▲ CAPITULATION TURN - the first closed bar on which the Conviction-Value Grid stands in DOWN · cheap (sellers in control across the ladder, value cheap past θ) with value momentum REVERTING: the fast end of value has already turned back toward fair. Measured on 380 instruments in six classes, drift-free and scored without look-ahead: positive in all three eras (2006-13, 2014-19, 2020-26) on daily AND weekly bars, in four or five of the five non-crypto classes each time. It is a lean, not a trade: about +0.05σ over the next 10-20 bars. v9.3: skipped while conviction's regime is QUIET (its σ in the bottom fifth of its history), where a small imbalance scales into a large reading - better in every test, about 5% fewer ▲.\n\n▼ DISTRIBUTION - the first closed bar on which sellers hold control of a price rich past θ (the grid's Exit cell). As a STATE it was followed by underperformance in every era on both timeframes; as a one-bar event it is too rare to measure on its own.\n\nThe standing declaration (the panel's row, the optional background) is the last ▲ or ▼, with no exit. Measured as a held position it carried no edge.\n\nCRYPTO is the stated exception: it trends, and the capitulation reading failed there.", display=display.none)
 int    inpCool = input.int(10, "Cooldown (bars)", minval=0, maxval=200, group=G_T, tooltip="Minimum bars between signals in the same direction - ▲ and long ◆ share one clock, ▼ and short ◆ the other.\n\nWithout this, one choppy stretch produces a cluster of markers that all describe the same event.", display=display.none)
 bool   inpCon  = input.bool(false, "Continuation  ◆", group=G_T, tooltip="OFF BY DEFAULT. Measured across 380 instruments in six asset classes it was negative in both eras outside crypto (−0.021σ before 2018, −0.041σ after, over 10 bars), significantly so on US stocks in both. Switch it on to see it; do not lean on it.\n\nCONTINUATION ◆ - control held, value reset, push resumed.\n\n◆ LONG (short mirrors) needs, on one closed bar:\n  CHART                this chart's conviction is above zero - control held - and the trace's histogram went below zero inside the pullback window and now crosses +k·σ\n  CONVICTION · LADDER  the conviction tape is past the inner zone on the buyers' side. With Ladder down (default) the push is BUILT inside the bars at every finer frame, not carried by one print; with Ladder up it is HELD by the frames above\n  VALUE · LADDER       the value tape is not rich past θ - the pullback left price fair or cheap; with the default Ladder up, on the frames above the chart\n  EFFORT → RESULT      participation is NOT absorbed on the bar - the push is producing result (switchable below)\n\nIn one line: the pullback reset value without breaking the push. The v9 audit found it negative in both of v8's eras and it stays off.", display=display.none)
 int    inpPull = input.int(6, "    ◆ · pullback window", minval=2, maxval=50, group=G_T, tooltip="For the ◆ only: how recently the histogram must have crossed to the wrong side for the move to count as a genuine pullback rather than an uninterrupted drift.", display=display.none)
@@ -3604,7 +3613,10 @@ gPrevName := gName
 //    DOWN · cheap (sellers in control across the ladder at a price cheap past
 //    θ) with value momentum REVERTING: the fast end of value has already turned
 //    back toward fair. The one event the v9 audit found positive in all three
-//    eras (2006-13, 2014-19, 2020-26), on daily and on weekly bars.
+//    eras (2006-13, 2014-19, 2020-26), on daily and on weekly bars. v9.3: not
+//    when conviction's regime is QUIET on that bar (its σ in the bottom fifth
+//    of its own history) - better in 11 of 12 era × scorer × horizon readings,
+//    in the sealed 2020-26 era, on weekly bars and on Ladder down.
 //  ▼ DISTRIBUTION - the first closed bar on which sellers hold control of a
 //    price rich past θ (the grid's Exit cell). As a STATE it was followed by
 //    underperformance in every era and on both timeframes; as a one-bar event
@@ -3615,7 +3627,10 @@ gPrevName := gName
 // ═══════════════════════════════════════════════════════════════════════════
 bool gCapTurn = gRead and gRow == -1 and gCol == 0 and gVPh == 1
 bool gDistNow = gRead and gRow == -1 and gCol == 2
-bool capBuy   = gCapTurn and not gCapTurn[1]
+// v9.3: not in conviction's quiet regime on that bar (gQuiet, the grid's own flag) -
+// there a small imbalance scales into a large reading and the 'capitulation' is
+// often amplified noise. Measured: studies/v9_lab/SIGNAL_SEARCH.md.
+bool capBuy   = gCapTurn and not gCapTurn[1] and not gQuiet
 bool distSell = gDistNow and not gDistNow[1]
 
 bool buySig  = inpState and confirmed and stackOk and coolLong  and capBuy

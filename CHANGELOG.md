@@ -7,6 +7,24 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v9.3.0] · 2026-09-28
+### The ▲ skips conviction's quiet regime
+
+- **▲ CAPITULATION now also requires conviction not to be in its quiet regime** on that bar (σ of
+  the raw share in the bottom fifth of its history — the grid's own `gQuiet` in the Pine, the new
+  `cvg_quiet` column in the port). There a small imbalance scales into a large reading and the
+  capitulation is often amplified noise.
+- **Measured** (`studies/v9_lab/SIGNAL_SEARCH.md`): three rounds, ~180 candidate events, discovery
+  on 2006-19 with 2020-26 sealed until a shortlist was fixed. This was the one change that held in
+  every test — daily all eras (better in 11 of 12 era × scorer × horizon readings; sealed 2020-26
+  worst +0.052σ vs +0.046σ), weekly 2020-26 (+0.081 vs +0.054), and the Ladder-down window
+  (indices, commodities, FX and stocks, both scorers). About 5% fewer ▲. Rejected: widening the ▲
+  to "the chart already left capitulation" (better on Ladder up, worse on Ladder down), double
+  phase confirmation (failed the sealed era), and every short / exit event (none consistent).
+- Verified: on synthetic series only quiet-regime ▲ drop; the grid, ◆ and ▼ are unchanged.
+
+---
+
 ## [v9.2.0] · 2026-09-27
 ### The legacy goes · the Pine's settings regrouped · tape names and spacing
 

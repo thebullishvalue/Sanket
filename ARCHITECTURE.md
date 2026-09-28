@@ -1,7 +1,7 @@
 # Sanket — Engine Architecture & Research Basis
 
 > This document records *why* the engine is built the way it is. Sanket screens a universe with
-> **Pragati** (`pragati.pine` v9.2, conviction × value) — the indicator Pragyam's Conviction-Value
+> **Pragati** (`pragati.pine` v9.3, conviction × value) — the indicator Pragyam's Conviction-Value
 > Grid reads — ported in `pragati.py`, `samanvaya.py` and `cvgrid.py`, and surfaced by `engine.py`.
 >
 > Two kinds of number appear below. Numbers about **the source indicator** come from the Pine's
@@ -104,11 +104,12 @@ second normalization, so agreement across frames is **rarer** than any one frame
 
 ## The signals
 
-**v9 reads the ▲▼ from the grid** (`pragati.v9_signals`; the Pine's section 8b).
+**v9 reads the ▲▼ from the grid** (`pragati.signals`; the Pine's section 8b).
 
 **▲ CAPITULATION** — the first closed bar on which the grid stands in Buy · capitulation (the
 conviction tape past −30, held there by conviction's own histogram; the value tape past −θ) with
-the value momentum tape reverting (the 5 × 5 value phase +1). **▼ DISTRIBUTION** — the first bar in
+the value momentum tape reverting (the 5 × 5 value phase +1), not in conviction's quiet regime
+(v9.3: σ in the bottom fifth of its history). **▼ DISTRIBUTION** — the first bar in
 Exit · distribution (sellers in control of a price past +θ). 10-bar cooldown per side; the last one
 stands as the declaration. Measured (studies/pragati_v9_audit.md, three eras, daily and weekly, no
 look-ahead): the ▲ +0.046 / +0.056 / +0.046σ at 10 bars; the distribution state followed by
