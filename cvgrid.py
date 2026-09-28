@@ -287,7 +287,7 @@ def _engine(out: pd.DataFrame, cv: pd.Series, raw_sd: pd.Series, cv_ready: np.nd
         cell_flat[t] = units[(g_row, gc)]
     return pd.DataFrame({"row": row, "col": col, "held": held, "units": u,
                          "cell_units": cell_flat, "cph": c_ph, "vph": v_ph,
-                         "push": g_push, "gate": gate}, index=out.index)
+                         "push": g_push, "gate": gate, "quiet": quiet}, index=out.index)
 
 
 def classify(out: pd.DataFrame, cv: pd.Series, raw_sd: pd.Series, cv_ready: np.ndarray,
@@ -298,8 +298,9 @@ def classify(out: pd.DataFrame, cv: pd.Series, raw_sd: pd.Series, cv_ready: np.n
     ``cv_ready`` its calibration gate. Columns: cvg_cell (0-8, 9 unread), cvg_units (the
     graded units), cvg_held, cvg_since, cvg_from, cvg_chart (where this chart alone would
     place the name), cvg_lead (+1 the chart cell carries more units, −1 fewer), cvg_cph /
-    cvg_vph (the 5 × 5 phases: +1 confirmed, −1 not, 0 no edge) and cvg_push (the drawn
-    push that runs the rows, −1 … +1).
+    cvg_vph (the 5 × 5 phases: +1 confirmed, −1 not, 0 no edge), cvg_push (the drawn
+    push that runs the rows, −1 … +1) and cvg_quiet (conviction's quiet regime — the Pine's
+    gQuiet, which also gates the ▲).
     """
     ld = (out["c_ladder"] == "down").to_numpy() if "c_ladder" in out.columns else False
     g = _engine(out, cv, raw_sd, cv_ready, p, UNITS_RC, ladder_down=ld)
@@ -327,7 +328,8 @@ def classify(out: pd.DataFrame, cv: pd.Series, raw_sd: pd.Series, cv_ready: np.n
                          "cvg_held": g["held"].to_numpy(bool), "cvg_since": since,
                          "cvg_from": frm, "cvg_chart": chart, "cvg_lead": lead,
                          "cvg_cph": g["cph"].to_numpy(), "cvg_vph": g["vph"].to_numpy(),
-                         "cvg_push": g["push"].to_numpy()}, index=out.index)
+                         "cvg_push": g["push"].to_numpy(),
+                         "cvg_quiet": g["quiet"].to_numpy(bool)}, index=out.index)
 
 
 def tooltip(cell: int, units: float, bars: int, frm: int, chart: int, lead: int,

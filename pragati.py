@@ -1,5 +1,5 @@
 """
-SANKET — Pragati · प्रगति, the conviction × value oscillator (pragati.pine v9.2)
+SANKET — Pragati · प्रगति, the conviction × value oscillator (pragati.pine v9.3)
 ══════════════════════════════════════════════════════════════════════════════
 
 "Is the push paid for — and at what price?"
@@ -716,7 +716,8 @@ def signals(out: pd.DataFrame, grid: pd.DataFrame, p: Params = DEFAULT) -> pd.Da
     """The Pine's section 8b: the ▲▼ read from the grid, on ``compute``'s output.
 
     ▲ CAPITULATION TURN — the first bar the grid stands in DOWN · cheap (cell 0) with
-    value momentum reverting (the 5 × 5 value phase +1). ▼ DISTRIBUTION — the first bar
+    value momentum reverting (the 5 × 5 value phase +1), not in conviction's quiet regime
+    (v9.3). ▼ DISTRIBUTION — the first bar
     in DOWN · rich (cell 2). Both need the stack able to judge, and the per-direction
     cooldown, which a ◆ shares. Adds turn_buy / turn_sell, resume_long / resume_short
     (the ◆ yields to a ▲▼ on the same bar), decl / decl_since, and armed / armed_age —
@@ -729,7 +730,9 @@ def signals(out: pd.DataFrame, grid: pd.DataFrame, p: Params = DEFAULT) -> pd.Da
     vph = grid["cvg_vph"].to_numpy(dtype=int)
     cap = (cell == 0) & (vph == 1)
     dist = cell == 2
-    cap_b = cap & ~np.r_[False, cap[:-1]]
+    # v9.3: not in conviction's quiet regime on that bar (the Pine's gQuiet)
+    quiet = grid["cvg_quiet"].to_numpy(bool) if "cvg_quiet" in grid else np.zeros(T, bool)
+    cap_b = cap & ~np.r_[False, cap[:-1]] & ~quiet
     dist_s = dist & ~np.r_[False, dist[:-1]]
     ok = out["stack_ok"].fillna(False).to_numpy(bool)
     cl, cs = out["con_cand_l"].to_numpy(bool), out["con_cand_s"].to_numpy(bool)

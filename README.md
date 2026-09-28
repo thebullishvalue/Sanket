@@ -1,9 +1,9 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v9.2.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v9.3.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
-Sanket screens a universe with **Pragati** (`pragati.pine` v9.2) — the indicator Pragyam's
+Sanket screens a universe with **Pragati** (`pragati.pine` v9.3) — the indicator Pragyam's
 Conviction-Value Grid already reads — and asks of every name the indicator's own question:
 **is the push paid for, and at what price?**
 
@@ -112,12 +112,14 @@ to 1e-13.
 
 ## The Signals
 
-v9 reads the ▲▼ **from the grid** (the Pine's section 8b; `pragati.v9_signals` in the port):
+v9 reads the ▲▼ **from the grid** (the Pine's section 8b; `pragati.signals` in the port):
 
 **▲ CAPITULATION** — the first closed bar on which the grid stands in **Buy · capitulation**
 (the conviction tape past −30 and held there by conviction's own histogram — sellers in control
 across the ladder — and the value tape cheap past −θ) with the value momentum tape
-**reverting**: the fast end of value has already turned back toward fair.
+**reverting**: the fast end of value has already turned back toward fair — and, since v9.3, not
+while conviction's regime is **quiet** (its σ in the bottom fifth of its own history, where a small
+imbalance scales into a large reading).
 
 **▼ DISTRIBUTION** — the first closed bar on which sellers hold control of a price rich past +θ
 (**Exit · distribution**).
@@ -464,6 +466,15 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 ---
 
 ## What Changed
+
+**v9.3.0 — the ▲ skips conviction's quiet regime.** A three-round signal search (discovery
+2006–19; 2020–26 sealed until the shortlist was fixed; then weekly bars and the Ladder-down window —
+[`studies/v9_lab/SIGNAL_SEARCH.md`](studies/v9_lab/SIGNAL_SEARCH.md)) found one change that held
+everywhere: fire the capitulation turn only when conviction's σ is not in the bottom fifth of its
+history. Daily, sealed 2020–26: worst reading +0.052σ vs +0.046σ, better in 11 of 12 era × scorer
+× horizon readings; weekly 2020–26 +0.081 vs +0.054; on Ladder down better on indices, commodities,
+FX and stocks. About 5% fewer ▲. No short or exit event held in every reading, so the ▼ is
+unchanged. The grid, its units and the ◆ are untouched (`cvgrid` now exposes `cvg_quiet`).
 
 **v9.2.0 — the legacy goes; the Pine's settings say what they move.** v8's TURN is gone from the
 Pine (its `▲ ▼ source` option and two windows) and from the port (`signal_source`, the confirm /

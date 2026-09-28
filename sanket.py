@@ -2,7 +2,7 @@
 Sanket - Market Signal Screener | A Pragyam Product Family Member
 Pragati · Conviction × Value — Quantitative Signal Screener Terminal
 
-Engine: PRAGATI (pragati.pine v9.2), the indicator Pragyam's Conviction-Value Grid
+Engine: PRAGATI (pragati.pine v9.3), the indicator Pragyam's Conviction-Value Grid
 reads. One trace — conviction × value, how far a move is stretched in one-sided
 effort and in price against fair value — its histogram (the trace's push), and
 its two ingredients read across horizons on two tapes. One state: the 3 × 3
@@ -90,7 +90,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v9.2.0"
+VERSION = "v9.3.0"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -106,7 +106,8 @@ ENGINE_CODE = "PRAGATI"
 #   prg1  v8.0.0  Pragati v6: trace, tapes, TURN / RESUME, the 4 × 4 grid
 #   prg2  v9.0.0  Pragati v9: the ▲▼ read from the grid; the Edge Study scored causally
 #   prg3  v9.1.0  the conviction ladder reads DOWN from yfinance intraday (↺ W·D before it)
-ENGINE_SIG = "prg3"
+#   prg4  v9.3.0  the ▲ skips conviction's quiet regime
+ENGINE_SIG = "prg4"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -1877,7 +1878,7 @@ def to_excel(df):
         # that is descriptive context — the distinction matters more than the ordering.
         legend = [
             ("— THE SIGNAL SET (PRAGATI · conviction × value) —", ""),
-            ("turn_buy / turn_sell", "v9: ▲ CAPITULATION — the first bar the grid stands in Buy · capitulation (sellers in control across the ladder, value cheap past θ) with value momentum turning back toward fair; ▼ DISTRIBUTION — the first bar sellers hold control of a price rich past θ. Read from the grid, 10-bar cooldown per side. The last one stands as the declaration."),
+            ("turn_buy / turn_sell", "v9: ▲ CAPITULATION — the first bar the grid stands in Buy · capitulation (sellers in control across the ladder, value cheap past θ) with value momentum turning back toward fair, not in conviction's quiet regime (v9.3); ▼ DISTRIBUTION — the first bar sellers hold control of a price rich past θ. Read from the grid, 10-bar cooldown per side. The last one stands as the declaration."),
             ("resume_long / resume_short", "◆ RESUME — OFF by default (negative in the v8 and v9 audits): the histogram dipped to the wrong side inside 6 bars and now crosses its k·σ gate; chart conviction on its side; conviction tape past the inner zone; value tape short of θ; effort not absorbed."),
             ("BUY_* / SELL_*", "The long / short event by age (Today … Within 5): ▲ capitulation / ▼ distribution, ◆ a RESUME, — none."),
             ("Side / Signal_Kind", "Buy / Sell / — : an event fired on THIS bar, and its kind — TURN (the ▲▼) or RESUME (◆)."),
@@ -5301,7 +5302,9 @@ _SIGNAL_TYPE_REFERENCE = [
      "v9's events. ▲ fires on the first closed bar the grid stands in Buy · capitulation — the "
      "conviction tape past −30 and held there by conviction's own histogram (sellers in "
      "control across the ladder), the value tape cheap past −θ — with value momentum "
-     "REVERTING: the fast end of value has already turned back toward fair. ▼ fires on the "
+     "REVERTING: the fast end of value has already turned back toward fair — and, since v9.3, "
+     "not while conviction's regime is QUIET (its σ in the bottom fifth of its history, where a "
+     "small imbalance scales into a large reading). ▼ fires on the "
      "first bar sellers hold control of a price rich past +θ (Exit · distribution). A 10-bar "
      "cooldown per side; the last one stands as the declaration, with no exit. Measured in "
      "the v9 audit (studies/pragati_v9_audit.md; 380 instruments, six classes, three eras, "
@@ -5321,7 +5324,7 @@ _SIGNAL_TYPE_REFERENCE = [
     ("The grid · where a name stands between signals", "violet",
      "The conviction tape (who controls) is the row — UP past +30, DOWN past −30, FAINT "
      "between — and the value tape (where price stands) the column — cheap past −θ, rich past "
-     "+θ, fair between: Pragyam's 3 × 3, the grid pragati.pine v9.2 draws. Its units were MEASURED "
+     "+θ, fair between: Pragyam's 3 × 3, the grid pragati.pine v9.3 draws. Its units were MEASURED "
      "(studies/): Buy · capitulation 4 and Accumulate · washout 1½ where sellers "
      "hold a cheap or fair price, Buy · turned 3, Hold · building 1½ and Trim · paid ¾ where "
      "buyers do. Conviction's own histogram decides when a row may change — a confirmed push, "
@@ -5672,7 +5675,7 @@ def main():
     if is_first_render:
         console.header("SANKET TERMINAL — Session Start", VERSION)
         console.item("Started", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        console.item("Signal engine", f"{ENGINE_CODE} — {ENGINE_NAME} (pragati.pine v9.2)")
+        console.item("Signal engine", f"{ENGINE_CODE} — {ENGINE_NAME} (pragati.pine v9.3)")
 
     # Render sidebar and get parameters + run button state
     sbs = render_sidebar()
