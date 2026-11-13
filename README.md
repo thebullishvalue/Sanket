@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.2.3`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.2.4`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -483,6 +483,14 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 
 ## What Changed
 
+**v10.2.4 — the Watchlist, verified.** Tested against history on 151 instruments
+([`studies/v10_watch/`](studies/v10_watch/README.md)): 85% of v10.2.0's "ready" names had a surprise
+column already past zero and could not fire next (0% did). Ready now requires the column **armed**
+(on the far side of zero): ready names fire B on the next bar ~19-27% of the time, ~50-60% within 10,
+against ~0.3% / ~9% for names on no list. A **near** group (armed, calm, the ladder within 0.2 of
+agreeing) catches the events the flip itself completes; ready and near together held ~80% of B
+events the bar before they fired. Each group's measured rate is printed on the Watchlist.
+
 **v10.2.0 — all three sets at once.** The Signal Set selector is gone: every set fires on every
 screen. A signal board puts A, B and C side by side — each with its events in the last 5 bars, its
 watch (ready for B / B·C, or in a proven state) and its own measured verdict per side. An event is
@@ -919,4 +927,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v10.2.3 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v10.2.4 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

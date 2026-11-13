@@ -91,7 +91,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v10.2.3"
+VERSION = "v10.2.4"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -4707,13 +4707,23 @@ def _state_cell(row, study=None) -> str:
     s = str(row.get('PRG_State', '') or '')
     if s[:1] in ("▲", "▼"):
         return _event_cell(s, study)
+    if s.startswith("NEAR"):
+        up = "▲" in s
+        tag = s.split()[-1]
+        title = ("Armed and calm - the column is on the far side of zero, risk calm and not rising - but the "
+                 "stretch ladder is still on the wrong side, by less than 0.2. The flip itself often tips the "
+                 "ladder over: near names fired B on the next bar ~9-12% of the time in the research set."
+                 + (" The trend agrees, so C would fire too." if "C" in tag else ""))
+        return (f'<td class="numeric" style="color:{_gold_c()}; font-size:{ui.FS["2xs"]}; '
+                f'white-space:nowrap;" title="{html.escape(title)}">near {"▲" if up else "▼"} {html.escape(tag)}</td>')
     if s.startswith("READY"):
         up = "▲" in s
         tag = s.split()[-1]
         title = ("Every condition of set " + ("B and set C" if "C" in tag else "B") + " is in place - risk "
                  "calm and not rising, the stretch ladder" + (" and the trend" if "C" in tag else "")
-                 + " agreeing. The next column flip " + ("up with the close above" if up else "down with the close below")
-                 + " the midline fires " + ("both." if "C" in tag else "set B."))
+                 + " agreeing - and the column is armed. Its next crossing " + ("up, with the close above" if up else "down, with the close below")
+                 + " the midline, fires " + ("both." if "C" in tag else "set B.")
+                 + " Ready names fired B on the next bar ~19-27% of the time in the research set.")
         return (f'<td class="numeric" style="color:{_long_c() if up else _short_c()}; font-size:{ui.FS["2xs"]}; '
                 f'white-space:nowrap;" title="{html.escape(title)}">ready {"▲" if up else "▼"} {html.escape(tag)}</td>')
     name = str(row.get('LG_State_Name', '') or '')
@@ -5087,8 +5097,10 @@ def _build_watch_table_html(df: pd.DataFrame, side: str = 'buy', study=None) -> 
         r_td = (f'<td class="numeric" style="color:{_long_c() if prk < 100 / 3 else _gold_c()};" '
                 f'title="risk\'s rank in its last 500 bars — calm is below 33">{prk:.0f}</td>'
                 if pd.notna(prk) else _dash_cell())
-        l_td = (f'<td class="numeric" style="color:{_signed_color(lad)};" title="the stretch ladder\'s lean — '
-                f'the mean surprise across four horizons as a share of its band">{lad:+.2f}</td>'
+        lad_wrong = pd.notna(lad) and ((lad < 0) if buy else (lad >= 0))
+        l_td = (f'<td class="numeric" style="color:{_gold_c() if lad_wrong else _signed_color(lad)};" '
+                f'title="the stretch ladder\'s lean — the mean surprise across four horizons as a share of its band'
+                f'{" · on the wrong side: the one condition a near name is short" if lad_wrong else ""}">{lad:+.2f}</td>'
                 if pd.notna(lad) else _dash_cell())
         t_td = (f'<td class="numeric" style="color:{_signed_color(trd)};" title="trend in σ over 63 / 126 / 252 bars">'
                 f'{trd:+.2f}</td>' if pd.notna(trd) else _dash_cell())
@@ -5103,37 +5115,52 @@ def _build_watch_table_html(df: pd.DataFrame, side: str = 'buy', study=None) -> 
             {_hold_cell(row.get('PRG_Hold_Age'), row.get('PRG_Horizon', eng.HORIZON), row.get('PRG_Hold_Dir'))}
         </tr>""")
     head = (_th("Symbol", numeric=False) + _th("Price") + _th("% Change")
-            + _th("Watch", "ready B·C / ready B: every condition but the flip, so the next flip fires (B·C: both "
-                           "sets). in A ±: a state this name's record has proven, still held.")
+            + _th("Watch", "ready B·C / ready B: every condition but the flip, the column armed — the next flip "
+                           "fires (B·C: both sets). near: armed and calm, the ladder within 0.2 of agreeing. "
+                           "in A ±: a state this name's record has proven, still held.")
             + _th("Column", "The surprise column, in σ. The flip — the trigger — is its crossing of zero "
                             "(upward for ▲). Bright: on the far side, the flip is the next thing that can "
                             "happen. Dim: already past zero — it must cross back before it can flip again.")
             + _th("vs Mid", "Close against the midline (the middle of the landing band). ▲ needs it above, "
                             "▼ below, on the flip bar.")
             + _th("Risk", "Risk's rank in its last 500 bars, 0-100. Calm (green) is the bottom third.")
-            + _th("Ladder", "The stretch ladder's lean — the outer trend tape. ▲ needs it at or above zero.")
+            + _th("Ladder", "The stretch ladder's lean — the outer trend tape. ▲ needs it at or above zero. "
+                            "Gold: on the wrong side — the one condition a near name is short.")
             + _th("Trend", "The trend tape in σ — set C needs it on the event's side.")
             + _th("Grid", _TH_GRID, numeric=False)
             + _th("Hold", "Bars into the hold window of the latest event, of any set"))
     return _html_doc(head, rows, _MAXH)
 
 
+#: The watch groups, in the order they are listed, with what each one measured on the
+#: 151-instrument research set, daily and hourly alike (studies/v10_watch/): the share firing B on
+#: the next bar and within 10 bars. Names on no list: ~0.3% on the next bar, ~9-10% within 10.
+_WATCH_GROUPS = (
+    ("ready B·C", "every condition of B and C but the flip, the column armed", "~20-24% next bar · ~50-60% in 10"),
+    ("ready B", "every condition of B but the flip, the column armed; the trend not with it", "~23-27% next bar · ~55-60% in 10"),
+    ("near", "armed and calm, the ladder within 0.2 of agreeing — the flip itself often tips it",
+     "~9-12% next bar · ~37-44% in 10"),
+    ("in A", "in a state this name's record has proven — the A triangle already fired",
+     "re-enters, A fires again ~20-28% in 5 bars"),
+)
+
+
 def _watch_frame(results_df: pd.DataFrame, side: str) -> pd.DataFrame:
-    """One side's watch: ready B·C, then ready B, then in a proven state — nearest the flip first."""
+    """One side's watch: ready B·C, ready B, near, then in a proven state — nearest the flip first.
+
+    Every ready / near name is ARMED: its column is on the far side of zero, so the next crossing
+    is the flip (ledger.py). The 'Column' value is then the distance to that flip.
+    """
     if results_df is None or results_df.empty:
         return results_df
     sg = 1 if _is_buy_side(side) else -1
-    rb = pd.to_numeric(results_df.get('PRG_Ready', 0), errors='coerce').fillna(0) * sg > 0
-    rc = pd.to_numeric(results_df.get('PRG_Ready_C', 0), errors='coerce').fillna(0) * sg > 0
-    pv = pd.to_numeric(results_df.get('LG_Proven', 0), errors='coerce').fillna(0) * sg > 0
-    w = results_df[rb | pv].copy()
-    w['_wt'] = np.where(rc[rb | pv], 0, np.where(rb[rb | pv], 1, 2))
-    u = pd.to_numeric(w.get('LG_U'), errors='coerce')
-    # Armed first: the column still on the far side of zero, so the flip is the next thing that
-    # can happen; a column already past zero must cross back before it can flip again.
-    w['_armed'] = np.where((u < 0) if sg > 0 else (u >= 0), 0, 1)
-    w['_dist'] = u.abs()
-    return w.sort_values(['_wt', '_armed', '_dist'], na_position='last')
+    num = lambda c: pd.to_numeric(results_df.get(c, 0), errors='coerce').fillna(0) * sg > 0   # noqa: E731
+    rb, rc, nr, pv = num('PRG_Ready'), num('PRG_Ready_C'), num('PRG_Near'), num('LG_Proven')
+    on = rb | nr | pv
+    w = results_df[on].copy()
+    w['_wt'] = np.where(rc[on], 0, np.where(rb[on], 1, np.where(nr[on], 2, 3)))
+    w['_dist'] = pd.to_numeric(w.get('LG_U'), errors='coerce').abs()
+    return w.sort_values(['_wt', '_dist'], na_position='last')
 
 
 def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy') -> str:
@@ -5893,24 +5920,21 @@ def _render_watch_tab(results_df, study, timeframe, key: str = "watch") -> None:
         "name's own record has proven (set A)",
         icon="eye", accent="violet",
     )
-    ui.render_kpi_strip([
-        {"label": "▲ Ready B·C", "value": str(_n(wl, 0)), "subtext": "next up-flip fires B and C",
-         "color_class": "success" if _n(wl, 0) else "neutral"},
-        {"label": "▲ Ready B", "value": str(_n(wl, 1)), "subtext": "next up-flip fires B; trend not up",
-         "color_class": "success" if _n(wl, 1) else "neutral"},
-        {"label": "▲ In A +", "value": str(_n(wl, 2)), "subtext": "in a state proven positive",
-         "color_class": "violet" if _n(wl, 2) else "neutral"},
-        {"label": "▼ Ready B·C", "value": str(_n(ws, 0)), "subtext": "next down-flip fires B and C",
-         "color_class": "danger" if _n(ws, 0) else "neutral"},
-        {"label": "▼ Ready B", "value": str(_n(ws, 1)), "subtext": "next down-flip fires B; trend not down",
-         "color_class": "danger" if _n(ws, 1) else "neutral"},
-        {"label": "▼ In A −", "value": str(_n(ws, 2)), "subtext": "in a state proven negative",
-         "color_class": "violet" if _n(ws, 2) else "neutral"},
-    ], max_cols=3, key=f"{key}-strip")
-    ui.render_note("Ready is not a signal: it says the slow conditions are in place — risk calm and not "
-                   "rising, the ladder (and for C the trend) agreeing — so a flip of the surprise column "
-                   "with the close on the right side of the midline would fire. **Column** is how far that "
-                   "flip is: the surprise must cross zero. Nearest first within each group.")
+    kpis = []
+    for w, g, tone in ((wl, "▲", "success"), (ws, "▼", "danger")):
+        for t, (name, what, measured) in enumerate(_WATCH_GROUPS):
+            kpis.append({"label": f"{g} {name}", "value": str(_n(w, t)), "subtext": measured,
+                         "color_class": (("violet" if t == 3 else tone if t < 2 else "warning") if _n(w, t) else "neutral"),
+                         "tooltip": what})
+    ui.render_kpi_strip(kpis, max_cols=4, key=f"{key}-strip")
+    ui.render_note("Each group's rate is what it **measured** on 151 instruments (daily 2003-2026 and "
+                   "hourly 2024-2026 agree, studies/v10_watch/): the share of names in it that fired B on the "
+                   "next bar and within 10. Names on no list: ~0.3% and ~9-10%. Every ready and near name is **armed** — its "
+                   "surprise column is on the far side of zero, so the next crossing is the flip; "
+                   "**Column** is how far that is. Near names are short only the ladder, which the flip "
+                   "itself often tips over. Together, ready and near held ~80% of B events the bar before "
+                   "they fired. A watch is not a signal, and none of this says the event will pay — that "
+                   "is the Edge Study's question.")
     for w, side_key, label in ((wl, 'buy', "▲ Long watch"), (ws, 'sell', "▼ Short watch")):
         _p = _side_palette(side_key)
         st.markdown(f'<p style="font-family:var(--data); font-size:var(--fs-2xs); font-weight:600; '
