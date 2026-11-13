@@ -3,7 +3,7 @@ edge.py — measured out-of-sample expectancy for the Pragati signal set, per un
 
 Why this module exists
 ----------------------
-The signal set (``engine.py``: the ▲▼ read from the grid and ◆ RESUME, pragati.pine v9) is a fixed,
+The signal set (``ledger.py``: Pragyam's proven-state triangles, ▲ / ▼) is a fixed,
 pre-declared rule. The question this module answers is separate and empirical: **does
 that rule carry an edge on the universe actually on screen, and can we prove it from data
 the app can fetch?** The v9 audit measured the set across 380 instruments (the ▲ about
@@ -12,16 +12,14 @@ not a number for yours. This measures it, on your symbols.
 
 What is measured
 ----------------
-Six slices, each with the full method below:
+Two slices, each with the full method below:
 
-    buy / sell                   every long event (▲ + ◆ RESUME ↑) / every short one
-    turn_buy / turn_sell         ▲ capitulation / ▼ distribution alone (v9's ▲▼)
-    resume_long / resume_short   ◆ RESUME alone — continuation
+    buy / sell    every ▲ (a state proven positive on the name's own record) / every ▼
 
-The pooled sides are what the screen's two sides are; the per-kind slices say which of
-the two situations is carrying (or costing) the pooled number. The ▲▼ are rare by
-construction — a capitulation turning, sellers taking a rich price — so their slices will
-often read UNDERPOWERED, and the app says so rather than quoting a number it cannot resolve.
+The triangles are rare by construction - about one per 5,500 bars across 151 instruments -
+so both slices will often read UNDERPOWERED, and the app says so rather than quoting a
+number it cannot resolve. Note what is being tested: each triangle is proven on its own
+name's past, so this study asks whether that per-name proof carries forward.
 
 Method (each step exists to kill a specific way of fooling yourself)
 -------------------------------------------------------------------
@@ -90,15 +88,10 @@ MIN_EVENTS = 30
 
 # The slices measured: key -> (side, kind or None for both kinds).
 SLICES = {
-    "buy":          (1.0, None),
-    "sell":         (-1.0, None),
-    "turn_buy":     (1.0, "turn"),
-    "turn_sell":    (-1.0, "turn"),
-    "resume_long":  (1.0, "resume"),
-    "resume_short": (-1.0, "resume"),
+    "buy":  (1.0, None),
+    "sell": (-1.0, None),
 }
-SLICE_LABEL = {"buy": "Long · all", "sell": "Short · all", "turn_buy": "▲ capitulation",
-               "turn_sell": "▼ distribution", "resume_long": "◆ RESUME ↑", "resume_short": "◆ RESUME ↓"}
+SLICE_LABEL = {"buy": "▲ proven +", "sell": "▼ proven −"}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
@@ -110,12 +103,12 @@ def symbol_events(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
 
     ``df`` is the chart's OHLCV (Title-case, ascending) — weekly bars on a weekly study,
     with ``daily`` the bars behind them. ``side`` is +1 long / -1 short, ``kind`` is
-    'turn' (the ▲▼) or 'resume', ``fwd`` the raw h-bar forward return from the next bar.
+    'proven' (the ledger's ▲▼), ``fwd`` the raw h-bar forward return from the next bar.
     Drift removal and vol normalisation happen later, in :func:`measure`, causally.
 
     THE EVENTS COME FROM THE ENGINE ITSELF (``engine.compute_frame``), so every guard
-    the screener applies — warm-up, the stack gate, the basket-settling gate, cooldowns —
-    applies to the study by construction. Still lean: no volume profile, no regime
+    the screener applies - the ledger's own warm-up and record - applies to the study by
+    construction. Still lean: no volume profile, no regime
     engine, no order flow.
     """
     empty = pd.DataFrame({"date": pd.Series(dtype="datetime64[ns]"),
@@ -135,8 +128,7 @@ def symbol_events(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
     fwd = (exit_ / entry - 1.0).to_numpy()
 
     parts = []
-    for col, side, kind in (("turn_buy", 1.0, "turn"), ("turn_sell", -1.0, "turn"),
-                            ("resume_long", 1.0, "resume"), ("resume_short", -1.0, "resume")):
+    for col, side, kind in (("turn_buy", 1.0, "proven"), ("turn_sell", -1.0, "proven")):
         m = f[col].fillna(False).astype(bool).to_numpy() & np.isfinite(fwd)
         if m.any():
             parts.append(pd.DataFrame({"date": pd.to_datetime(f.index[m]), "side": side,

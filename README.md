@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v9.3.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.0.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -9,11 +9,12 @@ Conviction-Value Grid already reads — and asks of every name the indicator's o
 
 It reports three things, and keeps them apart:
 
-- **Events** (v9 — read from the grid). ▲ **CAPITULATION** — sellers in control across the ladder
-  at a price cheap past θ, and value momentum already turned back toward fair: the one event the
-  v9 audit found positive in every era, daily and weekly. ▼ **DISTRIBUTION** — sellers taking
-  control of a rich price. ◆ **RESUME** is computed but off by default. Bucketed by age, ranked,
-  and measured.
+- **Events** (v10 — Pragyam's ledger). ▲ **PROVEN +** / ▼ **PROVEN −** — the first bar of a
+  state that the name's **own record** has proven positive or negative. Every bar sits in one of
+  nine states (the trend × where the close landed against the cone drawn 10 bars ago); the ledger
+  scores each state on what followed it on that name, shrinks the record toward "no edge", and
+  calls a state proven past two standard errors. Rare by design. Bucketed by age, ranked, and
+  measured.
 - **State.** Every name's cell in the **3 × 3 conviction-value grid** (v8), named as an action —
   Buy · Accumulate · Hold · Wait · Trim · Exit — with the measured v8 units, the same units
   Pragyam's book now sizes from. Where the name stands *between* events.
@@ -23,12 +24,13 @@ It reports three things, and keeps them apart:
 Part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/thebullishvalue).
 
 > **Read this first.** Sanket is **decision-support**, not a turnkey strategy.
-> 1. **The edge is small, and it lives in one place.** The v9 audit
->    ([`studies/pragati_v9_audit.md`](studies/pragati_v9_audit.md); 380 instruments, six classes,
->    three eras, daily and weekly, scored without look-ahead) found the readings — conviction,
->    value, the trace, its histogram, both tapes — carry almost no timing information of their
->    own. The capitulation state and its turn carry the one robust edge: about +0.05 to +0.08σ
->    over 10–20 bars in every era outside crypto. A lean, not a trade.
+> 1. **A triangle is proven per name, not across names.** The v9 audit
+>    ([`studies/pragati_v9_audit.md`](studies/pragati_v9_audit.md); 380 instruments) found the
+>    readings — conviction, value, the trace, its histogram, both tapes — carry almost no timing
+>    information of their own. The v10 events are Pragyam's ledger: a ▲ says this name's own past
+>    has proven the state it just entered. Pooled across 151 instruments, no state reached
+>    |t| = 1.3 outside crypto, and the rule fires about once per 5,500 bars. The Edge Study measures
+>    whether per-name proofs carry forward on your symbols.
 > 2. **The grid is a weight, not a forecast.** Its v8 units were chosen before 2018 and confirmed
 >    after on 380 instruments, and in Pragyam's allocator they beat the seed units in both eras on
 >    Nifty 50 and Dow 30 — but no single t clears 2 there. Sanket shows it as the indicator's own
@@ -87,7 +89,8 @@ The trace says **how far**, the histogram says **which way it is going**, the ta
 | Layer | Module | Carried from |
 |:---|:---|:---|
 | Value — rich or cheap against the macro drivers | `samanvaya.py` | Pragyam's port, vectorised; Weekly added |
-| Conviction, the trace, the histogram, the signals | `pragati.py` | Pragyam's conviction port, extended; signals at v8 (= v5) |
+| Conviction, the trace, the histogram, the tapes | `pragati.py` | Pragyam's conviction port, extended |
+| The signals — proven-state triangles | `ledger.py` | Pragyam (`pragyam.pine`), ported bar for bar |
 | The 3 × 3 grid | `cvgrid.py` | the v8 Pine's CVG block, graded — bit for bit Pragyam's graded map |
 | Settings, per-symbol features, snapshot, ranking | `engine.py` | Sanket |
 | Measured expectancy | `edge.py` | Sanket, now measuring the new events |
@@ -112,38 +115,34 @@ to 1e-13.
 
 ## The Signals
 
-v9 reads the ▲▼ **from the grid** (the Pine's section 8b; `pragati.signals` in the port):
+v10 takes the ▲▼ from **Pragyam's ledger** (`ledger.py`, ported bar for bar from `pragyam.pine`
+and checked against its reference on 151 instruments). Pragati's own signal set — the grid's
+▲ capitulation / ▼ distribution, the ◆ RESUME and the watchlist — is no longer computed.
 
-**▲ CAPITULATION** — the first closed bar on which the grid stands in **Buy · capitulation**
-(the conviction tape past −30 and held there by conviction's own histogram — sellers in control
-across the ladder — and the value tape cheap past −θ) with the value momentum tape
-**reverting**: the fast end of value has already turned back toward fair — and, since v9.3, not
-while conviction's regime is **quiet** (its σ in the bottom fifth of its own history, where a small
-imbalance scales into a large reading).
+**Nine states.** Every closed bar sits in one of them: the **trend** — the move over 63, 126 and
+252 bars in units of the risk forecast — down, flat or up, crossed with where the **close landed**
+against the cone drawn 10 bars ago — below it, inside it, above it. The cone is learned per name so
+it holds its stated 80%.
 
-**▼ DISTRIBUTION** — the first closed bar on which sellers hold control of a price rich past +θ
-(**Exit · distribution**).
+**The ledger.** For each state it keeps the name's own record: after every bar spent in that
+state, what the next 10 bars did from the next open, in units of the risk forecast, against the
+name's own average. Samples count as independent only when 10 or more bars apart. The record is
+shrunk toward "no edge" — a real edge is assumed to be about 0.10σ at most — and a state is
+**proven** when the shrunk edge clears two standard errors.
 
-A 10-bar cooldown per side; the last event stands as the declaration, with no exit. Measured
-(v9 audit): the ▲ was positive in 2006–13, 2014–19 and 2020–26, on daily and on weekly bars, in
-four or five of the five non-crypto classes each time (+0.046 / +0.056 / +0.046σ at 10 bars,
-time-series); the distribution *state* was followed by underperformance in every era, though its
-entry is too rare to measure alone.
+**▲ PROVEN +** — the first closed bar of a state the name's record has proven positive.
+**▼ PROVEN −** — the same, proven negative.
 
-**Why not v8's TURN.** v8's ▲▼ — the trace crossing back through θ, then its value tape, conviction
-tape, push and absorption confirming inside 5 bars — faded to nothing after 2020 on daily bars,
-read *negative* on weekly bars, and on daily worked only when a capitulation came first. v9.2
-removed it from the Pine and the port.
+No cooldown and no gate on the Pragati stack: the ledger is the whole rule. The last event stands
+as the declaration, with no exit. The ledger needs about 563 bars before it can prove anything
+(252 bars of risk warm-up, then 30 horizons of settled record), so the Daily fetch (~1,150 bars)
+clears it and the Weekly fetch was deepened to ~710 bars.
 
-**◆ RESUME** (long; short mirrors) — *a trend resuming.* The histogram dipped below zero inside
-6 bars and now crosses +k·σ (k = 0.5); chart conviction is above zero; the conviction tape is past
-+30 (control held across horizons); the value tape is short of +θ (room left); and effort is not
-absorbed on the bar. **Off by default since v8** (`Params.resume`): negative outside crypto in
-the v8 audit and negative or mixed again in v9.
-
-A ▲▼ takes precedence over a ◆ on the same bar; ▲ and long ◆ share one 10-bar cooldown.
-Nothing pauses silently: a name whose tapes are still calibrating is **paused**, and says which
-layer it is waiting for.
+**What it claims, and what it does not.** On random walks the rule calls a state proven on about
+0.4% of bars; across 151 real instruments it fired about once per 5,500 bars. A triangle says the
+name's own history has proven its state. It does not say the state carries an edge across names:
+pooled, no state reached |t| = 1.3 outside crypto. Sanket's per-name record is also shorter than a
+TradingView chart's, so the ledger proves less here than the Pine does on a long chart.
 
 **Divergence is off by default.** The Pine's R (regular) and H (hidden) marks remain available.
 Re-measured, R read about zero in every era on daily and weekly bars and H was negative or mixed;
@@ -221,27 +220,22 @@ RESUME and the hold / open-window bands cost edge and no longer order the list. 
 +0.087σ vs −0.040σ; rank IC clearly positive on NIFTY 50 / 100). Stated plainly: once a name's own
 20-bar return is removed the trace carries ~0 information — on NSE equities this ranking **is**
 short-term reversal, read through the indicator, and that effect has been weaker since 2021 on
-mid and small caps. The grid, RESUME and the windows are still computed and shown; they describe
+mid and small caps. The grid and the hold window are still computed and shown; they describe
 a name, they do not order the list. Reports: `studies/`.
 
 **Re-checked in v9** without look-ahead (that study removed each name's drift inside the era): the
 cross-sectional rank IC of the stretch agrees with reading it as reversion on NSE before 2020
-(t ≈ +2 to +4) and reads about zero since. The band on top is now v9's ▲ — the capitulation turn,
-measured positive in every era.
+(t ≈ +2 to +4) and reads about zero since. The band on top is now the ledger's ▲▼ (v10) — a state
+proven on the name's own record; no study has placed it on top of the stretch.
 
 ---
 
 ## Edge Study — expectancy measured on your universe
 
 `edge.py` runs an event study on your symbols through **the exact engine call the screener
-makes** (`engine.compute_frame`), so every guard — warm-up, the stack gate, the basket gate, the
-cooldowns — applies to the study by construction. Six slices:
-
-| Slice | What it is |
-|:---|:---|
-| Long · all / Short · all | the screen's two sides, ▲▼ and ◆ pooled |
-| ▲ capitulation / ▼ distribution | v9's events alone |
-| ◆ RESUME ↑ / ↓ | continuation alone |
+makes** (`engine.compute_frame`), so the ledger's warm-up and record apply to the study by
+construction. Two slices: every ▲ (proven +) and every ▼ (proven −). Because each triangle is
+proven on its own name's past, this asks whether those proofs carry forward.
 
 Each step kills one way of fooling yourself (step 2 changed in v9):
 
@@ -257,8 +251,8 @@ Each step kills one way of fooling yourself (step 2 changed in v9):
 
 Verdicts: `CONFIRMED` · `GROSS ONLY` · `DISCOVERY ONLY` · `NO EDGE` · `ANTI-PREDICTS` ·
 `UNDERPOWERED` (the MDE exceeds 0.036, the largest effect this indicator family has shown
-anywhere). **Expect UNDERPOWERED often**: the ▲ is worth about +0.05σ, which one universe's
-history can rarely resolve, and the app says "we could not tell" rather than "there is no edge".
+anywhere). **Expect UNDERPOWERED often**: the triangles are rare, which one universe's history
+can rarely resolve, and the app says "we could not tell" rather than "there is no edge".
 
 It fetches ~15 years once a day per universe (80-symbol fixed-seed sample above that), streams
 in chunks of 20, and reuses the measurement until the date rolls.
@@ -291,10 +285,12 @@ Per symbol, on each run:
 
 | Column | Meaning |
 |:---|:---|
-| `turn_buy` / `turn_sell`, `resume_long` / `resume_short` | the four events on this bar |
-| `BUY_*` / `SELL_*` | the long / short event by age — ▲ capitulation / ▼ distribution, ◆ a RESUME, — none |
-| `Side` / `Signal_Kind` / `PRG_Event` | an event on this bar, and which |
-| `PRG_Armed` / `PRG_Armed_Age` | the watchlist — in capitulation with value still cheapening — and bars in the cell |
+| `turn_buy` / `turn_sell` | ▲ / ▼ on this bar — a state proven + / − on this name's record |
+| `BUY_*` / `SELL_*` | the long / short event by age — ▲ / ▼, — none |
+| `Side` / `Signal_Kind` / `PRG_Event` | an event on this bar (kind PROVEN) and its label |
+| `PRG_State` | the ledger: PROVEN ▲ / ▼, IN PROVEN + / −, LEARNING, UNPROVEN, WARMING UP |
+| `LG_State_Name` / `LG_N` / `LG_Edge` / `LG_Post` / `LG_Z` / `LG_Proven` | the state, its samples on this name, its edge raw and shrunk, its z, and whether it is proven |
+| `LG_Sigma` / `LG_Trend` | the risk forecast per bar and the trend in σ |
 | `PRG_Decl` / `PRG_Decl_Age` | the standing ▲/▼ declaration |
 | `PRG_Trace` (`Signal`) | the trace, ±100 |
 | `PRG_Hist` / `PRG_Hist_Z` / `PRG_Push` | the histogram, in its own σ, and in five push levels |
@@ -303,7 +299,7 @@ Per symbol, on each run:
 | `PRG_Hedge` / `PRG_Drivers` | the macro hedge applied and the drivers selected |
 | `PRG_Div_Seen_*` / `PRG_Abs_Seen` | a divergence / absorbed effort in the last 20 bars (context; no signal reads it) |
 | `PRG_Split` / `PRG_Quiet` / `PRG_Settling` | read-with-caution qualifiers |
-| `PRG_Stack_OK` / `PRG_Why` | whether the signal set can judge, and if not why |
+| `PRG_Stack_OK` / `PRG_Why` | whether both tapes are ready for the grid, and if not why |
 | `CVG_Action` / `CVG_Why` / `CVG_Units` / `CVG_Held` / `CVG_Lead` | the grid state |
 | `Priority_Long` / `Priority_Short` | the ranking keys — a ▲▼ on this bar, then stretch |
 | `Signal_Reason` | a plain-language read of the row |
@@ -316,9 +312,10 @@ Per symbol, on each run:
 ```
 sanket.py            ← Streamlit entry point: UI, data + macro-driver fetch, screen routing
 engine.py            ← settings, per-symbol features, the snapshot row, ranking, cost gate
-pragati.py           ← pragati.pine v9.3: conviction, ladders, trace, histogram, the ◆'s condition, signals() (▲▼ ◆)
+pragati.py           ← pragati.pine v9.3: conviction, ladders, trace, histogram, tapes (readings only)
+ledger.py            ← the ▲▼: Pragyam's proven-state triangles, ported from pragyam.pine
 samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
-cvgrid.py            ← the 3 × 3 conviction-value grid: the state engine, names, units, tones — the ▲▼'s source
+cvgrid.py            ← the 3 × 3 conviction-value grid: the state engine, names, units, tones
 pragati.pine         ← the indicator itself, v9.3 — the Pine the port mirrors (archive/: v5, v7, v8)
 intraday.py          ← the conviction ladder's lower frames from yfinance (1m … 4h), batched and cached
 studies/v9_lab/      ← the v9 audit: look-ahead-free scorers, feature caches, every experiment
@@ -337,9 +334,8 @@ volume profile, absorption) are unchanged and remain context only.
 ## Analysis Modes
 
 1. **Single Date Screener** — Action Dashboard (events by age, each with its grid state, push,
-   tapes and evidence) · **Grid** (the 3 × 3 census, the watchlist of capitulations not yet turned, names by
-   action) · Signal Strength (the ranking) · System Data (exports, raw frame, Edge Study).
-2. **Historical Range** — event breadth by kind, the watchlist's size, grid breadth (build vs cut),
+   tapes and evidence) · **Grid** (the 3 × 3 census, names by action) · Signal Strength (the ranking) · System Data (exports, raw frame, Edge Study).
+2. **Historical Range** — event breadth, names in a proven state, grid breadth (build vs cut),
    the universe-mean tapes, regime context, forward-return labels, Excel export.
 3. **Correlation Analysis** — cross-asset correlation, with confluence = |correlation| × the
    normalised Pragati priority.
@@ -440,7 +436,7 @@ Charts, tables and embedded iframes all go through the same panel: header (title
 meta · chip) · body · footer. There is no bare `st.dataframe`, `st.error`, `st.warning`,
 `st.info` or `st.caption` anywhere in the app — each brings its own typeface, radius and ink
 that the stylesheet cannot reach, and three of them on a page read as three different products.
-Sanket's screener tables stay bespoke, because per-cell glyphs (▲ capitulation / ▼ distribution / ◆), grid
+Sanket's screener tables stay bespoke, because per-cell glyphs (▲ / ▼ and the ledger's state), grid
 states, push levels and hold counters are not expressible as a DataFrame — but they draw their typeface,
 row height, header and tokens from `ui.components.table_shell_css`, so the only thing that
 differs from a generic table is the content of a cell.
@@ -466,6 +462,15 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 ---
 
 ## What Changed
+
+**v10.0.0 — the signals are Pragyam's proven-state triangles.** Pragati's signal set is stripped:
+`pragati.signals()`, the grid's ▲ capitulation / ▼ distribution, the ◆ RESUME, its candidates and
+settings, the watchlist and the stack gate on events are gone. `ledger.py` ports Pragyam's ledger
+bar for bar (checked against `pragyam.pine`'s reference on 151 instruments: identical states,
+z-scores and triangles) and `engine.compute_frame` reads the ▲▼ from it. The UI, the Historical
+Range, the Edge Study (now two slices, ▲ and ▼) and the exports follow; the readings, the grid and
+the stretch ranking are unchanged. Weekly fetch deepened to ~13.6 years so the ledger can prove a
+state. The Edge Study's cache key moved to `prg5`.
 
 **v9.3.0 — the ▲ skips conviction's quiet regime.** A three-round signal search (discovery
 2006–19; 2020–26 sealed until the shortlist was fixed; then weekly bars and the Ladder-down window —
@@ -878,4 +883,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v9.3.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v10.0.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

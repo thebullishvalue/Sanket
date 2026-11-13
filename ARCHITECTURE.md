@@ -3,6 +3,8 @@
 > This document records *why* the engine is built the way it is. Sanket screens a universe with
 > **Pragati** (`pragati.pine` v9.3, conviction × value) — the indicator Pragyam's Conviction-Value
 > Grid reads — ported in `pragati.py`, `samanvaya.py` and `cvgrid.py`, and surfaced by `engine.py`.
+> Since v10 its **signals** are not Pragati's: they are Pragyam's proven-state triangles,
+> ported in `ledger.py`.
 >
 > Two kinds of number appear below. Numbers about **the source indicator** come from the Pine's
 > own evidence section; numbers about **Pragyam's grid** come from Pragyam's pre-registered study.
@@ -34,10 +36,12 @@ targets — directional, not decisive). Pragati does one level up what Samanvaya
                                 │
                           HISTOGRAM = trace − EMA9    (the trace's push)
                                 │
-        ┌───────────────────────┼─────────────────────────┐
-        ▼                       ▼                         ▼
-  ▲▼ (from the grid) / ◆   3 × 3 GRID STATE           edge.py
-  (events)                 (where a name stands)      (measured on your universe)
+                                │
+                          3 × 3 GRID STATE        (where a name stands)
+
+ OHLC ──► ledger.py: risk forecast · trend · learned cone · nine states · each state's record
+                                │
+                          ▲▼ PROVEN + / −  (events) ──► edge.py (measured on your universe)
 ```
 
 ### Conviction — Nishchaya v3, exactly
@@ -104,37 +108,40 @@ second normalization, so agreement across frames is **rarer** than any one frame
 
 ## The signals
 
-**v9 reads the ▲▼ from the grid** (`pragati.signals`; the Pine's section 8b).
+**v10 takes the ▲▼ from Pragyam's ledger** (`ledger.py`, ported bar for bar from `pragyam.pine`;
+checked against its Python reference on 151 instruments — identical states, z-scores and
+triangles). Pragati's own signal set — the grid's ▲ capitulation / ▼ distribution, the ◆ RESUME,
+the cooldown and the watchlist — is no longer computed.
 
-**▲ CAPITULATION** — the first closed bar on which the grid stands in Buy · capitulation (the
-conviction tape past −30, held there by conviction's own histogram; the value tape past −θ) with
-the value momentum tape reverting (the 5 × 5 value phase +1), not in conviction's quiet regime
-(v9.3: σ in the bottom fifth of its history). **▼ DISTRIBUTION** — the first bar in
-Exit · distribution (sellers in control of a price past +θ). 10-bar cooldown per side; the last one
-stands as the declaration. Measured (studies/pragati_v9_audit.md, three eras, daily and weekly, no
-look-ahead): the ▲ +0.046 / +0.056 / +0.046σ at 10 bars; the distribution state followed by
-underperformance in every era.
+```
+risk     σ per bar: Garman-Klass on the bar's range and gap, 0.25·EMA5 + 0.40·EMA22 + 0.35·EMA252,
+         rescaled to close-to-close; first reading after 252 bars
+trend    T = mean over 63 / 126 / 252 bars of (ln C − ln C[j]) / (σ √j); up > +0.5, down < −0.5
+cone     ± q·σ·√10, q learned per side: log q += 0.02 · (miss − 0.10) per settled forecast,
+         one term per risk regime (σ's rank in 500 bars, thirds) and one per trend state
+state    3 · trend + where the close landed against the cone drawn 10 bars ago (below/inside/above)
+record   y = (ln C[t] − ln O[t−9]) / (σ √10) of the bar 10 back, clipped ±6; per-state means;
+         samples independent only ≥ 10 bars apart; needs ≥ 5 of them and > 300 settled overall
+proof    se² = var / n_eff,  B = 0.10² / (0.10² + se²),  z = (mean − grand mean) · √(B / se²)
+events   ▲ the first bar of a state with z ≥ +2,  ▼ with z ≤ −2
+```
 
-**v8's TURN** — the trace crossing back through θ, confirmed on its tapes inside 5 bars — measured
-no edge after 2020 on daily bars and negative on weekly; v9.2 removed it.
+No cooldown, no gate on the Pragati stack; the last event stands as the declaration. On random
+walks the rule calls a state proven on about 0.4% of bars; across 151 instruments it fired about
+once per 5,500 bars. A triangle says the name's own past has proven its state; pooled across
+names no state reached |t| = 1.3 outside crypto (Indicator repo, `research/results.txt`). The
+ledger needs ~563 bars before it can prove anything — Daily's ~1,150 clear it, and the Weekly
+fetch was deepened to ~710 bars for it.
 
-**◆ RESUME** — the histogram dipped below zero inside 6 bars and crosses +0.5σ; chart conviction
-is above zero; the conviction tape is at or past +30; the value tape is below +θ; effort is not
-absorbed on the bar. Short mirrors. **Off by default since v8** (negative outside crypto; negative or
-mixed again in v9).
-
-A ▲▼ takes precedence over a ◆ on the same bar; ▲ and long ◆ share one 10-bar cooldown.
+**Why the old signals went.** v9's ▲ (the grid's capitulation turning) was measured at about
++0.05σ over 10-20 bars; v8's TURN, the ◆ RESUME and divergence measured no edge or a negative one.
+v10 replaces the set with the ledger by decision, so that Sanket and Pragyam fire on one rule.
 
 **Divergence is off by default in v9** (R about zero in every era, daily and weekly; H negative or
 mixed), and when switched on it is found on **conviction's own pivots** (5/5,
 separated by 5 … 60 bars), not on the trace — whose pivots would be a new, unmeasured object. It
 counts only when zone-gated (the earlier pivot beyond ±30) and when value at the pivot was
 stretched the right way. Price is sampled at the swing's true extreme.
-
-**Why the grid, not the trace.** The trace blends two things, so its crossing alone cannot say
-which of them moved. The grid keeps them apart — who controls across the ladder, where price
-stands — and the audit found the edge exactly there: sellers still in control of a price already
-cheap, with value starting to turn.
 
 ## What the source measured
 
@@ -201,7 +208,7 @@ neither fires on it nor, since the trace study, ranks by it.**
 
 ```
 long side                                   short side
-5 + s   ▲ on this bar                       5 + s'  ▼ on this bar
+5 + s   ▲ on this bar (proven +)            5 + s'  ▼ on this bar (proven −)
 s       every other name, by stretch        s'      every other name, by stretch
 
 s = −trace / 200 ∈ (−½, ½)   (stretched furthest DOWN leads the long side)   s' = −s
@@ -220,7 +227,7 @@ RESUME and the hold / open-window bands cost edge and no longer order the list. 
 +0.087σ vs −0.040σ; rank IC clearly positive on NIFTY 50 / 100). Stated plainly: once a name's own
 20-bar return is removed the trace carries ~0 information — on NSE equities this ranking **is**
 short-term reversal, read through the indicator, and that effect has been weaker since 2021 on
-mid and small caps. The grid, RESUME and the windows are still computed and shown; they describe
+mid and small caps. The grid and the hold window are still computed and shown; they describe
 a name, they do not order the list. Reports: `studies/`.
 
 Nothing measured on YOUR universe enters: the Edge Study is reported, never applied, and the
@@ -229,9 +236,9 @@ cost gate is a flag on the row.
 ## The Edge Study
 
 `edge.py` measures the event set on the symbols on screen, through `engine.compute_frame` — the
-exact call the screener makes — so warm-up, the stack gate, the basket gate and the cooldowns apply
-to the study by construction. Six slices: Long · all and Short · all (the screen's sides), and each
-kind alone (▲ capitulation, ▼ distribution, ◆ RESUME ↑, ◆ RESUME ↓).
+exact call the screener makes — so the ledger's warm-up and record apply to the study by
+construction. Two slices: every ▲ and every ▼. Each triangle is proven on its own name's past, so
+the study asks whether those proofs carry forward.
 
 | # | Step | The failure it prevents |
 |:--|:---|:---|
@@ -243,8 +250,8 @@ kind alone (▲ capitulation, ▼ distribution, ◆ RESUME ↑, ◆ RESUME ↓).
 | 6 | Cost in the same vol units | The same bps costing 4× more on a low-vol name |
 | 7 | Power stated: `n_eff = (dates / h) × participation ratio`, and an MDE | "No edge" from a test that could never have seen one |
 
-`UNDERPOWERED` (the MDE exceeds 0.036) is distinct from `NO EDGE`. The ▲ is worth about +0.05σ, so
-its slice will often be underpowered even over 15 years; the pooled sides less so.
+`UNDERPOWERED` (the MDE exceeds 0.036) is distinct from `NO EDGE`. The triangles are rare, so both
+slices will often be underpowered even over 15 years.
 
 **Memory.** Streaming in chunks of 20 symbols, lean (no volume profile, no regime engine),
 universes above 80 sampled with a fixed seed. The macro drivers are one deep batch for the whole
@@ -284,8 +291,10 @@ effort → result reading, not the order-flow absorption score.)
 
 ## Known limitations
 
-- **The signal set is unmeasured in its source**, and the grid measured no better than equal
-  weight. Read the Edge Study for your universe; read everything else as structure.
+- **The triangles are proven per name, not across names**, and the grid measured no better than
+  equal weight. Read the Edge Study for your universe; read everything else as structure.
+- **The ledger's record is short here.** Sanket fetches ~1,150 daily bars, so a name's ledger has
+  ~900 settled forecasts — far fewer than a long TradingView chart — and proves less.
 - **Momentum leads the default trace.** Samanvaya's value is half breadth (price momentum); blended
   with conviction at equal weight, about three quarters of the trace is momentum of some kind.
 - **The tapes overlap the trace by construction** — each tape's chart rung is one of the trace's

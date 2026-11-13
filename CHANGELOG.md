@@ -7,6 +7,36 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.0.0] · 2026-11-13
+### The signals are Pragyam's proven-state triangles
+
+- **Pragati's signal set is stripped entirely.** `pragati.signals()` is gone, and with it the
+  grid's ▲ capitulation / ▼ distribution, the ◆ RESUME (its candidates `con_cand_l/_s`, the
+  `turn`, `resume`, `pull`, `effort` and `cool` settings), the 10-bar cooldown, the watchlist
+  (`PRG_Armed`, `PRG_Armed_Age`) and the stack gate on events. `resume_long` / `resume_short`
+  are no longer produced. Pragati still supplies every reading, the tapes and the grid.
+- **New `ledger.py`: Pragyam's ledger, ported bar for bar.** Nine states (trend down / flat / up
+  × the close below / inside / above the learned cone drawn 10 bars ago); each scored on the
+  name's own next-10-bar outcomes, shrunk toward no edge (τ = 0.10σ), proven past two standard
+  errors. ▲ / ▼ fire on the first bar of a state proven positive / negative. Checked against
+  `pragyam.pine`'s Python reference on 151 instruments: identical states, z-scores and triangles
+  on every bar. About one triangle per 5,500 bars.
+- **Engine.** `compute_frame` reads `turn_buy` / `turn_sell` / `decl` from the ledger; new
+  `LG_*` columns (state, samples, edge, shrunk edge, z, proven, risk, trend). `PRG_State` is now
+  the ledger's: PROVEN ▲ / ▼, IN PROVEN + / −, LEARNING, UNPROVEN, WARMING UP. Ranking keeps the
+  measured stretch order with a ▲▼ on this bar on top.
+- **Edge Study.** Two slices, ▲ and ▼. Cache key `prg4` → `prg5`, so no study of the old events
+  is reused.
+- **UI.** Every ▲ capitulation / ▼ distribution / ◆ / watch reference rewritten; the watchlist
+  panels replaced by "in a proven state" counts; State cells show the ledger with its z and
+  samples in the tooltip.
+- **Weekly fetch 2,600 → 4,600 days** (+365 pad): a state can be proven only after ~563 bars,
+  which ~425 weekly bars never reached.
+- Verified: lint clean (one pre-existing warning); the app runs end to end under Streamlit's test
+  harness on Daily and Weekly single-date screens and a Daily Historical Range, with no exception.
+
+---
+
 ## [v9.3.0] · 2026-09-28
 ### The ▲ skips conviction's quiet regime
 

@@ -7,11 +7,10 @@ reads. One trace — conviction × value, how far a move is stretched in one-sid
 effort and in price against fair value — its histogram (the trace's push), and
 its two ingredients read across horizons on two tapes. One state: the 3 × 3
 conviction-value grid, named as an action with its measured units. Two events,
-read from the grid (v9): ▲ CAPITULATION (sellers in control of a cheap price, value
-turning back toward fair, conviction not in its quiet regime) and ▼ DISTRIBUTION (sellers taking control of a rich
-price); ◆ RESUME is off by default. `edge.py` measures the signal set on the symbols
-actually on screen. See engine.py, pragati.py, samanvaya.py, cvgrid.py and
-ARCHITECTURE.md.
+from Pragyam's ledger (ledger.py, v10): ▲ PROVEN + and ▼ PROVEN − - the first bar of a
+state (trend × where the close landed against its cone) that this name's own record has
+proven positive or negative. `edge.py` measures the signal set on the symbols actually on
+screen. See engine.py, ledger.py, pragati.py, samanvaya.py, cvgrid.py and ARCHITECTURE.md.
 """
 
 import os
@@ -90,7 +89,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v9.3.0"
+VERSION = "v10.0.0"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -107,7 +106,8 @@ ENGINE_CODE = "PRAGATI"
 #   prg2  v9.0.0  Pragati v9: the ▲▼ read from the grid; the Edge Study scored causally
 #   prg3  v9.1.0  the conviction ladder reads DOWN from yfinance intraday (↺ W·D before it)
 #   prg4  v9.3.0  the ▲ skips conviction's quiet regime
-ENGINE_SIG = "prg4"
+#   prg5  v10.0.0 the ▲▼ are Pragyam's proven-state triangles (ledger.py); ◆ and the watch removed
+ENGINE_SIG = "prg5"
 
 # IST timezone offset — used wherever "today" matters for data or display
 _IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -140,7 +140,7 @@ _REGISTRY_KEY  = "data_registry"
 # modes then slice what they need. `fetch_batch_data` pads a further 365 calendar days on
 # top of whichever value is used.
 _MAX_DAYS_BACK        = 1300   # Daily  → ~1150 bars, ~480 of them signal-bearing
-_MAX_DAYS_BACK_WEEKLY = 2600   # Weekly → ~425 bars, ~165 of them signal-bearing
+_MAX_DAYS_BACK_WEEKLY = 4600   # Weekly → ~710 bars; the ledger can prove a state from ~bar 563
 # THE BINDING WARM-UP IS THE LADDER, not the chart. The histogram is calibrated at
 # length + vol_n + 2·norm + signal = 469 daily bars, but every signal also needs both tapes:
 # the conviction tape's weekly rung calibrates after 92 weeks (lookback + baseline + its
@@ -151,7 +151,10 @@ _MAX_DAYS_BACK_WEEKLY = 2600   # Weekly → ~425 bars, ~165 of them signal-beari
 # WEEKLY IS BOUND BY THE VALUE LADDER: its parent rung is the MONTH, and the RV ensemble's
 # slowest member needs 55 settled months after the model builds — about five years. 2600 +
 # 365 days (~8 years) leaves ~3 years of weekly bars on which the whole stack can judge.
-# The pool is raw OHLCV (5 float columns), ~50 MB on a 500-symbol universe.
+# v10 · THE LEDGER BINDS DEEPER: a state can be proven only after 252 bars of risk warm-up,
+# one horizon, and 30 horizons of settled record - bar ~563. Daily (~1150 bars) clears it;
+# Weekly at 2600 days (~425 bars) never would, so Weekly now fetches 4600 + 365 days.
+# The pool is raw OHLCV (5 float columns), ~85 MB on a 500-symbol universe at that depth.
 # Bound the L1 registry so cycling through indices (or stock_list variations from
 # transient fetch failures) can't accumulate stale 500-day universe DataFrames in
 # session_state until the tab closes. Keep only the N most-recently-used universes;
@@ -547,7 +550,7 @@ def _render_edge_study_panel(sid: eng.EngineSettings, study) -> None:
     """Full Edge Study readout — the numbers behind the verdict, per slice and per era."""
     ui.render_section_header(
         "Edge Study",
-        "Measured out-of-sample expectancy of ▲ capitulation / ▼ distribution on the symbols on screen · "
+        "Measured out-of-sample expectancy of ▲ proven + / ▼ proven − on the symbols on screen · "
         "re-measured daily",
         icon="activity", accent="violet",
     )
@@ -580,20 +583,20 @@ def _render_edge_study_panel(sid: eng.EngineSettings, study) -> None:
                 "Significant": "yes" if r.significant else ("ANTI" if r.anti else "no"),
             })
     if not rows:
-        ui_info("The study ran but no event fired in the measured history — every layer must "
-                "agree on one bar, so a thin or short universe can go years without a ▲ or ▼.")
+        ui_info("The study ran but no event fired in the measured history — a triangle needs a "
+                "state this name's own record has proven, about one per 5,500 bars, so a thin or "
+                "short universe can go years without a ▲ or ▼.")
         return
 
     v_buy, v_sell = study.verdict("buy"), study.verdict("sell")
     n = study.counts()
     m1, m2, m3, m4 = st.columns(4)
-    with m1: ui.render_metric_card("Long · ▲ + ◆", v_buy[0], _study_summary_line(study, "buy"),
+    with m1: ui.render_metric_card("Long · ▲", v_buy[0], _study_summary_line(study, "buy"),
                                    _verdict_kind(v_buy[0]))
-    with m2: ui.render_metric_card("Short · ▼ + ◆", v_sell[0], _study_summary_line(study, "sell"),
+    with m2: ui.render_metric_card("Short · ▼", v_sell[0], _study_summary_line(study, "sell"),
                                    _verdict_kind(v_sell[0]))
-    with m3: ui.render_metric_card("Events", f"{n.get('turn_buy', 0)} ▲ · {n.get('turn_sell', 0)} ▼",
-                                   f"{n.get('resume_long', 0) + n.get('resume_short', 0)} RESUME · "
-                                   f"{study.fire_rate*1000:.1f} per 1000 bars", "info")
+    with m3: ui.render_metric_card("Events", f"{n.get('buy', 0)} ▲ · {n.get('sell', 0)} ▼",
+                                   f"{study.fire_rate*1000:.2f} per 1000 bars", "info")
     with m4: ui.render_metric_card("Independence", f"{study.part_ratio:.1f}",
                                    f"of {study.n_symbols_studied} names studied", "info")
 
@@ -604,8 +607,8 @@ def _render_edge_study_panel(sid: eng.EngineSettings, study) -> None:
         col_precision={"Edge (vol)": 4, "CI low": 4, "CI high": 4, "Net": 4,
                        "Hit %": 1, "n_eff": 0, "Resolves \u2265": 4},
         footer=_glossary({
-            "Slice": "Long · all and Short · all are the screen's two sides (▲▼ and ◆ "
-                     "pooled). The kind rows say which situation carries the pooled number.",
+            "Slice": "The screen's two sides: every ▲ (a state proven positive on the name's own "
+                     "record) and every ▼ (proven negative).",
             "Edge (vol)": "Mean drift-free, vol-normalised return following an event. GROSS.",
             "CI low / high": "Block-bootstrap 95% bounds. An edge is claimed only when the low is > 0.",
             "Net": f"Edge minus the cost charge at {sid.cost_bps:.1f} bp, in the same vol units "
@@ -625,7 +628,7 @@ def _render_edge_study_panel(sid: eng.EngineSettings, study) -> None:
         f'<b style="color:var(--ink-secondary);">Method.</b> Event study of the pre-declared '
         f'signal set ({html.escape(study.trigger)}, {study.length}-bar conviction lookback, '
         f'{study.horizon}-bar hold, entry the bar after the signal), through the same engine call '
-        f'the screener makes — warm-up, the stack gate, the basket gate and the cooldowns all apply. '
+        f'the screener makes — the ledger\'s warm-up and record apply exactly as on screen. '
         f'Each instrument\'s own mean forward return over the 500 returns already <i>realised</i> '
         f'before the event is removed, so a rising market cannot read as edge and nothing from the '
         f'future leaks in; the residual is divided by that instrument\'s own trailing sigma so asset '
@@ -637,8 +640,9 @@ def _render_edge_study_panel(sid: eng.EngineSettings, study) -> None:
         f'regular divergence ranked first (not established); participation weighting earns its '
         f'place; the chart-only reversal trigger had no edge (+0.0003R). Nothing reached '
         f'significance once overlapping windows were accounted for (best t = 1.9 of 48 cells). '
-        f'The v9 audit (studies/pragati_v9_audit.md) measured the ▲ across 380 instruments: about '
-        f'+0.05σ over 10-20 bars in every era outside crypto. This study is the number for YOUR symbols.'
+        f'The ▲▼ are Pragyam\'s proven-state triangles: each is proven on its own name\'s past, and '
+        f'across 151 instruments no state\'s pooled edge reached |t| = 1.3 outside crypto. This study '
+        f'asks whether those per-name proofs carry forward on YOUR symbols.'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -1878,13 +1882,13 @@ def to_excel(df):
         # that is descriptive context — the distinction matters more than the ordering.
         legend = [
             ("— THE SIGNAL SET (PRAGATI · conviction × value) —", ""),
-            ("turn_buy / turn_sell", "v9: ▲ CAPITULATION — the first bar the grid stands in Buy · capitulation (sellers in control across the ladder, value cheap past θ) with value momentum turning back toward fair, not in conviction's quiet regime (v9.3); ▼ DISTRIBUTION — the first bar sellers hold control of a price rich past θ. Read from the grid, 10-bar cooldown per side. The last one stands as the declaration."),
-            ("resume_long / resume_short", "◆ RESUME — OFF by default (negative in the v8 and v9 audits): the histogram dipped to the wrong side inside 6 bars and now crosses its k·σ gate; chart conviction on its side; conviction tape past the inner zone; value tape short of θ; effort not absorbed."),
-            ("BUY_* / SELL_*", "The long / short event by age (Today … Within 5): ▲ capitulation / ▼ distribution, ◆ a RESUME, — none."),
-            ("Side / Signal_Kind", "Buy / Sell / — : an event fired on THIS bar, and its kind — TURN (the ▲▼) or RESUME (◆)."),
-            ("PRG_Event / PRG_State", "The event label on this bar; the bar's state — WARMING UP / PAUSED / CAPITULATION / DISTRIBUTION / RESUME / WATCH (in capitulation, value still cheapening) / NEUTRAL."),
-            ("PRG_Armed / PRG_Armed_Age", "The watchlist: +1 while a name sits in capitulation with value still cheapening, and bars in the cell. The ▲ fires when value turns."),
-            ("PRG_Decl / PRG_Decl_Age", "The standing declaration (+1 after a ▲, −1 after a ▼) and bars since. No exit; as a held position it carried no edge."),
+            ("turn_buy / turn_sell", "▲ PROVEN + / ▼ PROVEN − — the first bar of a state this name's own ledger has proven positive / negative: nine states (trend down / flat / up × the close below / inside / above the cone drawn 10 bars ago), each scored on what followed it on THIS name, shrunk toward no edge; proven past two standard errors. Pragyam's triangles (ledger.py). No cooldown; no gate on the Pragati stack. The last one stands as the declaration."),
+            ("BUY_* / SELL_*", "The long / short event by age (Today … Within 5): ▲ / ▼, — none."),
+            ("Side / Signal_Kind", "Buy / Sell / — : an event fired on THIS bar, and its kind — PROVEN."),
+            ("PRG_Event / PRG_State", "The event label on this bar; the bar's ledger state — WARMING UP (no risk forecast yet) / PROVEN ▲ / PROVEN ▼ (entered on this bar) / IN PROVEN + / IN PROVEN − (still in it) / LEARNING (too few samples in this state) / UNPROVEN."),
+            ("LG_State_Name / LG_N", "The ledger state on this bar, and the independent samples behind it on this name."),
+            ("LG_Edge / LG_Post / LG_Z", "That state's next-10-bar outcome on this name against its own mean, in σ: raw, after shrinkage, and in standard errors. |z| ≥ 2 is proven."),
+            ("PRG_Decl / PRG_Decl_Age", "The standing declaration (+1 after a ▲, −1 after a ▼) and bars since. No exit."),
             ("PRG_Hold_Dir / PRG_Hold_Age / PRG_Hold_Kind", "The latest event while inside the declared hold horizon."),
             ("PRG_Trace / Signal", "The trace, ±100: conviction and value in σ, blended with their measured correlation, bounded once on Samanvaya's scale. θ = ±42.9. How far the move is stretched."),
             ("PRG_Hist / PRG_Hist_Z", "The trace's push — trace minus its 9-bar EMA — native, and in σ of its own distribution."),
@@ -1992,7 +1996,7 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     """Per-symbol feature engine — the Pragati stack plus order-flow context.
 
     The SIGNALS are Pragati's (see engine.py / pragati.py): the trace (conviction × value),
-    its histogram, the two tapes, the ▲▼ (read from the grid) and ◆, and the 3 × 3 grid state. They
+    its histogram, the two tapes, the ▲▼ (Pragyam's ledger, ledger.py), and the 3 × 3 grid state. They
     are attached here via ``eng.add_pragati_features``; the cross-section is ranked later
     by ``eng.compute_ranking``. ``drivers`` are the macro closes behind the value
     ingredient (prepared for the chart), ``symbol`` names the instrument (its close time
@@ -2140,8 +2144,8 @@ def run_full_analysis(df, reg_len=20, n1=10, n2=21, obLevel1=80, obLevel2=40, os
     )
 
     # ── THE SIGNAL STACK — Pragati (engine.py) ──────────────────────────────────
-    # Writes the PRG_* readings, the four events (turn_buy / turn_sell / resume_long /
-    # resume_short), the watch and hold windows, and the CVG_* grid state. Cross-sectional
+    # Writes the PRG_* readings, the ledger's events (turn_buy / turn_sell) and its LG_*
+    # state, the hold window, and the CVG_* grid state. Cross-sectional
     # ranking happens later, once the universe is assembled.
     #
     # Note this reads Volume directly from `df`, NOT the zero-volume-substituted `vol`
@@ -2459,7 +2463,7 @@ def run_regime_analysis(df):
 def _classify_signal_type(row) -> str:
     """Return the signal type for a single bar row (pandas Series).
 
-    A fired event wins (▲ capitulation / ▼ distribution / ◆ RESUME ↑ / ◆ RESUME ↓); otherwise the row
+    A fired event wins (▲ PROVEN + / ▼ PROVEN −); otherwise the row
     falls back to its flow zone (context only). Matches the vectorised np.select in the
     harvest path.
     """
@@ -2574,12 +2578,13 @@ _SYSTEM_PANELS = (
       ("Trace", "blended in σ, bounded once · θ ±43"),
       ("Ladders", "conviction ↓ 1m…4h·D (↺ W·D) · value W·D / M·W"))),
     ("events", "Two Signals, One State", "Events, and where a name stands",
-     "The 3 × 3 grid names each name's state as an action, and v9 reads the events from it: "
-     "▲ CAPITULATION — sellers in control of a cheap price, value turning back toward fair, "
-     "outside conviction's quiet regime — the one event measured positive in every era; ▼ DISTRIBUTION — sellers taking control "
-     "of a rich price. ◆ RESUME is off by default (measured negative).",
-     (("▲", "capitulation, value turning"),
-      ("▼", "sellers take a rich price"),
+     "The events are Pragyam's triangles. Every bar sits in one of nine states - the trend, "
+     "crossed with where the close landed against the cone drawn 10 bars ago - and each name "
+     "keeps its own record of what followed each state, shrunk toward no edge. ▲ fires on "
+     "entering a state that record has proven positive, ▼ proven negative. Rare by design. "
+     "The 3 × 3 grid names where a name stands between events.",
+     (("▲", "a state proven + on this name"),
+      ("▼", "a state proven − on this name"),
       ("Grid", "Buy 4 … Exit 0.25 (measured units)"),
       ("Ranking", "▲▼ today, then stretch"))),
     ("measured", "Measured, Not Inherited", "Expectancy on your symbols",
@@ -2613,7 +2618,7 @@ def render_landing_page():
     st.markdown(
         """<div class="lede">
   <div class="lede-claim">Is the push paid for — and at what price? One indicator
-    across a universe: where a stretch releases or a trend resumes, where every
+    across a universe: where a name's own record has proven the state it is in, where every
     name stands between those events, and whether any of it has been worth
     anything on the symbols you are actually looking at.</div>
   <div class="lede-cta">Pick a universe and a mode in the rail, then
@@ -2661,10 +2666,9 @@ def render_landing_page():
     # ── What a run returns ────────────────────────────────────────────────
     ui.render_section_header("What a run returns", icon="target")
     _out = (
-        ("The fired events", "Every ▲ capitulation, ▼ distribution and ◆ in the last five bars, bucketed by "
-                             "age, with the grid state, push, tapes and evidence behind each."),
-        ("The grid and the watchlist", "Where every name stands — Buy to Exit — and the names "
-                                       "in capitulation whose value has not yet turned."),
+        ("The fired events", "Every ▲ and ▼ in the last five bars, bucketed by age, with the "
+                             "ledger state, grid state, push, tapes and evidence behind each."),
+        ("The grid", "Where every name stands — Buy to Exit."),
         ("A measured edge", "An event study on your own symbols: trailing drift removed, "
                             "vol-normalised, with the interval and the power stated."),
         ("The evidence", "Every computed column, with a legend that says which are signal "
@@ -2895,7 +2899,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     """Execute the Pragati screen and return the ranked cross-section.
 
     Fetches market data and the macro drivers for the universe, builds each symbol's
-    Pragati stack — trace, histogram, tapes, the ▲▼ and ◆, grid state — plus order-flow /
+    Pragati stack — trace, histogram, tapes, grid state — and the ledger's ▲▼, plus order-flow /
     regime context, then ranks the whole cross-section (engine.compute_ranking): a ▲▼
     fired on this bar first, then every name by stretch read as reversion.
 
@@ -2976,7 +2980,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     console.item("Trace", f"conviction × value · signal EMA {_p.signal} · θ ±{sid.theta:.1f} "
                           f"(histogram calibrated after {sid.min_bars} bars)")
     console.item("Ladders", f"conviction {sid.ladder_label} · value {sid.value_ladder_label}")
-    console.item("Signals", f"{sid.trigger_label} · read from the grid · cooldown {_p.cool} · "
+    console.item("Signals", f"{sid.trigger_label} · proven past 2 s.e. after shrinkage · "
                             f"hold {sid.horizon} bars · entry next open")
     console.item("Macro drivers", "prepared" if drivers is not None else "unavailable (unhedged)")
     _vl, _vk, _vd = _study_state(study, "buy")
@@ -3359,7 +3363,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'Units': row.get('CVG_Units', 1.0),
                     'CVG_Side': row.get('CVG_Side', 0),
                     'Held': bool(row.get('CVG_Held', False)),
-                    'Armed': row.get('PRG_Armed', 0),
+                    'Proven': row.get('LG_Proven', 0),
                     'Event': row.get('PRG_Event', ''),
                     'Bar_Delta': row['Bar_Delta'],
                     'CVD': row['CVD'],
@@ -3372,8 +3376,6 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
                     'SellSignal': bool(row['short_cond']),
                     'TurnBuy': bool(row['turn_buy']),
                     'TurnSell': bool(row['turn_sell']),
-                    'ResumeLong': bool(row['resume_long']),
-                    'ResumeShort': bool(row['resume_short']),
                     'SignalType': row['SignalType'],
                     # Regime risk context (never a signal input)
                     'Regime': row.get('Regime', 'NEUTRAL'),
@@ -3416,7 +3418,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         "Historical Range": f"{start_date} to {end_date}",
         "Total Signals Fired": summary['total_signals'],
         "Long / Short": f"{summary['total_buys']} / {summary['total_sells']}",
-        "▲▼ / ◆": f"{summary['total_turns']} / {summary['total_resumes']}",
+        "▲ / ▼": f"{summary['total_buys']} / {summary['total_sells']}",
         "Avg Trace": round(summary['avg_signal'], 2),
         "Long:Short Ratio": round(summary['overall_ratio'], 2),
         "Dominant Zone": summary['most_common_zone'],
@@ -3456,7 +3458,7 @@ def _aggregate_timeseries(ts_df):
     Streamlit run from session state, so sidebar interactions don't lose the view).
     """
     ts_df = ts_df.copy()
-    for c in ('TurnBuy', 'TurnSell', 'ResumeLong', 'ResumeShort', 'BuySignal', 'SellSignal'):
+    for c in ('TurnBuy', 'TurnSell', 'BuySignal', 'SellSignal'):
         if c not in ts_df.columns:
             ts_df[c] = False
         ts_df[c] = ts_df[c].fillna(False).astype(bool)
@@ -3467,8 +3469,8 @@ def _aggregate_timeseries(ts_df):
     ts_df['_read'] = ts_df['Action'] != 'Unread'
     ts_df['_build'] = ts_df['_read'] & (pd.to_numeric(ts_df['CVG_Side'], errors='coerce') > 0)
     ts_df['_cut'] = ts_df['_read'] & (pd.to_numeric(ts_df['CVG_Side'], errors='coerce') < 0)
-    ts_df['_armed_up'] = pd.to_numeric(ts_df.get('Armed', 0), errors='coerce') > 0
-    ts_df['_armed_dn'] = pd.to_numeric(ts_df.get('Armed', 0), errors='coerce') < 0
+    ts_df['_proven_up'] = pd.to_numeric(ts_df.get('Proven', 0), errors='coerce') > 0
+    ts_df['_proven_dn'] = pd.to_numeric(ts_df.get('Proven', 0), errors='coerce') < 0
 
     g = ts_df.groupby('Date')
     daily_agg = g.agg({
@@ -3479,13 +3481,11 @@ def _aggregate_timeseries(ts_df):
         'SellSignal': 'sum',
         'TurnBuy': 'sum',
         'TurnSell': 'sum',
-        'ResumeLong': 'sum',
-        'ResumeShort': 'sum',
         '_read': 'sum',
         '_build': 'sum',
         '_cut': 'sum',
-        '_armed_up': 'sum',
-        '_armed_dn': 'sum',
+        '_proven_up': 'sum',
+        '_proven_dn': 'sum',
         'Zone': lambda x: x.value_counts().idxmax() if len(x) > 0 else 'Neutral',
         'Regime': lambda x: x.value_counts().idxmax() if len(x) > 0 else 'NEUTRAL',
         'HMM_Bull': 'mean',
@@ -3515,7 +3515,7 @@ def _aggregate_timeseries(ts_df):
     _read = daily_agg['_read'].where(daily_agg['_read'] > 0)
     daily_agg['Build_Pct'] = (daily_agg['_build'] / _read * 100).fillna(0)
     daily_agg['Cut_Pct']   = (daily_agg['_cut'] / _read * 100).fillna(0)
-    daily_agg['Armed_Up']  = daily_agg['_armed_up']
+    daily_agg['Proven_Up'] = daily_agg['_proven_up']
     # Tone share — the grid's five tones (Pragyam's CVG_TONE) as a share of names read.
     if 'Cell' in ts_df.columns:
         _cells = pd.to_numeric(ts_df['Cell'], errors='coerce').fillna(cg.UNREAD).astype(int)
@@ -3524,7 +3524,7 @@ def _aggregate_timeseries(ts_df):
         _den = _share.sum(axis=1).where(lambda x: x > 0)
         for _t in charts.TONE_ORDER:
             daily_agg[f'Tone_{_t}'] = ((_share[_t] if _t in _share.columns else 0) / _den * 100).fillna(0)
-    daily_agg['Armed_Dn']  = daily_agg['_armed_dn']
+    daily_agg['Proven_Dn'] = daily_agg['_proven_dn']
 
     # Flow-zone breadth: % of names in accumulation vs distribution each day.
     acc_counts  = g['Zone'].apply(lambda x: (x.isin(['Accumulation+', 'Accumulation'])).sum())
@@ -3546,7 +3546,7 @@ def _aggregate_timeseries(ts_df):
         daily_agg['Avg_Fired_Units'] = _fired.groupby('Date')['Units'].mean()
     else:
         daily_agg['Avg_Fired_Units'] = np.nan
-    daily_agg = daily_agg.drop(columns=['_read', '_build', '_cut', '_armed_up', '_armed_dn'])
+    daily_agg = daily_agg.drop(columns=['_read', '_build', '_cut', '_proven_up', '_proven_dn'])
 
     _n_buys  = int(daily_agg['BuySignal'].sum())
     _n_sells = int(daily_agg['SellSignal'].sum())
@@ -3555,7 +3555,6 @@ def _aggregate_timeseries(ts_df):
         'total_buys':          _n_buys,
         'total_sells':         _n_sells,
         'total_turns':         int(daily_agg['TurnBuy'].sum() + daily_agg['TurnSell'].sum()),
-        'total_resumes':       int(daily_agg['ResumeLong'].sum() + daily_agg['ResumeShort'].sum()),
         'avg_signal':          float(daily_agg['Signal'].mean()) if daily_agg['Signal'].notna().any() else float('nan'),
         'overall_ratio':       float(_n_buys / max(_n_sells, 1)),
         'avg_buy_breadth':     float(daily_agg['Buy_Breadth_Pct'].mean()),
@@ -3597,7 +3596,7 @@ def render_timeseries_dashboard():
                    if start_date and end_date
                    else f"{len(daily_agg)} periods")
     _iclass  = meta.get('iclass', '—')
-    _trigger = meta.get('trigger') or "▲ capitulation · ▼ distribution · ◆ RESUME"
+    _trigger = meta.get('trigger') or "▲ proven + · ▼ proven − (this name's ledger)"
     ui.render_section_header(
         f"Historical Range ({range_label})",
         f"{ENGINE_NAME} · {_trigger} · {_iclass}",
@@ -3611,8 +3610,8 @@ def render_timeseries_dashboard():
         ui.render_metric_card("Signals Fired", str(summary['total_signals']),
                               f"{summary['total_buys']} long · {summary['total_sells']} short", "info")
     with c2:
-        ui.render_metric_card("▲▼ / ◆", f"{summary['total_turns']} / {summary['total_resumes']}",
-                              "capitulation · distribution / continuations", "violet")
+        ui.render_metric_card("▲ / ▼", f"{summary['total_buys']} / {summary['total_sells']}",
+                              "states proven positive / negative on each name's own record", "violet")
     with c3:
         ui.render_metric_card("Avg Build-Side", f"{summary['avg_build_pct']:.0f}%",
                               f"{timeframe_label} · grid Buy / Add / Accumulate", "success")
@@ -3636,8 +3635,8 @@ def render_timeseries_dashboard():
     # ── TAB 1 · Signal Dashboard ───────────────────────────────────────────
     with tab1:
         ui.render_section_header("Signal Breadth",
-                                 "% of universe firing a long (▲ capitulation / ◆ ↑) or short "
-                                 "(▼ distribution / ◆ ↓) event",
+                                 "% of universe firing a ▲ (a state proven positive on the name's "
+                                 "own record) or a ▼ (proven negative)",
                                  icon="activity", accent="cyan")
         fig_breadth = go.Figure()
         fig_breadth.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Buy_Breadth_Pct'],
@@ -3657,12 +3656,10 @@ def render_timeseries_dashboard():
         ui.render_chart_panel(fig_breadth, key='breadth', context=_chart_ctx())
 
         st.markdown("<br>", unsafe_allow_html=True)
-        ui.render_section_header("Events by Kind", "▲ capitulation and ▼ distribution, ◆ continuations "
-                                 "per session, long up and short down",
+        ui.render_section_header("Events", "▲ proven + and ▼ proven − per session, long up and short down",
                                  icon="bar-chart", accent="info")
         fig_counts = go.Figure()
-        for col, name, color, sign in (('TurnBuy', '▲ capitulation', 'emerald', 1), ('ResumeLong', '◆ RESUME ↑', 'cyan', 1),
-                                       ('TurnSell', '▼ distribution', 'rose', -1), ('ResumeShort', '◆ RESUME ↓', 'amber', -1)):
+        for col, name, color, sign in (('TurnBuy', '▲ proven +', 'emerald', 1), ('TurnSell', '▼ proven −', 'rose', -1)):
             fig_counts.add_trace(go.Bar(x=daily_agg.index, y=sign * daily_agg[col], name=name,
                                         marker=dict(color=chart_color(color))))
         fig_counts.update_layout(title='', height=300, hovermode='x unified', barmode='relative')
@@ -3670,15 +3667,18 @@ def render_timeseries_dashboard():
         ui.render_chart_panel(fig_counts, key='signal_counts', context=_chart_ctx())
 
         st.markdown("<br>", unsafe_allow_html=True)
-        ui.render_section_header("Watchlist Size", "Names in capitulation whose value is still "
-                                 "cheapening — the ▲ comes when it turns",
+        ui.render_section_header("In a Proven State", "Names whose current state their own record has "
+                                 "proven - positive up, negative down",
                                  icon="eye", accent="violet")
-        fig_arm = go.Figure()
-        fig_arm.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Armed_Up'], mode='lines',
-                                     name='▲ watch (capitulation)', line=dict(color=chart_color('emerald'), width=2)))
-        fig_arm.update_layout(title='', height=260, hovermode='x unified', yaxis=dict(title='# Symbols'))
-        apply_chart_theme(fig_arm)
-        ui.render_chart_panel(fig_arm, key='armed', context=_chart_ctx())
+        fig_prv = go.Figure()
+        fig_prv.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['Proven_Up'], name='in proven +',
+                                 marker=dict(color=chart_color('emerald'))))
+        fig_prv.add_trace(go.Bar(x=daily_agg.index, y=-daily_agg['Proven_Dn'], name='in proven −',
+                                 marker=dict(color=chart_color('rose'))))
+        fig_prv.update_layout(title='', height=260, hovermode='x unified', barmode='relative',
+                              yaxis=dict(title='# Symbols'))
+        apply_chart_theme(fig_prv)
+        ui.render_chart_panel(fig_prv, key='proven', context=_chart_ctx())
 
     # ── TAB 2 · Grid Dynamics ──────────────────────────────────────────────
     with tab2:
@@ -3853,11 +3853,11 @@ def render_timeseries_dashboard():
         display_ts = daily_agg.copy()
         display_ts.index = display_ts.index.strftime('%Y-%m-%d')
         display_ts = display_ts.reset_index().rename(columns={'Date': 'Date'})
-        display_cols = ['Date', 'TurnBuy', 'ResumeLong', 'TurnSell', 'ResumeShort', 'Signal',
+        display_cols = ['Date', 'TurnBuy', 'TurnSell', 'Proven_Up', 'Proven_Dn', 'Signal',
                         'Build_Pct', 'Cut_Pct', 'Avg_Fired_Units',
                         'Regime_Bull_Pct', 'Regime_Bear_Pct', 'Change_Point']
         display_ts = display_ts[display_cols]
-        display_ts.columns = ['Date', '▲', '◆ ↑', '▼', '◆ ↓', 'Avg Trace',
+        display_ts.columns = ['Date', '▲', '▼', 'In +', 'In −', 'Avg Trace',
                               'Build %', 'Cut %', 'Units at Fire',
                               'Bull Regime %', 'Bear Regime %', 'Change Pts']
         ui.render_table_panel(
@@ -3866,10 +3866,10 @@ def render_timeseries_dashboard():
             show_index=False, label_col="Date", max_height=560,
             col_precision={"Avg Trace": 1, "Units at Fire": 2, "Build %": 0, "Cut %": 0},
             footer=_glossary({
-                "▲ / ▼": "Symbols firing a ▲ capitulation (sellers in control of a cheap price, "
-                         "value turning back toward fair, not in a quiet regime) or a ▼ "
-                         "distribution on this bar.",
-                "◆ ↑ / ↓": "Symbols firing a RESUME — a trend resuming from inside the zone.",
+                "▲ / ▼": "Symbols entering a state their own record has proven positive (▲) or "
+                         "negative (▼) on this bar.",
+                "In + / In −": "Symbols whose current state is proven positive / negative, "
+                               "whether or not they entered it on this bar.",
                 "Avg Trace": "Cross-sectional mean trace (±100) — how stretched the universe is, "
                              "on balance. θ is ±42.9 for a single name.",
                 "Build / Cut %": "Share of the readable universe whose grid cell builds (Buy / Add "
@@ -4155,7 +4155,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
                     sid_zone = _r0.get('Zone', '—')
                     sid_signal_type = _r0.get('SignalType', 'Neutral')
                     for _c in ('Signal_Score', 'PRG_Hist_Z', 'Side', 'Signal_Kind', 'PRG_State',
-                               'PRG_Armed', 'PRG_Armed_Age', 'PRG_Decl', 'PRG_Decl_Age',
+                               'LG_State_Name', 'LG_Z', 'LG_N', 'PRG_Decl', 'PRG_Decl_Age',
                                'PRG_Push', 'PRG_CTape', 'PRG_VTape', 'CVG_Cell', 'CVG_Held',
                                'CVG_Bars', 'CVG_From', 'CVG_Chart', 'CVG_Lead', 'CVG_Units',
                                'CVG_Action', 'PRG_Why', 'Priority_Long', 'Priority_Short'):
@@ -4269,8 +4269,8 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 # PRAGATI'S COLOUR LANGUAGE, carried from the pane: GREEN AND RED ARE DIRECTION —
 # up-stretch, buyers in control, rich price and a long event are green; their
 # opposites red. GOLD (the app's amber) means one thing: READ WITH CAUTION — a held
-# grid row, split ingredients, a quiet regime, a settling basket, a capitulation still
-# cheapening (the watchlist). It never means up or down. (Siddhi drew its SELL as a yellow
+# grid row, split ingredients, a quiet regime, a settling basket, a ledger still
+# learning. It never means up or down. (Siddhi drew its SELL as a yellow
 # diamond; that is gone, because here yellow is a qualifier, not a side.)
 #
 # THESE ARE FUNCTIONS, NOT CONSTANTS. A module-level colour binds once at import, when
@@ -4466,18 +4466,15 @@ def _grid_cell(row) -> str:
 
 
 _EVENT_TITLES = {
-    "▲ CAPITULATION": "v9's ▲: the grid's Buy · capitulation turning — sellers in control across the "
-                      "ladder at a price cheap past θ, and value momentum has already turned back toward "
-                      "fair. The one event the v9 audit found positive in all three eras (2006-13, "
-                      "2014-19, 2020-26), daily and weekly: a lean of about +0.05σ over 10-20 bars, not a "
-                      "trade, and not on crypto. It stands as the declaration until a ▼.",
-    "▼ DISTRIBUTION": "v9's ▼: sellers have taken control across the ladder of a price rich past θ — "
-                      "the grid's Exit cell. As a state it was followed by underperformance in every era "
-                      "of the v9 audit; the entry itself is too rare to measure alone.",
-    "◆ RESUME ↑": "A trend resuming from inside the zone: the push dipped and returned past its "
-                  "impulse gate, buyers still firmly in control, room left on the value tape.",
-    "◆ RESUME ↓": "A trend resuming from inside the zone: the push bounced and returned past its "
-                  "impulse gate, sellers still firmly in control, room left on the value tape.",
+    "▲ PROVEN +": "Pragyam's ▲: the name has entered a state its own record has proven POSITIVE - "
+                  "after every earlier bar in this state (trend × where the close landed against "
+                  "the cone), the next 10 bars beat the name's own average by more than two "
+                  "standard errors once shrunk toward no edge. Proven on this name's past only; "
+                  "the Edge Study measures whether such proofs carry forward on this universe. "
+                  "It stands as the declaration until a ▼.",
+    "▼ PROVEN −": "Pragyam's ▼: the name has entered a state its own record has proven NEGATIVE - "
+                  "after every earlier bar in this state, the next 10 bars trailed the name's own "
+                  "average by more than two standard errors once shrunk toward no edge.",
 }
 
 
@@ -4486,39 +4483,42 @@ def _event_cell(label) -> str:
     if not s:
         return f'<td class="numeric" style="color:{_dim()}; font-size:{ui.FS["xs"]};">—</td>'
     col = _long_c() if ("▲" in s or "↑" in s) else _short_c()
-    weight = 700 if ("CAPITULATION" in s or "DISTRIBUTION" in s) else 600
-    return (f'<td class="numeric" style="color:{col}; font-weight:{weight}; font-size:{ui.FS["xs"]}; '
+    return (f'<td class="numeric" style="color:{col}; font-weight:700; font-size:{ui.FS["xs"]}; '
             f'white-space:nowrap;" title="{html.escape(_EVENT_TITLES.get(s, s))}">{html.escape(s)}</td>')
 
 
 def _state_cell(row) -> str:
-    """PRG_State — the bar's standing: an event, an open window, paused, or neutral."""
+    """PRG_State — the bar's ledger standing: an event, a proven state, learning, or unproven."""
     s = str(row.get('PRG_State', '') or '')
-    if s.startswith(("CAPITULATION", "DISTRIBUTION", "RESUME")):
-        lab = {"CAPITULATION ▲": "▲ CAPITULATION", "DISTRIBUTION ▼": "▼ DISTRIBUTION",
-               "RESUME ◆↑": "◆ RESUME ↑", "RESUME ◆↓": "◆ RESUME ↓"}.get(s, s)
-        return _event_cell(lab)
-    if s.startswith("WATCH"):
-        n = int(row.get('PRG_Armed_Age', 0) or 0)
-        title = (f"In capitulation for {n} bars — sellers in control of a cheap price — but value is "
-                 "still cheapening. The ▲ fires when value momentum turns back toward fair.")
-        return (f'<td class="numeric" style="color:{_gold_c()}; font-weight:600; font-size:{ui.FS["2xs"]}; '
-                f'white-space:nowrap;" title="{html.escape(title)}">watch ▲ {n}b</td>')
-    if s in ("PAUSED", "WARMING UP"):
-        why = str(row.get('PRG_Why', '') or '')
+    if s in ("PROVEN ▲", "PROVEN ▼"):
+        return _event_cell("▲ PROVEN +" if s == "PROVEN ▲" else "▼ PROVEN −")
+    name = str(row.get('LG_State_Name', '') or '')
+    z, n = row.get('LG_Z'), row.get('LG_N')
+    zt = f" · z {float(z):+.1f}" if z is not None and pd.notna(z) else ""
+    nt = f" · {int(n)} samples" if n is not None and pd.notna(n) else ""
+    if s in ("IN PROVEN +", "IN PROVEN −"):
+        up = s.endswith("+")
+        title = (f"In {name}, a state this name's record has proven {'positive' if up else 'negative'}"
+                 f"{zt}{nt}. The triangle fired when it entered; it is still there.")
+        return (f'<td class="numeric" style="color:{_long_c() if up else _short_c()}; font-size:{ui.FS["2xs"]}; '
+                f'white-space:nowrap;" title="{html.escape(title)}">in {"+" if up else "−"}</td>')
+    if s in ("WARMING UP", "LEARNING"):
+        title = ("No risk forecast yet - the ledger needs about a year of bars." if s == "WARMING UP" else
+                 f"In {name}{nt} - too few on this name to judge it yet.")
         return (f'<td class="numeric" style="color:{_gold_c()}; font-size:{ui.FS["2xs"]};" '
-                f'title="{html.escape("signals paused · " + why)}">{s.lower()}</td>')
+                f'title="{html.escape(title)}">{s.lower()}</td>')
     d = int(row.get('PRG_Decl', 0) or 0)
     if d:
         age = row.get('PRG_Decl_Age')
         age_t = f" {int(age)}b" if age is not None and pd.notna(age) else ""
-        title = ("The standing declaration: the last event was " + ("▲ capitulation" if d > 0 else "▼ distribution")
-                 + f"{age_t} ago. It stands until the opposite one and has no exit — as a held position "
-                 "it carried no edge in the v9 audit; read the grid for where the name stands now.")
+        title = ("The standing declaration: the last event was " + ("▲ proven +" if d > 0 else "▼ proven −")
+                 + f"{age_t} ago. It stands until the opposite one and has no exit. Now: {name}{zt}, unproven.")
         return (f'<td class="numeric" style="color:{_long_c() if d > 0 else _short_c()}; '
                 f'font-size:{ui.FS["2xs"]};" title="{html.escape(title)}">'
                 f'{"▲" if d > 0 else "▼"} decl{age_t}</td>')
-    return f'<td class="numeric" style="color:{_dim()}; font-size:{ui.FS["2xs"]};">—</td>'
+    title = f"{name}{zt}{nt} - unproven on this name." if name else "unproven"
+    return (f'<td class="numeric" style="color:{_dim()}; font-size:{ui.FS["2xs"]};" '
+            f'title="{html.escape(title)}">—</td>')
 
 
 def _evidence_cell(row, side: str) -> str:
@@ -4678,7 +4678,7 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
                 <td class="numeric" style="color:{_t["violet"]}; font-weight:600;">{confluence:.2f}</td>
             </tr>""")
     head = (_th("Rank") + _th("Symbol", numeric=False) + _th("Corr") + _th("Trace", _TH_TRACE)
-            + _th("State", "An event on this bar, a capitulation still cheapening (watch), or the standing declaration")
+            + _th("State", "The ledger: an event on this bar, a proven state the name is still in, learning, or the standing declaration")
             + _th("Grid", _TH_GRID, numeric=False)
             + _th("Zone", "Cumulative-delta flow zone — context only")
             + _th("Actual %", "Symbol's price change on the analysis date")
@@ -4699,7 +4699,7 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timefram
     """Bucket fired events by age (Today, 1d, 2d, 3d, within 5d) for the timeline.
 
     side: 'buy' (long events, BUY_* columns) or 'sell' (short events, SELL_*). Each cell
-    holds the event's glyph at that age — ▲/▼ for capitulation / distribution, ◆ for a RESUME — or '—'.
+    holds the event's glyph at that age — ▲ / ▼, a state proven + / − — or '—'.
 
     A symbol appears in the NEWEST bucket it fired in and nowhere else, and each row
     carries the readings from the bar that fired it (the trace and the grid units from
@@ -4722,7 +4722,7 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timefram
             # the last bucket did NOT fire at offsets 0-3; the *_5d column holds the newest
             # glyph in the window, which is then offset 4's.
             glyph = str(r.get(col, "—"))
-            kind = "TURN" if glyph in ("▲", "▼") else "RESUME"
+            kind = "PROVEN"
 
             def _at(hist_col, fallback_col):
                 v = r.get(hist_col)
@@ -4733,8 +4733,7 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timefram
                 return r.get(fallback_col, float('nan'))
 
             r['_kind'] = kind
-            r['_event'] = (("▲ CAPITULATION" if glyph == "▲" else "▼ DISTRIBUTION") if kind == "TURN"
-                           else f"◆ RESUME {'↑' if _is_buy_side(side) else '↓'}")
+            r['_event'] = "▲ PROVEN +" if glyph == "▲" else "▼ PROVEN −"
             r['_fire_trace'] = _at('Trace_Hist', 'PRG_Trace')
             r['_fire_units'] = _at('Units_Hist', 'CVG_Units')
             r['_age_offset'] = _offset
@@ -4748,14 +4747,13 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timefram
                  if pd.notna(r.get('_fire_units')) and np.isfinite(float(r['_fire_units']))]
         stats[age] = {
             'count': len(rows),
-            'turns': sum(1 for r in rows if r['_kind'] == "TURN"),
+            'turns': len(rows),
             'avg_units': float(np.mean(units)) if units else float('nan'),
             'avg_pct_change': float(np.mean([r.get('PctChange', 0) or 0 for r in rows])) if rows else 0.0,
             'rows': rows,
         }
-    n_turn = sum(s['turns'] for s in stats.values())
     n_all = sum(s['count'] for s in stats.values())
-    trend = f"{n_turn} {'▲' if _is_buy_side(side) else '▼'} · {n_all - n_turn} ◆ in the last 5 bars"
+    trend = f"{n_all} {'▲' if _is_buy_side(side) else '▼'} in the last 5 bars"
     trend_color = _side_palette(side)["accent_light"] if n_all else _neut_c()
     return buckets, stats, trend, trend_color
 
@@ -4801,7 +4799,7 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
     if not rows:
         rows.append(f'<tr><td class="empty" colspan="{_NCOLS}">— no {_pal["label"]} events in the last 5 bars —</td></tr>')
     head = (_th("Symbol", numeric=False) + _th("Price") + _th("% Change")
-            + _th("Event", "▲ CAPITULATION — sellers in control of a cheap price, value turning back toward fair, not in a quiet regime · ▼ DISTRIBUTION — sellers taking control of a rich price · ◆ RESUME — a trend resuming")
+            + _th("Event", "▲ PROVEN + — entered a state this name's own record has proven positive · ▼ PROVEN − — proven negative")
             + _th("Grid", _TH_GRID, numeric=False) + _th("Push", _TH_PUSH)
             + _th("Trace", "The trace at the bar that FIRED this event. " + _TH_TRACE)
             + _th("C", _TH_C) + _th("V", _TH_V)
@@ -4844,7 +4842,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy') -> str:
                 <td class="numeric" style="color: {abs_color}; font-weight: 600;">{abs_strength:.2f}×</td>
             </tr>""")
     head = (_th("Symbol", numeric=False) + _th("Price") + _th("% Change")
-            + _th("State", "An event on this bar, a capitulation still cheapening (watch, gold), the standing declaration, or —")
+            + _th("State", "The ledger: an event on this bar, a proven state still held, learning (gold), the standing declaration, or —")
             + _th("Grid", _TH_GRID, numeric=False) + _th("Push", _TH_PUSH) + _th("Trace", _TH_TRACE)
             + _th("C", _TH_C) + _th("V", _TH_V)
             + _th("Hold", "Bars into the declared hold window of the latest event")
@@ -4902,7 +4900,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy') -> st
                                 "by stretch: the long side leads with the names stretched furthest "
                                 "down, the short side with the names stretched furthest up.")
             + _th("Price") + _th("% Change")
-            + _th("State", "An event on this bar, a capitulation still cheapening (watch, gold), the standing declaration, or —")
+            + _th("State", "The ledger: an event on this bar, a proven state still held, learning (gold), the standing declaration, or —")
             + _th("Grid", _TH_GRID, numeric=False) + _th("Push", _TH_PUSH) + _th("Trace", _TH_TRACE)
             + _th("C", _TH_C) + _th("V", _TH_V)
             + _th("Regime", "HMM regime — risk context, not a signal input")
@@ -4974,7 +4972,7 @@ def render_correlation_results(corr_data: dict) -> None:
     target_name = corr_data["target_name"]
     lookback = corr_data["lookback"]
     method = corr_data["method"]
-    trigger = corr_data.get("trigger") or "▲ capitulation · ▼ distribution · ◆ RESUME"
+    trigger = corr_data.get("trigger") or "▲ proven + · ▼ proven − (this name's ledger)"
     iclass = corr_data.get("iclass", "—")
 
     tab1, tab2, tab3 = st.tabs([
@@ -5080,8 +5078,8 @@ def render_correlation_results(corr_data: dict) -> None:
             "Each setup type is ranked by Confluence Score (0-1) = |Correlation| \u00d7 "
             "normalised signal strength. Highest rank = strongest overlap between the "
             "correlation relationship and a live Pragati reading. Look for a score above "
-            "0.7, a divergence past \u00b13%, and an event (\u25b2 capitulation / \u25bc distribution) "
-            "or a watch in State rather than a dash — and read the Grid column "
+            "0.7, a divergence past \u00b13%, and an event (\u25b2 / \u25bc, a state proven on "
+            "the name's own record) or a proven state in State rather than a dash — and read the Grid column "
             "for where the name already stands.",
             color="cyan",
         )
@@ -5299,29 +5297,21 @@ def render_correlation_results(corr_data: dict) -> None:
 
 
 _SIGNAL_TYPE_REFERENCE = [
-    ("▲ CAPITULATION · ▼ DISTRIBUTION — read from the grid", "emerald",
-     "v9's events. ▲ fires on the first closed bar the grid stands in Buy · capitulation — the "
-     "conviction tape past −30 and held there by conviction's own histogram (sellers in "
-     "control across the ladder), the value tape cheap past −θ — with value momentum "
-     "REVERTING: the fast end of value has already turned back toward fair — and, since v9.3, "
-     "not while conviction's regime is QUIET (its σ in the bottom fifth of its history, where a "
-     "small imbalance scales into a large reading). ▼ fires on the "
-     "first bar sellers hold control of a price rich past +θ (Exit · distribution). A 10-bar "
-     "cooldown per side; the last one stands as the declaration, with no exit. Measured in "
-     "the v9 audit (studies/pragati_v9_audit.md; 380 instruments, six classes, three eras, "
-     "scored without look-ahead): the ▲ was positive in 2006-13, 2014-19 and 2020-26, on daily "
-     "and weekly bars — about +0.05σ over 10-20 bars, a lean rather than a trade, and not on "
-     "crypto. The ▼'s state was followed by underperformance in every era; the entry itself "
-     "is too rare to measure alone. v8's TURN (a stretch crossing back through θ, confirmed on "
-     "its tapes) faded to nothing after 2020 and read negative on weekly bars; v9.2 removed "
-     "it."),
-    ("◆ RESUME · a trend resuming", "cyan",
-     "OFF BY DEFAULT since v8. Measured across 380 instruments it was negative outside crypto "
-     "in the v8 audit and negative or mixed again in v9, so the screen does not fire it. The rule, when switched on (engine settings): chart conviction "
-     "on the ◆'s side; the histogram dipped to the wrong side inside 6 bars and now crosses its "
-     "impulse gate (k·σ); the conviction tape past its inner zone on the ◆'s side; the value "
-     "tape short of θ; effort not absorbed on the bar. A ▲▼ takes precedence, and the two "
-     "share one 10-bar cooldown per direction."),
+    ("▲ PROVEN + · ▼ PROVEN − — Pragyam's ledger", "emerald",
+     "The events are Pragyam's triangles (ledger.py, ported bar for bar from pragyam.pine). Every "
+     "closed bar sits in one of nine states: the trend - the move over 63, 126 and 252 bars in "
+     "units of the risk forecast - down, flat or up, crossed with where the close landed against "
+     "the cone drawn 10 bars ago - below, inside or above. For each state the ledger keeps THIS "
+     "name's record: the next 10 bars after every bar spent in it, from the next open, in units "
+     "of the risk forecast, against the name's own average. It shrinks that record toward 'no "
+     "edge' (a real edge is assumed to be about 0.10σ at most) and calls a state PROVEN past two "
+     "standard errors. ▲ fires on the first bar of a state proven positive, ▼ proven negative. "
+     "No cooldown and no gate on the Pragati stack; the last one stands as the declaration. "
+     "Rare by design: across 151 instruments about one triangle per 5,500 bars, and on random "
+     "walks the rule calls a state proven on 0.4% of bars. A triangle says the name's own past "
+     "has proven its state - not that the state carries an edge across names: pooled, no state "
+     "reached |t| = 1.3 outside crypto. The ledger needs about 563 bars before it can prove "
+     "anything."),
     ("The grid · where a name stands between signals", "violet",
      "The conviction tape (who controls) is the row — UP past +30, DOWN past −30, FAINT "
      "between — and the value tape (where price stands) the column — cheap past −θ, rich past "
@@ -5330,10 +5320,10 @@ _SIGNAL_TYPE_REFERENCE = [
      "hold a cheap or fair price, Buy · turned 3, Hold · building 1½ and Trim · paid ¾ where "
      "buyers do. Conviction's own histogram decides when a row may change — a confirmed push, "
      "else the row is HELD (gold). The units are graded by where the name sits inside its "
-     "cell. A weight, not a forecast — and the source of v9's ▲▼."),
+     "cell. A weight, not a forecast."),
     ("Scope · measured on YOUR universe", "amber",
-     "The v9 audit measured the stack on 380 instruments (the readings describe; the "
-     "capitulation carries the one robust edge). The app still measures it on YOUR symbols: an event study over ~15 years "
+     "The readings describe; the triangles are proven per name. The app measures whether "
+     "those proofs carry forward on YOUR symbols: an event study over ~15 years "
      "through the same engine call the screener makes, each instrument's own drift removed "
      "causally (its trailing drift), vol-normalised, block-bootstrapped over dates, with the power stated. "
      "Parameters are never tuned to your data. A 'no edge' or 'underpowered' verdict is "
@@ -5382,7 +5372,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
                                               dates=analysis_date, ext="xlsx"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width='stretch', key="sysdata_dl_buy", disabled=len(buy_df) == 0,
-            help=f"{len(buy_df)} symbols firing ▲ capitulation or ◆ RESUME ↑ on this bar.",
+            help=f"{len(buy_df)} symbols firing ▲ on this bar.",
         )
     with dl3:
         st.download_button(
@@ -5393,7 +5383,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
                                               dates=analysis_date, ext="xlsx"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width='stretch', key="sysdata_dl_sell", disabled=len(sell_df) == 0,
-            help=f"{len(sell_df)} symbols firing ▼ distribution or ◆ RESUME ↓ on this bar.",
+            help=f"{len(sell_df)} symbols firing ▼ on this bar.",
         )
 
     # ── Raw Data Table ────────────────────────────────────────────────────
@@ -5443,8 +5433,8 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
                              "and the same push in five levels (+2 impulse … −2 impulse).",
             "C tape / V tape": "The two tapes: who controls (conviction) and where price stands "
                                "(value, + rich / − cheap), across the ladder. The grid's axes.",
-            "Kind / State": "The event fired on this bar (TURN = the ▲▼, RESUME = ◆) and the bar's "
-                            "state — an event, WATCH (in capitulation, value still cheapening), PAUSED, or NEUTRAL.",
+            "Kind / State": "The event fired on this bar (PROVEN = a ▲▼) and the bar's ledger state — "
+                            "PROVEN ▲ / ▼, IN PROVEN + / −, LEARNING, UNPROVEN or WARMING UP.",
             "Grid / Units": "The conviction-value grid's action and its measured units — a weight, "
                             "not a forecast.",
             "Conviction / Value": "The trace's two ingredients on this chart, each on its ±100 scale.",
@@ -5470,8 +5460,8 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
                                   + (" (adapted)" if sid.norm_is_adapted else ""),
         "Signal EMA": str(_p.signal),
         "θ (trace stretch)": f"±{sv.THETA_OSC:.1f}",
-        "▲▼ · ◆": f"{'on' if _p.turn else 'off'} · {'on' if _p.resume else 'off'}",
-        "Impulse k · cooldown": f"{float(_p.k):g}σ · {_p.cool} bars",
+        "Signals": "▲▼ ledger · proven past 2 s.e. · believable edge 0.10σ",
+        "Impulse k": f"{float(_p.k):g}σ",
         "Hold horizon": f"{sid.horizon} bars",
         "Round-trip cost": f"{sid.cost_bps:g} bps",
         "Instrument class": sid.iclass,
@@ -5494,14 +5484,13 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
 
 
 def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
-    """The conviction-value grid across the universe: the census, the watchlist, the lists."""
+    """The conviction-value grid across the universe: the census and the lists."""
     cells = pd.to_numeric(results_df.get('CVG_Cell', pd.Series(dtype=float)), errors='coerce').fillna(cg.UNREAD)
     read = results_df[cells != cg.UNREAD]
     sides = pd.to_numeric(read.get('CVG_Side', pd.Series(dtype=float)), errors='coerce')
     n_read = max(len(read), 1)
     n_build, n_cut = int((sides > 0).sum()), int((sides < 0).sum())
     n_held = int(read.get('CVG_Held', pd.Series(dtype=bool)).fillna(False).astype(bool).sum())
-    armed = pd.to_numeric(results_df.get('PRG_Armed', pd.Series(dtype=float)), errors='coerce').fillna(0)
 
     ui.render_section_header(
         "Conviction-Value Grid",
@@ -5524,9 +5513,7 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
                      "tooltip": charts.TONE_LABEL[tone]})
     ui.render_kpi_strip(kpis, max_cols=5, key=f"{key}-tone-strip")
     ui.render_note(f"**{n_build}** names sit on the build side and **{n_cut}** on the cut side. "
-                   f"**{n_held}** rows are *held* — the tape moved, the push has not confirmed — "
-                   f"and **{int((armed != 0).sum())}** names sit in capitulation with value still "
-                   f"cheapening — the watchlist.")
+                   f"**{n_held}** rows are *held* — the tape moved, the push has not confirmed.")
 
     # ── the plane: every name at its two tapes ──
     ui.render_sub_header("Conviction-value map")
@@ -5535,7 +5522,7 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
     ui.render_note("Each name sits where its two tapes put it; its **shape and colour are its grid "
                    "state**. Dotted lines are the knees (±30 conviction, ±θ value). A *hollow* "
                    "point is a held row — the tape has moved into a new cell but the push has not "
-                   "yet backed it. An accent ring marks a ▲▼ or ◆ on this bar.")
+                   "yet backed it. An accent ring marks a ▲▼ on this bar.")
 
     ui.render_sub_header("Census")
     n_un = int((cells == cg.UNREAD).sum())
@@ -5554,21 +5541,6 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
                    "plain oversold stopped; *Exit · distribution* was followed by underperformance in "
                    "every era; the other cells are near zero. The v8 units held and beat the seed in "
                    "Pragyam's own allocator. Crypto trends and is the stated exception.")
-
-    # ── the watchlist: capitulations whose value has not turned ──
-    wl = results_df[armed != 0].copy()
-    ui.render_sub_header(f"Watchlist · capitulation, value still cheapening ({len(wl)})")
-    ui.render_note("Sellers in control across the ladder at a price cheap past θ — *Buy · "
-                   "capitulation* — but the fast end of value is still cheapening. The ▲ fires on "
-                   "the bar value momentum turns back toward fair. Sorted by bars in the cell.")
-    if len(wl):
-        wl['_w'] = pd.to_numeric(wl.get('PRG_Armed_Age'), errors='coerce')
-        wl = wl.sort_values(['PRG_Armed', '_w'], ascending=[False, True])
-        with ui.html_panel(f"{key}-watch", context=_chart_ctx(f"{len(wl)} in capitulation")):
-            st.components.v1.html(_build_narrative_table_html(wl, side='buy'),
-                                  height=ui.table_iframe_height(len(wl), max_height=560))
-    else:
-        ui_info("No name sits in capitulation with value still cheapening on this bar.")
 
     # ── the lists, by what the grid says to do ──
     ui.render_sub_header("Names by action")
@@ -5600,13 +5572,11 @@ def _render_ranking_tab(results_df, sid, study, _mv_label, _mv_kind, key: str = 
     )
     _n = max(len(results_df), 1)
     side = results_df['Side'] if 'Side' in results_df.columns else pd.Series(dtype=str)
-    kind = results_df['Signal_Kind'] if 'Signal_Kind' in results_df.columns else pd.Series(dtype=str)
     n_long, n_short = int((side == 'Buy').sum()), int((side == 'Sell').sum())
-    n_turn = int((kind == 'TURN').sum())
     stretched = pd.to_numeric(results_df.get('Signal_Score', pd.Series(dtype=float)), errors='coerce').abs() >= sv.THETA_OSC
     s1, s2, s3, s4 = st.columns(4)
     with s1: ui.render_metric_card("Events Today", f"{n_long + n_short}",
-                                   f"{n_long} long · {n_short} short · {n_turn} ▲▼", "info")
+                                   f"{n_long} ▲ · {n_short} ▼ · states proven per name", "info")
     with s2: ui.render_metric_card("Stretched", f"{int(stretched.sum())}",
                                    f"{stretched.sum()/_n*100:.0f}% of names with the trace past θ", "neutral")
     with s3:
@@ -5897,11 +5867,11 @@ def main():
         _paused = int(_run_stats.get("paused", 0) or 0)
         if _paused:
             _notices.append({
-                "kind": "info", "title": "Signals paused on some names",
+                "kind": "info", "title": "Tapes warming on some names",
                 "body": f"{_paused} symbol(s) have a calibrated histogram but a tape still warming "
-                        f"— the signal set needs both tapes, so they carry a grid state (or read "
-                        f"unread) but cannot fire. The deepest wait is the value ladder's parent "
-                        f"rung ({sid.value_ladder_label}).",
+                        f"— they read unread on the grid until both tapes are ready. The deepest "
+                        f"wait is the value ladder's parent rung ({sid.value_ladder_label}). The ▲▼ "
+                        f"do not wait for the tapes: they come from each name's own ledger.",
             })
         if sid.norm_is_adapted:
             # The one indicator input on screen that is Sanket's rather than the Pine's. It
@@ -5959,10 +5929,10 @@ def main():
                     with m1: ui.render_metric_card("Universe Stretch", _fmt_num(_tr.mean(), "{:+.1f}"),
                                                    "mean trace · + stretched up, − down (θ = ±43)", "neutral")
                     with m2: ui.render_metric_card("▲ Long Events", str(n_buy),
-                                                   f"{n_buy/_n*100:.0f}% of universe · ▲ capitulation or ◆ ↑",
+                                                   f"{n_buy/_n*100:.0f}% of universe · a state proven +",
                                                    "success" if n_buy else "neutral")
                     with m3: ui.render_metric_card("▼ Short Events", str(n_sell),
-                                                   f"{n_sell/_n*100:.0f}% of universe · ▼ distribution or ◆ ↓",
+                                                   f"{n_sell/_n*100:.0f}% of universe · a state proven −",
                                                    "danger" if n_sell else "neutral")
                     with m4: ui.render_metric_card("Build-Side", _fmt_num(_build, "{:.0f}%"),
                                                    "names the grid places in Buy / Accumulate",
@@ -6008,12 +5978,12 @@ def main():
                     buys_df  = results_df[results_df['BUY_5d'].astype(str)  != "—"].copy().sort_values('Priority_Long',  ascending=False, na_position='last')
                     sells_df = results_df[results_df['SELL_5d'].astype(str) != "—"].copy().sort_values('Priority_Short', ascending=False, na_position='last')
                     _age_order = _age_labels(timeframe)
-                    _armed = pd.to_numeric(results_df.get('PRG_Armed', pd.Series(dtype=float)), errors='coerce').fillna(0)
+                    _lp = pd.to_numeric(results_df.get('LG_Proven', pd.Series(dtype=float)), errors='coerce').fillna(0)
                     _when = 'this week' if timeframe == 'Weekly' else 'today'
 
                     _fired_today_buy  = int((results_df['BUY_Today'].astype(str)  != "—").sum())
                     _fired_today_sell = int((results_df['SELL_Today'].astype(str) != "—").sum())
-                    _turns_today = int((results_df.get('Signal_Kind', pd.Series(dtype=str)) == 'TURN').sum())
+                    _turns_today = int((results_df.get('Signal_Kind', pd.Series(dtype=str)) == 'PROVEN').sum())
                     mc1, mc2, mc3, mc4 = st.columns(4)
                     with mc1:
                         ui.render_metric_card("▲ Long Events", str(len(buys_df)),
@@ -6023,10 +5993,10 @@ def main():
                                               f"{_fired_today_sell} fired {_when} · last 5 bars", "danger")
                     with mc3:
                         ui.render_metric_card("▲▼ " + _when.title(), str(_turns_today),
-                                              "capitulation turns · distribution", "violet")
+                                              "states proven on each name's own record", "violet")
                     with mc4:
-                        ui.render_metric_card("Watchlist", str(int((_armed != 0).sum())),
-                                              "in capitulation, value still cheapening", "warning")
+                        ui.render_metric_card("In a Proven State", f"{int((_lp > 0).sum())} + · {int((_lp < 0).sum())} −",
+                                              "names whose current state is proven", "warning")
 
                     if not (buys_df.empty and sells_df.empty):
                         buy_tab, sell_tab = st.tabs(["▲ Long Events by Timing", "▼ Short Events by Timing"])
@@ -6048,9 +6018,9 @@ def main():
                         with buy_tab:
                             st.markdown(
                                 '<div style="font-family:var(--data); font-size:var(--fs-xs); color:var(--ink-tertiary); '
-                                'padding:0.2rem 0 0.5rem 0;"><b>▲ CAPITULATION</b> — sellers in control across the ladder '
-                                'at a price cheap past θ, and value has turned back toward fair: the v9 audit\'s one event '
-                                'positive in every era (about +0.05σ over 10-20 bars — a lean, not a trade; not on crypto). '
+                                'padding:0.2rem 0 0.5rem 0;"><b>▲ PROVEN +</b> — the name entered a state its own record '
+                                'has proven positive: after every earlier bar in this state, the next 10 bars beat the '
+                                'name\'s own average by more than two standard errors, once shrunk toward no edge. '
                                 f'Entry is the next session\'s open; the declared hold is {sid.horizon} '
                                 'bars. The Grid column says where each name already stands.</div>',
                                 unsafe_allow_html=True,
@@ -6059,10 +6029,9 @@ def main():
                         with sell_tab:
                             st.markdown(
                                 '<div style="font-family:var(--data); font-size:var(--fs-xs); color:var(--ink-tertiary); '
-                                'padding:0.2rem 0 0.5rem 0;"><b>▼ DISTRIBUTION</b> — sellers have taken control across the '
-                                'ladder of a price rich past θ. As a state it was followed by underperformance in every era '
-                                'of the v9 audit; the entry itself is too rare to measure alone. The Edge Study in System '
-                                'Data measures both on this universe.</div>',
+                                'padding:0.2rem 0 0.5rem 0;"><b>▼ PROVEN −</b> — the name entered a state its own record '
+                                'has proven negative. Proven on the name\'s past only: the Edge Study in System Data '
+                                'measures whether such proofs carry forward on this universe.</div>',
                                 unsafe_allow_html=True,
                             )
                             _render_age_table(sells_df, 'sell')
@@ -6070,9 +6039,9 @@ def main():
                         ui_info(
                             f"**No events fired** for {selected_index} on {analysis_date} ({timeframe}). "
                             f"All {_n_analyzed} symbols were analyzed and none fired a ▲ or ▼ in "
-                            "the last 5 bars — capitulations are rare, so quiet stretches are normal. "
-                            "The Grid tab shows where every name stands, and its watchlist the names in "
-                            "capitulation whose value has not yet turned."
+                            "the last 5 bars — a triangle needs a state the name's own record has proven, "
+                            "about one per 5,500 bars, so quiet stretches are normal. The Grid tab shows "
+                            "where every name stands."
                         )
                     if _n_warming:
                         ui.render_note(f"{_n_warming} symbol(s) excluded — fewer than {sid.min_bars} bars of history.")

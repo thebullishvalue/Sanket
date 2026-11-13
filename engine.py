@@ -15,8 +15,11 @@ THE STACK, bottom to top
                    explain (Samanvaya's unified z), on the chart and its parent
     pragati.py     CONVICTION — who controls, how firmly, on the chart and its
                    ladder; the TRACE (conviction × value) and its HISTOGRAM;
-                   divergence evidence; the ◆'s condition, and signals() —
-                   the ▲▼ read from the grid, with the ◆ and the declaration
+                   divergence evidence
+    ledger.py      THE SIGNALS — Pragyam's proven-state triangles: nine states
+                   (trend × where the close landed against its cone), each with
+                   this name's own record, shrunk toward no edge; ▲▼ on entering
+                   a state that record has proven
     cvgrid.py      THE GRID — the 3 × 3 state the two tapes place a name in,
                    named as an action with its measured units
     engine.py      THIS FILE — the Sanket-facing layer: settings, per-symbol
@@ -26,14 +29,14 @@ THE STACK, bottom to top
 
 THREE KINDS OF OUTPUT, AND WHAT EACH CLAIMS
 ───────────────────────────────────────────
-    EVENTS    ▲ CAPITULATION — the grid's Buy · capitulation turning: sellers in
-              control across the ladder at a price cheap past θ, and value
-              momentum already reverting. ▼ DISTRIBUTION — sellers taking control
-              of a price rich past θ. v9's events, read from the grid (the Pine's
-              section 8b); the last one stands as the DECLARATION. ◆ RESUME is off
-              by default.
-    WATCH     a name in capitulation whose value is still cheapening — the ▲
-              comes when it turns.
+    EVENTS    ▲ PROVEN + — the first closed bar of a state this name's own history
+              has proven POSITIVE (the shrunk edge past two standard errors).
+              ▼ PROVEN − — the same, proven NEGATIVE. Pragyam's triangles, read by
+              ledger.py; the last one stands as the DECLARATION. Rare by design:
+              about one per 5,500 bars on 151 instruments, 0.4% of bars on random
+              walks. No cooldown, no gate on the Pragati stack.
+    LEDGER    every bar's state and its record on this name: the samples behind
+              it, the believed edge and its z - proven, unproven or learning.
     STATE     the grid cell — Buy / Accumulate / Hold / Wait / Trim / Exit —
               where the name stands between events. Every name has one.
 
@@ -45,7 +48,7 @@ RANKING IS BY STRETCH, read as REVERSION — measured, not inherited:
 
 s = −trace / 200 ∈ (−½, ½): the name stretched furthest DOWN (sellers in control,
 priced cheap) leads the long side; s' = −s, so the most stretched UP leads the
-short side. A ▲▼ on this bar — v9: a capitulation turning, or distribution —
+short side. A ▲▼ on this bar — a state this name's ledger has proven —
 stays on top of its side.
 
 Why not the grid's weight (v8.0.0 ranked by it, banded TURN > RESUME > hold >
@@ -63,9 +66,9 @@ stretch ranking beat the grid's on average (daily −0.007σ vs −0.043σ, week
 the trace carries ~0 information — on NSE equities this ranking IS short-term
 reversal, read through the indicator.
 
-The grid, RESUME, the hold and the watchlist are still computed and shown — they
-describe a name; they do not order the list. (That study measured v8's TURN on top;
-v9's ▲ is the capitulation turn, measured separately in studies/pragati_v9_audit.md.)
+The grid and the hold are still computed and shown — they describe a name; they do
+not order the list. (That study measured v8's TURN on top; the ▲▼ are now the
+ledger's proven-state triangles, which no study has placed on top of the stretch.)
 
 WHAT IS NOT CLAIMED
 ───────────────────
@@ -76,10 +79,10 @@ place; the scaling is calibrated. The chart-only reversal trigger had no edge
 (+0.036R / −0.016R). NOTHING reaches significance once overlapping windows are
 accounted for (best t = 1.9 of 48 cells). The stack itself was measured by the
 v8 and v9 audits (studies/): the readings carry almost no timing information of
-their own; the capitulation state and its turn carry the one robust edge (+0.05 to
-+0.08σ over 10-20 bars in each era outside crypto). So the number that applies to
-YOUR screen is still the one edge.py measures on your symbols — reported, never
-applied.
+their own. The ledger's triangles claim nothing pooled: across 151 instruments no
+state's pooled edge reached |t| = 1.3 outside crypto; a triangle says only that THIS
+name's own record has proven its state. So the number that applies to YOUR screen
+is the one edge.py measures on your symbols — reported, never applied.
 
 Bar convention: signals are committed on the close of the bar that produced
 them (the Pine's barstate.isconfirmed); entry is the next session's open. A
@@ -94,6 +97,7 @@ import pandas as pd
 
 import cvgrid as cg
 import intraday as idm
+import ledger as lg
 import pragati as pg
 import samanvaya as sv
 
@@ -183,7 +187,7 @@ class EngineSettings:
         p = self.params
         return (self.chart, p.length, p.smooth, p.norm, p.participation, p.denominator,
                 p.vol_n, float(p.cap), float(p.z1), float(p.z2), float(p.mix), p.signal,
-                p.turn, p.resume, float(p.k), p.pull, p.effort, p.cool,
+                float(p.k),
                 p.pl, p.pr, p.gap_min, p.gap_max, p.zone_gate, p.quiet, p.parent_norm,
                 int(self.horizon), sv.DEFAULT_BASKET)
 
@@ -209,11 +213,11 @@ class EngineSettings:
     @property
     def trigger_label(self) -> str:
         """How the signal set reads in prose — the one place it is worded."""
-        return "▲ capitulation · ▼ distribution · ◆ RESUME"
+        return "▲ proven + · ▼ proven − (this name's ledger)"
 
     @property
     def trigger_short(self) -> str:
-        return f"▲▼ · ◆ · {self.horizon}b"
+        return f"▲▼ ledger · {self.horizon}b"
 
     @property
     def min_bars(self) -> int:
@@ -295,9 +299,8 @@ def cost_in_vol_units(cost_bps: float, sigma_h: float) -> float:
 # ════════════════════════════════════════════════════════════════════════════════════════
 # PER-SYMBOL FEATURES  (time-series; one name, every bar)
 # ════════════════════════════════════════════════════════════════════════════════════════
-KIND_GLYPH = {"turn": "▲", "resume": "◆"}          # per side: ▲/▼ TURN, ◆ RESUME
-EVENT_LABEL = {("turn", 1): "▲ CAPITULATION", ("turn", -1): "▼ DISTRIBUTION",
-               ("resume", 1): "◆ RESUME ↑", ("resume", -1): "◆ RESUME ↓"}
+KIND_GLYPH = {"proven": "▲"}                     # per side: ▲ / ▼ — the ledger's triangles
+EVENT_LABEL = {("proven", 1): "▲ PROVEN +", ("proven", -1): "▼ PROVEN −"}
 
 
 def _lower(df: pd.DataFrame) -> pd.DataFrame:
@@ -356,12 +359,12 @@ def compute_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
     ch = pg.chart_conviction(lo, p)
     cv_ready = np.cumsum(ch["sd_ok"].to_numpy(bool)) > p.norm + p.smooth + p.signal
     grid = cg.classify(out, ch["osc"], ch["raw_sd"], cv_ready, p)
-    # v9: the ▲▼ are read from the grid (the Pine's section 8b) — the capitulation
-    # turn and distribution — with the ◆, the declaration and the watch.
-    out = pg.signals(out, grid, p)
+    # The ▲▼ are the ledger's (ledger.py): Pragyam's proven-state triangles, on the
+    # chart's own OHLC. They read nothing from the Pragati stack above.
+    led = lg.compute(lo, settings.horizon).reindex(out.index)
     extra = val[["rv_z", "breadth_z", "legs_split", "hedge", "drivers", "n_obs", "enough",
                  "basket_warm", "bars_since_rot"]]
-    return pd.concat([out, grid, extra], axis=1)
+    return pd.concat([out, grid, led, extra], axis=1)
 
 
 def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
@@ -388,17 +391,24 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     EVIDENCE
       PRG_Bull_Div / PRG_Bear_Div       a qualified divergence confirmed on this bar
       PRG_Div_Seen_Bull / _Bear, PRG_Abs_Seen   in the last 20 bars (context only)
-    EVENTS
-      turn_buy / turn_sell / resume_long / resume_short     the four signals
-      long_cond / short_cond                                either kind, per side
+    EVENTS  (ledger.py — Pragyam's proven-state triangles)
+      turn_buy / turn_sell       ▲ / ▼: the first bar of a state this name's record has proven
+      long_cond / short_cond     the same, per side
       PRG_Event                  the label of the event on this bar, else ''
-      PRG_Armed / PRG_Armed_Age  in capitulation, value still cheapening (+1) and bars in the cell
       PRG_Decl / PRG_Decl_Age    the standing declaration (+1 ▲ / −1 ▼) and its age
       PRG_Hold_Dir / PRG_Hold_Age / PRG_Hold_Kind   the latest event inside its horizon
+    LEDGER
+      LG_State / LG_State_Name   this bar's state, 0 … 8 (−1 warming) and its name
+      LG_N                       independent samples behind it on this name
+      LG_Edge / LG_Post / LG_Z   its edge against the name's own mean (σ over the horizon),
+                                 the edge after shrinkage, and that in standard errors
+      LG_Proven                  +1 / −1 when |z| ≥ 2, else 0
+      LG_Sigma / LG_Trend        the risk forecast per bar, and the trend in σ
     STATE
       CVG_Cell / CVG_Action / CVG_Why / CVG_Units / CVG_Side / CVG_Held / CVG_Bars /
       CVG_From / CVG_Chart / CVG_Lead
-      PRG_State                  WARMING UP / PAUSED / ▲ … / WATCH ▲ … / NEUTRAL
+      PRG_State                  WARMING UP / PROVEN ▲ / PROVEN ▼ / IN PROVEN + / IN PROVEN − /
+                                 LEARNING (too few samples) / UNPROVEN
       Signal_Score               the trace — what the level views sort on
     """
     settings = settings or settings_for(None, None, "Daily")
@@ -411,8 +421,8 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     horizon = int(settings.horizon)
 
     b = lambda c: f[c].fillna(False).astype(bool).to_numpy()     # noqa: E731
-    tb, ts, rl, rs = b("turn_buy"), b("turn_sell"), b("resume_long"), b("resume_short")
-    long_c, short_c = tb | rl, ts | rs
+    tb, ts = b("turn_buy"), b("turn_sell")
+    long_c, short_c = tb, ts
 
     df["PRG_Conv"] = f["conv"].where(f["conv_ready"].fillna(False).astype(bool))
     df["PRG_Conv_Z"] = f["conv_z"]
@@ -451,15 +461,22 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
         df["PRG_" + c.title().replace("_", "")] = f[c]
 
     df["turn_buy"], df["turn_sell"] = tb, ts
-    df["resume_long"], df["resume_short"] = rl, rs
     df["long_cond"], df["short_cond"] = long_c, short_c
-    df["PRG_Event"] = np.select([tb, ts, rl, rs],
-                                [EVENT_LABEL[("turn", 1)], EVENT_LABEL[("turn", -1)],
-                                 EVENT_LABEL[("resume", 1)], EVENT_LABEL[("resume", -1)]], "")
+    df["PRG_Event"] = np.select([tb, ts], [EVENT_LABEL[("proven", 1)], EVENT_LABEL[("proven", -1)]], "")
 
-    armed = f["armed"].fillna(0).astype(int).to_numpy()
-    df["PRG_Armed"] = armed
-    df["PRG_Armed_Age"] = np.where(armed != 0, f["armed_age"].fillna(0).astype(int), 0)
+    # ── the ledger behind them ──
+    lstate = f["lg_state"].fillna(-1).astype(int).to_numpy()
+    lz = pd.to_numeric(f["lg_z"], errors="coerce").to_numpy(dtype=float)
+    lproven = f["lg_proven"].fillna(0).astype(int).to_numpy()
+    df["LG_State"] = lstate
+    df["LG_State_Name"] = [lg.state_name(s) for s in lstate]
+    df["LG_N"] = f["lg_n"]
+    df["LG_Edge"] = f["lg_edge"]
+    df["LG_Post"] = f["lg_post"]
+    df["LG_Z"] = f["lg_z"]
+    df["LG_Proven"] = lproven
+    df["LG_Sigma"] = f["lg_sigma"]
+    df["LG_Trend"] = f["lg_trend"]
     decl = f["decl"].fillna(0).astype(int).to_numpy()
     since = f["decl_since"].fillna(-1).astype(int).to_numpy()
     pos = np.arange(T)
@@ -469,7 +486,7 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     # ── the hold window: the latest event, while it is inside the declared horizon ──
     fires = long_c | short_c
     fire_dir = np.where(long_c, 1.0, np.where(short_c, -1.0, np.nan))
-    fire_kind = np.where(tb, "▲ capitulation", np.where(ts, "▼ distribution", np.where(rl | rs, "◆ RESUME", None)))
+    fire_kind = np.where(tb, "▲ proven +", np.where(ts, "▼ proven −", None))
     last_fire = pd.Series(np.where(fires, pos.astype(float), np.nan)).ffill().to_numpy()
     held_dir = pd.Series(fire_dir).ffill().to_numpy()
     held_kind = pd.Series(fire_kind, dtype=object).ffill().to_numpy()
@@ -496,12 +513,10 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     df["CVG_Chart_Action"] = [cg.NAMES[c] for c in chart_cell]
     df["CVG_Lead"] = f["cvg_lead"].fillna(0).astype(int)
 
-    stack = b("stack_ok")
-    hist_ready = b("hist_ready")
     df["PRG_State"] = np.select(
-        [~hist_ready, ~stack, tb, ts, rl, rs, armed > 0, armed < 0],
-        ["WARMING UP", "PAUSED", "CAPITULATION ▲", "DISTRIBUTION ▼", "RESUME ◆↑", "RESUME ◆↓", "WATCH ▲", "WATCH ▼"],
-        default="NEUTRAL")
+        [lstate < 0, tb, ts, lproven > 0, lproven < 0, ~np.isfinite(lz)],
+        ["WARMING UP", "PROVEN ▲", "PROVEN ▼", "IN PROVEN +", "IN PROVEN −", "LEARNING"],
+        default="UNPROVEN")
     df["Signal_Score"] = df["PRG_Trace"]
     return df
 
@@ -515,8 +530,9 @@ SNAPSHOT_COLUMNS = (
     "PRG_Eff_Pct", "PRG_Absorbed", "PRG_Hedge", "PRG_Drivers", "PRG_RV_Z", "PRG_Breadth_Z",
     "PRG_Split", "PRG_Quiet", "PRG_Settling", "PRG_Legs_Split", "PRG_Stack_OK", "PRG_Why",
     "PRG_Div_Seen_Bull", "PRG_Div_Seen_Bear", "PRG_Abs_Seen", "PRG_Event",
-    "turn_buy", "turn_sell", "resume_long", "resume_short", "long_cond", "short_cond",
-    "PRG_Armed", "PRG_Armed_Age", "PRG_Decl", "PRG_Decl_Age",
+    "turn_buy", "turn_sell", "long_cond", "short_cond",
+    "LG_State", "LG_State_Name", "LG_N", "LG_Edge", "LG_Post", "LG_Z", "LG_Proven", "LG_Sigma", "LG_Trend",
+    "PRG_Decl", "PRG_Decl_Age",
     "PRG_Hold_Dir", "PRG_Hold_Age", "PRG_Hold_Kind",
     "CVG_Cell", "CVG_Action", "CVG_Why", "CVG_Units", "CVG_Side", "CVG_Held", "CVG_Bars",
     "CVG_From", "CVG_Chart", "CVG_Chart_Action", "CVG_Lead", "PRG_State", "Signal_Score",
@@ -536,8 +552,7 @@ def _clean(v):
 def snapshot(df: pd.DataFrame, idx_pos: int, settings: EngineSettings) -> dict:
     """The engine's fields for one bar, plus the per-age event history the tables bucket.
 
-    ``BUY_Today … BUY_5d`` carry the long event's glyph at that age (▲ capitulation, ◆ RESUME)
-    or '—'; ``SELL_*`` the short side's. ``Kind_Hist`` / ``Trace_Hist`` / ``Close_Hist``
+    ``BUY_Today … BUY_5d`` carry the long event's glyph at that age (▲ proven +) or '—'; ``SELL_*`` the short side's. ``Kind_Hist`` / ``Trace_Hist`` / ``Close_Hist``
     are [today, 1 back, …, 4 back] so an aged row can report the bar that fired it.
     """
     row = df.iloc[idx_pos]
@@ -547,8 +562,8 @@ def snapshot(df: pd.DataFrame, idx_pos: int, settings: EngineSettings) -> dict:
 
     def _glyph(r, side):
         if side > 0:
-            return "▲" if r["turn_buy"] else "◆" if r["resume_long"] else "—"
-        return "▼" if r["turn_sell"] else "◆" if r["resume_short"] else "—"
+            return "▲" if r["turn_buy"] else "—"
+        return "▼" if r["turn_sell"] else "—"
 
     longs = [_glyph(r, 1) for _, r in win.iterrows()][::-1]
     shorts = [_glyph(r, -1) for _, r in win.iterrows()][::-1]
@@ -625,17 +640,17 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
         return (pd.to_numeric(df[c], errors="coerce").to_numpy(dtype=float) if c in df.columns
                 else np.full(len(df), default))
 
-    tb, ts, rl, rs = _b("turn_buy"), _b("turn_sell"), _b("resume_long"), _b("resume_short")
+    tb, ts = _b("turn_buy"), _b("turn_sell")
     units = _f("CVG_Units", 1.0)
     units = np.where(np.isfinite(units), units, 1.0)
     ready = np.isfinite(_f("PRG_Trace"))
-    armed = _f("PRG_Armed", 0.0)
-    a_age = _f("PRG_Armed_Age", 0.0)
     h_dir = _f("PRG_Hold_Dir", 0.0)
     h_age = _f("PRG_Hold_Age")
+    lz = _f("LG_Z")
+    ln = _f("LG_N")
 
-    df["Side"] = np.where(tb | rl, "Buy", np.where(ts | rs, "Sell", "—"))
-    df["Signal_Kind"] = np.where(tb | ts, "TURN", np.where(rl | rs, "RESUME", ""))
+    df["Side"] = np.where(tb, "Buy", np.where(ts, "Sell", "—"))
+    df["Signal_Kind"] = np.where(tb | ts, "PROVEN", "")
     p_long, p_short = priorities(tb, ts, _f("PRG_Trace"), ready)
     p_long = pd.Series(p_long, index=idx)
     p_short = pd.Series(p_short, index=idx)
@@ -675,28 +690,13 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
         if not ready[i]:
             reasons.append(f"warming up — {rd.get('PRG_Why') or 'the histogram is not calibrated yet'}")
             continue
-        if not bool(rd.get("PRG_Stack_OK", False)):
-            reasons.append(f"signals paused — {rd.get('PRG_Why') or 'a tape is warming'} · {grid}")
-            continue
-        ev = ""
-        if tb[i] or rl[i] or ts[i] or rs[i]:
-            side_key = "buy" if (tb[i] or rl[i]) else "sell"
-            kind = "turn" if (tb[i] or ts[i]) else "resume"
-            lab = EVENT_LABEL[(kind, 1 if side_key == "buy" else -1)]
-            if kind == "turn":
-                ev = (f"{lab} · " + ("sellers in control of a cheap price, and value has turned "
-                                     "back toward fair" if side_key == "buy" else
-                                     "sellers have taken control of a rich price")
-                      + f" · {notes[side_key]}")
-            else:
-                ev = (f"{lab} · a trend resuming from inside the zone, control held · "
-                      f"{notes[side_key]}")
-            reasons.append(f"{ev} · {grid}{cost_txt}")
-            continue
-        a = int(armed[i]) if np.isfinite(armed[i]) else 0
-        if a != 0:
-            reasons.append(f"{_stretch(trace[i])} · in capitulation {int(a_age[i])} bars, value still "
-                           f"cheapening — the ▲ comes when it turns · {grid}")
+        if tb[i] or ts[i]:
+            side_key = "buy" if tb[i] else "sell"
+            lab = EVENT_LABEL[("proven", 1 if tb[i] else -1)]
+            st_name = rd.get("LG_State_Name") or "its state"
+            z = f"z {lz[i]:+.1f}, {int(ln[i])} samples" if np.isfinite(lz[i]) and np.isfinite(ln[i]) else ""
+            reasons.append(f"{lab} · entered {st_name}, proven {'positive' if tb[i] else 'negative'} on this "
+                           f"name's own record ({z}) · {notes[side_key]} · {grid}{cost_txt}")
             continue
         hd = int(h_dir[i]) if np.isfinite(h_dir[i]) else 0
         if hd != 0 and np.isfinite(h_age[i]):
