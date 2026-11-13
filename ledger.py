@@ -1,8 +1,7 @@
 """
 ledger.py — Sanket's signals: three sets, all read from Pragyam's engine.
 
-THE THREE SETS (EngineSettings.signal_set picks the one the screen fires; all three are
-always computed, and the Edge Study measures them side by side)
+THE THREE SETS (all three fire on every screen, side by side; the Edge Study measures each)
 -----------------------------------------------------------------------------------------
     A · PROVEN      ▲ the first closed bar of a state this name's own record has proven
                     POSITIVE; ▼ proven NEGATIVE. Pragyam's triangles - the ledger below.
@@ -22,7 +21,10 @@ always computed, and the Edge Study measures them side by side)
 A tape with no reading yet blocks B and C. No set has a cooldown.
 
 READY (B and C): every condition of a side in place except the trigger - the flip and the
-close crossing the midline, which arrive together - so the next flip that side fires.
+close crossing the midline, which arrive together - so the next flip that side fires. C's
+ready is B's with the trend agreeing, so a name ready for C is ready for B as well.
+
+An EVENT is any set's triangle; a bar can carry several (a C triangle is always a B one).
 
 How often, and what to expect: A fires about once per 5,500 bars (151 instruments); B and C
 fire far more often. The Indicator repo's flip study tested the nearest versions of B and C
@@ -68,7 +70,7 @@ COLUMNS = ("lg_sigma", "lg_trend", "lg_state", "lg_n", "lg_mean", "lg_grand", "l
            "lg_u", "lg_band_up", "lg_band_dn", "lg_mid", "lg_prk", "lg_calm", "lg_rmom", "lg_rising",
            "lg_ladx", "lg_lad_up", "lg_lad_dn", "lg_flip",
            "a_buy", "a_sell", "b_buy", "b_sell", "c_buy", "c_sell",
-           "ready_buy", "ready_sell",
+           "ready_b_buy", "ready_b_sell", "ready_c_buy", "ready_c_sell",
            "turn_buy", "turn_sell", "decl", "decl_since")
 
 
@@ -81,7 +83,7 @@ def _lag(x: np.ndarray, j: int) -> np.ndarray:
     return np.r_[np.full(j, np.nan), x[:-j]] if j > 0 else x
 
 
-def compute(lo: pd.DataFrame, horizon: int = 10, tau: float = TAU, signal_set: str = "A") -> pd.DataFrame:
+def compute(lo: pd.DataFrame, horizon: int = 10, tau: float = TAU) -> pd.DataFrame:
     """The engine, the ledger and the three signal sets for one name.
 
     ``lo``: lower-case OHLC on the chart's own bars (engine._chart_bars). Returns ``COLUMNS``
@@ -98,13 +100,11 @@ def compute(lo: pd.DataFrame, horizon: int = 10, tau: float = TAU, signal_set: s
       lg_ladx / lg_lad_up / lg_lad_dn   the stretch ladder's lean, and rungs outside above / below
       lg_flip                 +1 the column flipped positive on this bar, −1 negative, 0 none
       a_* / b_* / c_*         each set's ▲ (buy) and ▼ (sell)
-      ready_buy / ready_sell  the selected set's conditions in place bar the trigger (B and C)
-      turn_buy / turn_sell    the SELECTED set's ▲ / ▼
-      decl / decl_since       the selected set's last triangle (+1 / −1, 0 none) and its bar
+      ready_b_* / ready_c_*   set B's / set C's conditions in place bar the trigger
+      turn_buy / turn_sell    any set's ▲ / ▼ on this bar
+      decl / decl_since       the last triangle of any set (+1 / −1, 0 none) and its bar
     """
     H = int(horizon)
-    sset = str(signal_set or "A").upper()[:1]
-    sset = sset if sset in SETS else "A"
     o, h, l, c = (lo[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
     n = len(c)
     idx = lo.index
@@ -221,10 +221,7 @@ def compute(lo: pd.DataFrame, horizon: int = 10, tau: float = TAU, signal_set: s
         c_buy = b_buy & t_ok & (T >= 0)
         c_sell = b_sell & t_ok & (T < 0)
 
-    sel = {"A": (a_buy, a_sell, np.zeros(n, bool), np.zeros(n, bool)),
-           "B": (b_buy, b_sell, ready_b_buy, ready_b_sell),
-           "C": (c_buy, c_sell, ready_c_buy, ready_c_sell)}[sset]
-    buy, sell, rdy_b, rdy_s = sel
+    buy, sell = a_buy | b_buy | c_buy, a_sell | b_sell | c_sell
     decl = np.zeros(n, dtype=int)
     since = np.full(n, -1, dtype=int)
     d_now, d_bar = 0, -1
@@ -241,9 +238,19 @@ def compute(lo: pd.DataFrame, horizon: int = 10, tau: float = TAU, signal_set: s
         "lg_calm": calm, "lg_rmom": rmom, "lg_rising": rising,
         "lg_ladx": ladx, "lg_lad_up": lad_up, "lg_lad_dn": lad_dn, "lg_flip": flip,
         "a_buy": a_buy, "a_sell": a_sell, "b_buy": b_buy, "b_sell": b_sell, "c_buy": c_buy, "c_sell": c_sell,
-        "ready_buy": rdy_b, "ready_sell": rdy_s,
+        "ready_b_buy": ready_b_buy, "ready_b_sell": ready_b_sell,
+        "ready_c_buy": ready_c_buy, "ready_c_sell": ready_c_sell,
         "turn_buy": buy, "turn_sell": sell, "decl": decl, "decl_since": since,
     }, index=idx)[list(COLUMNS)]
+
+
+def tags(a, b, c) -> np.ndarray:
+    """Which sets fired, per bar, as one label: 'A', 'B', 'B·C', 'A·B·C' … or ''."""
+    a, b, c = (np.asarray(x, dtype=bool) for x in (a, b, c))
+    out = np.full(a.shape, "", dtype=object)
+    for k, m in (("A", a), ("B", b), ("C", c)):
+        out = np.where(m, np.where(out == "", k, out + "·" + k), out)
+    return out
 
 
 def state_name(s) -> str:
@@ -261,4 +268,4 @@ def ready_bars(horizon: int = 10) -> int:
     return WARM + int(horizon) + 30 * int(horizon) + 1
 
 
-__all__ = ["COLUMNS", "RISE", "SETS", "SET_NAMES", "STATE_NAMES", "TAU", "compute", "ready_bars", "state_name"]
+__all__ = ["COLUMNS", "RISE", "SETS", "SET_NAMES", "STATE_NAMES", "TAU", "compute", "ready_bars", "state_name", "tags"]

@@ -99,7 +99,7 @@ SLICE_LABEL = {
 
 
 def slice_key(side: str, sset: str = "A") -> str:
-    """'buy' / 'sell' (the screen's two sides) resolved to the selected set's slice."""
+    """'buy' / 'sell' (the screen's two sides) resolved to one set's slice."""
     return side if side in SLICES else f"{(sset or 'A').upper()[:1]}_{side}"
 
 
@@ -346,23 +346,24 @@ class EdgeStudy:
     partial: bool = False             # some symbols failed to fetch
     note: str = ""
     fire_rates: dict = field(default_factory=dict)   # set -> fraction of usable bars it fired
-    active: str = "A"                 # the set the screen fires; 'buy' / 'sell' resolve to it
+    active: str = "A"                 # the set 'buy' / 'sell' resolve to when no set is named
 
     # ── accessors ──
-    def get(self, side: str, era: str) -> SideResult | None:
-        d = (self.results.get(slice_key(side, self.active)) or {}).get(era)
+    def get(self, side: str, era: str, sset: str | None = None) -> SideResult | None:
+        """One slice and era: ``side`` is a slice key ('B_sell') or a side, with ``sset`` naming the set."""
+        d = (self.results.get(slice_key(side, sset or self.active)) or {}).get(era)
         return SideResult(**d) if isinstance(d, dict) else d
 
     def rate(self, sset: str | None = None) -> float:
-        """Fraction of usable bars on which a set fired - the selected one by default."""
+        """Fraction of usable bars on which a set fired."""
         k = (sset or self.active or "A").upper()[:1]
         return float(self.fire_rates.get(k, self.fire_rate if k == "A" else 0.0))
 
-    def verdict(self, side: str) -> tuple:
-        """(label, css_kind, detail) for one side, from the measured intervals."""
-        hold = self.get(side, "holdout")
-        disc = self.get(side, "discovery")
-        full = self.get(side, "full")
+    def verdict(self, side: str, sset: str | None = None) -> tuple:
+        """(label, css_kind, detail) for one set's side, from the measured intervals."""
+        hold = self.get(side, "holdout", sset)
+        disc = self.get(side, "discovery", sset)
+        full = self.get(side, "full", sset)
 
         present = [r for r in (hold, disc, full) if r is not None]
         if not present:

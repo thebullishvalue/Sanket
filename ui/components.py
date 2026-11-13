@@ -1069,3 +1069,38 @@ def render_kv_table(data: dict, header_left: str = "Setting",
                   f'<div class="value">{html_mod.escape(str(v))}</div>')
     st.markdown(f'<div class="kv-table-container"><div class="kv-table">{cells}</div></div>',
                 unsafe_allow_html=True)
+
+
+def render_set_board(cards: "list[dict]") -> None:
+    """The signal board: one card per signal set, side by side, read across in one pass.
+
+    Each card is ``{key, title, line, tone, rate, sides: [(glyph, count, sub, tone)],
+    watch: (label, value), edges: [(glyph, verdict, chip_tone, number, tip)]}``. The three
+    sets are never a choice the reader makes; they are three columns of the same answer
+    — what fired, what is about to, and whether this universe has ever paid for it.
+    """
+    if not cards:
+        return
+    out = []
+    for c in cards:
+        e = html_mod.escape
+        sides = "".join(
+            f'<div class="sc-side {e(tone)}"><span class="g">{e(g)}</span>'
+            f'<span class="n">{e(str(n))}</span><span class="t">{e(sub)}</span></div>'
+            for g, n, sub, tone in c.get("sides", []))
+        wl, wv = c.get("watch", ("", ""))
+        watch = (f'<div class="sc-watch"><span class="k">{e(wl)}</span>'
+                 f'<span class="v">{e(wv)}</span></div>') if wl else ""
+        edges = "".join(
+            f'<div class="sc-edge-row" title="{e(tip)}"><span class="k">{e(g)} here</span>'
+            f'{render_chip(lbl, ctone, as_html=True)}<span class="e">{e(num)}</span></div>'
+            for g, lbl, ctone, num, tip in c.get("edges", []))
+        out.append(
+            f'<div class="set-card {e(c.get("tone", "neutral"))}">'
+            f'<div class="sc-head"><span class="sc-key">{e(c.get("key", ""))}</span>'
+            f'<span class="sc-title">{e(c.get("title", ""))}</span>'
+            f'<span class="sc-rate">{e(c.get("rate", ""))}</span></div>'
+            f'<div class="sc-line">{e(c.get("line", ""))}</div>'
+            f'<div class="sc-sides">{sides}</div>{watch}'
+            f'<div class="sc-edge">{edges}</div></div>')
+    st.markdown(f'<div class="set-board">{"".join(out)}</div>', unsafe_allow_html=True)

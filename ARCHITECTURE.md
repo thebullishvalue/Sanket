@@ -132,10 +132,13 @@ set B    ▲ surprise flips ≥ 0 · close > mid · risk rank < 33.3 · ln(σ/σ
 set C    set B, and T ≥ 0 for ▲, T < 0 for ▼
 ```
 
-**Three sets, one selected.** The rail's Signal Set chooses which the screen fires; all three are
-computed on every run and the Edge Study measures them side by side. Sets B and C first fire at bar
-~752 (risk's rank needs 500 readings); the Weekly fetch was deepened for them. READY marks a side of
-B or C with every condition in place but the flip.
+**Three sets, all at once (v10.2).** Every set fires on every screen; there is no selection.
+`turn_buy` / `turn_sell` are any set's triangle, and `PRG_Buy_Sets` / `PRG_Sell_Sets` name the sets
+that fired (`ledger.tags`: `A`, `B`, `B·C`, `A·B·C` …; a C event is always a B one). The Edge Study
+measures each set apart and every screen reads each set's own verdict (`EdgeStudy.verdict(side,
+set)`). Sets B and C first fire at bar ~752 (risk's rank needs 500 readings); the Weekly fetch was
+deepened for them. READY marks a side of B (`PRG_Ready`) or of C (`PRG_Ready_C`) with every condition
+in place but the flip.
 
 No cooldown, no gate on the Pragati stack; the last event stands as the declaration. On random
 walks the rule calls a state proven on about 0.4% of bars; across 151 instruments it fired about

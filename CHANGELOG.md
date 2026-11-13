@@ -7,6 +7,38 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.2.0] · 2026-11-13
+### All three sets at once
+
+- **The Signal Set selector is gone.** Every set fires on every screen. `EngineSettings.signal_set`
+  is retired (an override naming one is ignored); `ledger.compute` no longer takes a set.
+  `turn_buy` / `turn_sell` are now any set's triangle; `PRG_Buy_Sets` / `PRG_Sell_Sets` name the
+  sets that fired (`ledger.tags`: `A`, `B`, `B·C`, `A·B·C` …); `PRG_Event` reads `▲ B·C`.
+  `PRG_Ready_C` joins `PRG_Ready` (set B). `PRG_State` is one ladder across all three: an event,
+  `READY ▲ B·C` / `READY ▲ B`, `IN PROVEN + / −`, `WARMING UP`, `LEARNING`, `WAITING`.
+- **Signal board** (`ui.render_set_board`): three cards, one per set — its events in the last
+  5 bars per side (and how many on this bar), its watch line (ready, or in a proven state), its
+  fire rate, and each side's own measured verdict with the holdout edge and hit rate. On the
+  Signals tab, the Pulse view and the Edge Study.
+- **Signals tab** (was Action Dashboard): events by age, each name once at its newest event, its
+  sets drawn as three fixed slots A · B · C, lit when fired; within a day A first, then B·C, then B.
+  Each slot's tooltip carries what the set means and what it measured here.
+- **Watchlist tab** (new): per side, ready B·C, then ready B, then in a proven state; armed names
+  (the surprise column still on the far side of zero) first, nearest the flip first. Columns: the
+  surprise in σ, the close against the midline, risk's rank, the ladder, the trend, the grid.
+- **Historical Range**: a per-set table of what followed each set's events on the range (1 / 5 /
+  10 / 21 bars, hit rate) beside its Edge Study verdict; events charted per set; the watch over time
+  (ready B with B·C, and in a proven state); per-set columns in the data terminal.
+- **The rail and the command bar** summarise all six slices: one rail row per set (`▲ THIN ·
+  ▼ NONE`), and the command bar names the strongest slice or says NO SET CONFIRMED.
+- **Edge Study**: `EdgeStudy.get` / `verdict` take the set. Inputs and answer are unchanged, so the
+  cache key stays `prg6`.
+- Verified: lint clean (one pre-existing warning); the app runs end to end under Streamlit's test
+  harness for a Daily screen, a Daily Historical Range, a Weekly Pulse and a Weekly correlation, with
+  no exception; checked in a real browser on NIFTY 50.
+
+---
+
 ## [v10.1.0] · 2026-11-13
 ### Three signal sets
 

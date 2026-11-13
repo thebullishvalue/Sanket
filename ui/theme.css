@@ -2633,3 +2633,64 @@
 .ink-violet  { color: var(--violet);  font-weight: 600; }
 .ink-system  { color: var(--system);  font-weight: 600; }
 .ink-caution { color: var(--caution); font-weight: 600; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   SIGNAL BOARD — the three signal sets side by side (v10.2)
+   One card per set, read ACROSS: what fired (long / short), what is about to
+   (the watch line), and what this universe measured for it (the edge rows).
+   Same surface, rule and type scale as .metric-card, so it reads as one
+   family with the KPI strips rather than as a new widget.
+   ═══════════════════════════════════════════════════════════════════════ */
+.set-board {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s3); margin: var(--s2) 0 var(--s4) 0;
+}
+@media (max-width: 900px) { .set-board { grid-template-columns: minmax(0, 1fr); } }
+.set-card {
+    position: relative; display: flex; flex-direction: column; gap: var(--s2);
+    background: var(--surface-1); border: 1px solid var(--line);
+    border-radius: var(--r-lg); padding: var(--s3) var(--s4) var(--s3);
+}
+.set-card::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
+    border-radius: var(--r-lg) var(--r-lg) 0 0; background: var(--line-strong);
+}
+.set-card.success::before { background: var(--long); }
+.set-card.warning::before { background: var(--caution); }
+.set-card.danger::before  { background: var(--short); }
+.set-card.violet::before  { background: var(--violet); }
+.set-card:hover { border-color: var(--line-strong); }
+.set-card .sc-head { display: flex; align-items: baseline; gap: var(--s2); }
+.set-card .sc-key {
+    font-family: var(--mono); font-size: var(--fs-lg); font-weight: 700; color: var(--violet);
+    min-width: 1.1em;
+}
+.set-card .sc-title {
+    font-family: var(--mono); font-size: var(--fs-2xs); font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--ink-secondary); flex: 1 1 auto;
+}
+.set-card .sc-rate { font-family: var(--mono); font-size: var(--fs-3xs); color: var(--ink-quaternary); white-space: nowrap; }
+.set-card .sc-line { font-family: var(--sans); font-size: var(--fs-xs); line-height: 1.45; color: var(--ink-tertiary); }
+.set-card .sc-sides { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); margin-top: var(--s1); }
+.set-card .sc-side { display: flex; align-items: baseline; gap: 6px; font-family: var(--mono); }
+.set-card .sc-side .g { font-size: var(--fs-sm); }
+.set-card .sc-side .n { font-size: var(--fs-xl); font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+.set-card .sc-side .t { font-size: var(--fs-3xs); color: var(--ink-tertiary); }
+.set-card .sc-side.long  .g, .set-card .sc-side.long  .n { color: var(--long); }
+.set-card .sc-side.short .g, .set-card .sc-side.short .n { color: var(--short); }
+.set-card .sc-side.dim   .g, .set-card .sc-side.dim   .n { color: var(--ink-quaternary); }
+.set-card .sc-watch {
+    display: flex; justify-content: space-between; gap: var(--s2);
+    font-family: var(--mono); font-size: var(--fs-2xs);
+    padding-top: var(--s2); border-top: 1px solid var(--line-faint);
+}
+.set-card .sc-watch .k { color: var(--ink-quaternary); text-transform: uppercase; letter-spacing: 0.1em; font-size: var(--fs-3xs); }
+.set-card .sc-watch .v { color: var(--ink-secondary); font-weight: 600; }
+.set-card .sc-edge { display: flex; flex-direction: column; gap: 4px; padding-top: var(--s2); border-top: 1px solid var(--line-faint); }
+.set-card .sc-edge-row { display: flex; align-items: center; gap: var(--s2); font-family: var(--mono); font-size: var(--fs-2xs); }
+.set-card .sc-edge-row .k { color: var(--ink-quaternary); font-size: var(--fs-3xs); text-transform: uppercase; letter-spacing: 0.1em; min-width: 4.2em; }
+.set-card .sc-edge-row .e { margin-left: auto; color: var(--ink-secondary); white-space: nowrap; }
+.set-card .sc-edge-row .chip { font-size: var(--fs-3xs); }
+
+/* Set chips inside the iframe tables are drawn by sanket.py's _sets_cell (the
+   iframe does not inherit this sheet). */

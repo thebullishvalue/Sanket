@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.1.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.2.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -9,10 +9,11 @@ Conviction-Value Grid already reads — and asks of every name the indicator's o
 
 It reports three things, and keeps them apart:
 
-- **Events** (v10.1 — three signal sets, picked in the rail, all read from Pragyam's engine).
+- **Events** (v10.2 — three signal sets, all on screen at once, all read from Pragyam's engine).
   **A** — entering a state the name's own record has proven (rare). **B** — the surprise column
   flips, the close past the midline, risk calm and not rising, the stretch ladder agreeing.
-  **C** — B with the trend agreeing. Bucketed by age, ranked, and measured side by side.
+  **C** — B with the trend agreeing. A signal board shows each set's events, its watch and its
+  own measured verdict side by side; each event row lights the sets that fired it.
 - **State.** Every name's cell in the **3 × 3 conviction-value grid** (v8), named as an action —
   Buy · Accumulate · Hold · Wait · Trim · Exit — with the measured v8 units, the same units
   Pragyam's book now sizes from. Where the name stands *between* events.
@@ -113,7 +114,7 @@ to 1e-13.
 
 ## The Signals
 
-Three sets, chosen in the rail (**Signal Set**), all read from **Pragyam's engine** (`ledger.py`,
+Three sets, all fired on every screen and shown side by side, all read from **Pragyam's engine** (`ledger.py`,
 ported bar for bar from `pragyam.pine` and checked against its reference on 151 instruments:
 identical states, z-scores, cones, ladder and signals on every bar). Pragati's own signal set — the
 grid's capitulation / distribution, the ◆ RESUME and the watchlist — is not computed.
@@ -242,8 +243,8 @@ proven on the name's own record; no study has placed it on top of the stretch.
 
 `edge.py` runs an event study on your symbols through **the exact engine call the screener
 makes** (`engine.compute_frame`), so every warm-up applies to the study by construction. Six
-slices — sets A, B and C, each side alone — measured on the same symbols and dates whichever set
-the screen fires, so they can be compared directly. The screen's verdicts read the selected set.
+slices — sets A, B and C, each side alone — measured on the same symbols and dates, so they can be
+compared directly. Every set carries its own verdict wherever it appears; none borrows another's.
 
 Each step kills one way of fooling yourself (step 2 changed in v9):
 
@@ -293,9 +294,10 @@ Per symbol, on each run:
 
 | Column | Meaning |
 |:---|:---|
-| `turn_buy` / `turn_sell` | ▲ / ▼ of the selected set on this bar |
-| `A_Buy` … `C_Sell` | each set's ▲ / ▼ on this bar, whichever is selected |
-| `PRG_Ready` | sets B and C: +1 / −1 when every condition of a side is in place but the flip |
+| `turn_buy` / `turn_sell` | ▲ / ▼ of any set on this bar |
+| `A_Buy` … `C_Sell` | each set's ▲ / ▼ on this bar |
+| `PRG_Buy_Sets` / `PRG_Sell_Sets` | the sets that fired each side on this bar: `A`, `B`, `B·C`, `A·B·C` … |
+| `PRG_Ready` / `PRG_Ready_C` | +1 / −1 when every condition of set B's (set C's) side is in place but the flip |
 | `LG_U` / `LG_Flip` / `LG_Mid` / `LG_Above_Mid` | the surprise column, its flip, the midline, and the close against it |
 | `LG_Risk_Rank` / `LG_Calm` / `LG_Risk_Mom` / `LG_Rising` | risk's rank, calm, its 10-bar change, and rising |
 | `LG_Ladder` / `LG_Lad_Up` / `LG_Lad_Dn` | the stretch ladder's lean and the rungs outside |
@@ -346,13 +348,18 @@ volume profile, absorption) are unchanged and remain context only.
 
 ## Analysis Modes
 
-1. **Single Date Screener** — Action Dashboard (events by age, each with its grid state, push,
-   tapes and evidence) · **Grid** (the 3 × 3 census, names by action) · Signal Strength (the ranking) · System Data (exports, raw frame, Edge Study).
-2. **Historical Range** — event breadth, names in a proven state, grid breadth (build vs cut),
-   the universe-mean tapes, regime context, forward-return labels, Excel export.
+1. **Single Date Screener** — **Signals** (the signal board — sets A, B and C side by side, each
+   with its events, its watch and its measured verdict — then every event of the last 5 bars by
+   age, its sets lit, with its grid state, push, tapes and evidence) · **Watchlist** (names one flip
+   from B or B·C, nearest first, and names in a proven state) · **Grid** (the 3 × 3 census, names by
+   action) · Signal Strength (the ranking) · System Data (exports, raw frame, Edge Study).
+2. **Historical Range** — the three sets compared on the range (what followed each set's events,
+   beside its Edge Study verdict), events per set, breadth, the watch over time, grid breadth
+   (build vs cut), the universe-mean tapes, regime context, forward-return labels, Excel export.
 3. **Correlation Analysis** — cross-asset correlation, with confluence = |correlation| × the
    normalised Pragati priority.
-4. **Pulse Narrative** — every name's state, both sides, plus the Grid and Strength tabs.
+4. **Pulse Narrative** — every name's state, both sides, the signal board, plus the Watchlist,
+   Grid and Strength tabs.
 
 ---
 
@@ -475,6 +482,14 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 ---
 
 ## What Changed
+
+**v10.2.0 — all three sets at once.** The Signal Set selector is gone: every set fires on every
+screen. A signal board puts A, B and C side by side — each with its events in the last 5 bars, its
+watch (ready for B / B·C, or in a proven state) and its own measured verdict per side. An event is
+labelled by every set that fired it (▲ B·C), drawn as three fixed slots so a column of them reads
+as a pattern. A Watchlist tab lists the names one flip from firing, nearest first. The Historical
+Range compares the sets on the range, and the rail and the command bar summarise all six slices.
+The Edge Study's measurement is unchanged, so its cache key stays `prg6`.
 
 **v10.1.0 — three signal sets.** A (the proven-state triangles of v10.0) is joined by B — the
 surprise column flips with the close past the midline, risk calm and not rising, the stretch ladder
@@ -904,4 +919,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v10.1.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v10.2.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
