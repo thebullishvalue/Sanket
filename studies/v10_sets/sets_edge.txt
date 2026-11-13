@@ -1,0 +1,130 @@
+
+====================================================================================================
+DAILY · 151 instruments · 945,185 bars · 2002-11-21 to 2026-10-29
+events per 1,000 bars: A_buy 0.09 · A_sell 0.09 · B_buy 11.68 · B_sell 13.17 · C_buy 9.25 · C_sell 4.59
+
+A. DAILY · SANKET'S EDGE STUDY (edge.measure) · discovery = first 60% of event dates, holdout = last 40% (split 2017-08-24) · participation ratio 19.5 · cost 3 bp
+             slice       era  events  dates  n_eff    edge               ci     net     hit    mde  sig       verdict
+    A · ▲ proven + discovery      24     24     47  0.4983 [+0.380, +0.687]  0.4929 62.5000 0.4360  yes              
+    A · ▲ proven +   holdout      60     60    117  0.2287 [-0.104, +0.675]  0.2216 50.0000 0.2077   no              
+    A · ▲ proven +      full      84     84    164  0.3057 [+0.106, +0.557]  0.2992 53.5714 0.1932  yes  UNDERPOWERED
+    A · ▼ proven − discovery      64     64    125 -0.1947 [-0.443, -0.018] -0.1994 45.3125 0.1683 ANTI              
+    A · ▼ proven −   holdout      24     24     47 -0.0457 [-0.323, +0.176] -0.0515 54.1667 0.1868   no              
+    A · ▼ proven −      full      88     88    172 -0.1540 [-0.382, -0.020] -0.1590 47.7273 0.1324 ANTI  UNDERPOWERED
+        B · ▲ flip discovery    6950   2488   4863 -0.0041 [-0.050, +0.043] -0.0099 51.6835 0.0247   no              
+        B · ▲ flip   holdout    4094   1642   3210 -0.0380 [-0.097, +0.021] -0.0436 46.6292 0.0323   no              
+        B · ▲ flip      full   11044   4130   8073 -0.0167 [-0.053, +0.020] -0.0224 49.8099 0.0196   no       NO EDGE
+        B · ▼ flip discovery    7732   2663   5205  0.0327 [-0.015, +0.084]  0.0273 51.1769 0.0244   no              
+        B · ▼ flip   holdout    4712   1727   3376  0.0413 [-0.017, +0.099]  0.0364 52.1859 0.0319   no              
+        B · ▼ flip      full   12444   4390   8581  0.0360 [-0.003, +0.076]  0.0308 51.5590 0.0194   no       NO EDGE
+C · ▲ flip + trend discovery    5713   2245   4388 -0.0204 [-0.075, +0.032] -0.0262 51.2340 0.0258   no              
+C · ▲ flip + trend   holdout    3030   1344   2627 -0.0562 [-0.113, -0.000] -0.0623 46.0066 0.0360 ANTI              
+C · ▲ flip + trend      full    8743   3589   7015 -0.0328 [-0.074, +0.007] -0.0387 49.4224 0.0210   no ANTI-PREDICTS
+C · ▼ flip + trend discovery    2441   1518   2967 -0.0244 [-0.086, +0.040] -0.0298 48.5047 0.0322   no              
+C · ▼ flip + trend   holdout    1893   1117   2183 -0.0487 [-0.119, +0.017] -0.0527 47.5964 0.0398   no              
+C · ▼ flip + trend      full    4334   2635   5151 -0.0350 [-0.079, +0.010] -0.0397 48.1080 0.0251   no       NO EDGE
+
+B. DAILY · BY SLICE · score = drift-free, vol-normalised 10-bar return in the signal's direction (gross, σ). t clustered by date, Newey-West over 10 bars
+        events  names   mean      t    hit  03-12  13-19  20-26  t 03-12  t 13-19  t 20-26
+key                                                                                       
+A_buy       84      5  0.306  2.094  0.536 -0.087  0.326  0.304   -7.747    1.917    1.179
+A_sell      88      3 -0.154 -1.365  0.477  0.005 -0.323 -0.046    0.052   -1.681   -0.302
+B_buy    11044    151 -0.017 -0.860  0.498  0.008 -0.028 -0.041    0.241   -0.908   -1.191
+B_sell   12444    151  0.036  1.779  0.516  0.021  0.029  0.063    0.626    0.845    1.761
+C_buy     8743    151 -0.033 -1.601  0.494 -0.010 -0.031 -0.071   -0.278   -0.949   -2.032
+C_sell    4334    151 -0.035 -1.509  0.481 -0.058 -0.028 -0.016   -1.422   -0.693   -0.433
+
+   by asset class (mean score, σ; events in brackets)
+                   us            nse          index          cmdty             fx          bond        crypto
+A_buy      +0.447 (7)    +0.313 (69)              —     +0.121 (8)              —             —             —
+A_sell     -0.107 (6)    -0.157 (82)              —              —              —             —             —
+B_buy   -0.031 (4099)  -0.005 (2343)  -0.073 (1604)  +0.042 (1128)  -0.021 (1035)  +0.004 (480)  +0.127 (355)
+B_sell  +0.047 (4275)  +0.037 (3449)  +0.071 (1216)  -0.011 (1343)  -0.018 (1118)  +0.116 (508)  +0.013 (535)
+C_buy   -0.047 (3489)  -0.004 (1903)  -0.080 (1466)   -0.008 (725)   -0.014 (633)  -0.013 (401)  +0.158 (126)
+C_sell  -0.038 (1268)   +0.031 (975)   -0.111 (209)   -0.097 (777)   -0.034 (602)  -0.119 (137)  +0.002 (366)
+
+   ex crypto, by group
+         mean           size        
+grp    equity  macro  equity   macro
+key                                 
+A_buy   0.325  0.121    76.0     8.0
+A_sell -0.154    NaN    88.0     NaN
+B_buy  -0.032  0.011  8046.0  2643.0
+B_sell  0.047  0.008  8940.0  2969.0
+C_buy  -0.042 -0.011  6858.0  1759.0
+C_sell -0.017 -0.074  2452.0  1516.0
+
+C. DAILY · AS RULES · hold the signal's side 10 bars, next-open entry, net of costs · mean across instruments
+                  in_market  sharpe  hold_sharpe   cagr     dd  hold_dd  beats_hold  positive
+set mode                                                                                     
+A   long / short      0.032   0.027        0.537  0.001 -0.163   -0.583       0.000     0.571
+    long only         0.023   0.163        0.486  0.010 -0.063   -0.554       0.200     0.800
+B   long / short      0.197  -0.052        0.483 -0.008 -0.471   -0.636       0.026     0.411
+    long only         0.092   0.130        0.483  0.009 -0.267   -0.636       0.060     0.709
+C   long / short      0.125   0.048        0.483  0.002 -0.342   -0.636       0.046     0.623
+    long only         0.083   0.123        0.483  0.008 -0.253   -0.636       0.033     0.709
+
+====================================================================================================
+HOURLY · 151 instruments · 1,125,378 bars · 2024-03-11 to 2026-11-11
+events per 1,000 bars: A_buy 0.22 · A_sell 0.21 · B_buy 11.68 · B_sell 12.33 · C_buy 7.42 · C_sell 6.86
+
+A. HOURLY · SANKET'S EDGE STUDY (edge.measure) · discovery = first 60% of event dates, holdout = last 40% (split 2025-11-17) · participation ratio 34.1 · cost 3 bp
+             slice       era  events  dates  n_eff    edge               ci     net     hit    mde  sig        verdict
+    A · ▲ proven + discovery      70     70    239  0.1490 [-0.064, +0.381]  0.1342 52.8571 0.1329   no               
+    A · ▲ proven +   holdout     180    177    604  0.2240 [-0.044, +0.486]  0.2064 47.7778 0.1444   no               
+    A · ▲ proven +      full     251    248    846  0.2028 [-0.020, +0.451]  0.1862 49.4024 0.1097   no   UNDERPOWERED
+    A · ▼ proven − discovery      48     48    164 -0.1129 [-0.565, +0.402] -0.1438 58.3333 0.1886   no               
+    A · ▼ proven −   holdout     189    189    645  0.0468 [-0.147, +0.246]  0.0033 53.4392 0.0841   no               
+    A · ▼ proven −      full     237    237    809  0.0145 [-0.146, +0.192] -0.0258 54.4304 0.0771   no   UNDERPOWERED
+        B · ▲ flip discovery    8053   5146  17563  0.0029 [-0.028, +0.036] -0.0176 49.6337 0.0152   no               
+        B · ▲ flip   holdout    5084   3210  10955 -0.0336 [-0.078, +0.012] -0.0539 48.7215 0.0196   no               
+        B · ▲ flip      full   13147   8365  28549 -0.0111 [-0.037, +0.014] -0.0315 49.2888 0.0120   no        NO EDGE
+        B · ▼ flip discovery    8163   5132  17515  0.0640 [+0.030, +0.098]  0.0434 52.2969 0.0151  yes               
+        B · ▼ flip   holdout    5695   3454  11788  0.0063 [-0.035, +0.047] -0.0130 49.9210 0.0183   no               
+        B · ▼ flip      full   13874   8598  29344  0.0404 [+0.014, +0.069]  0.0203 51.3190 0.0117  yes DISCOVERY ONLY
+C · ▲ flip + trend discovery    5280   3699  12624 -0.0498 [-0.087, -0.012] -0.0706 47.5189 0.0175 ANTI               
+C · ▲ flip + trend   holdout    3067   2171   7409 -0.0732 [-0.120, -0.023] -0.0942 46.8862 0.0237 ANTI               
+C · ▲ flip + trend      full    8354   5876  20054 -0.0583 [-0.089, -0.028] -0.0792 47.2947 0.0141 ANTI  ANTI-PREDICTS
+C · ▼ flip + trend discovery    4315   3212  10962  0.0053 [-0.039, +0.050] -0.0157 49.3627 0.0194   no               
+C · ▼ flip + trend   holdout    3397   2343   7996 -0.0419 [-0.091, +0.009] -0.0609 47.9246 0.0217   no               
+C · ▼ flip + trend      full    7717   5560  18975 -0.0157 [-0.052, +0.018] -0.0358 48.7366 0.0145   no        NO EDGE
+
+B. HOURLY · BY SLICE · score = drift-free, vol-normalised 10-bar return in the signal's direction (gross, σ). t clustered by date, Newey-West over 10 bars
+        events  names   mean      t    hit
+key                                       
+A_buy      251      3  0.203  1.778  0.494
+A_sell     237      5  0.014  0.184  0.544
+B_buy    13147    151 -0.011 -0.823  0.493
+B_sell   13874    151  0.040  2.940  0.513
+C_buy     8354    151 -0.058 -3.860  0.473
+C_sell    7717    151 -0.016 -0.886  0.487
+
+   by asset class (mean score, σ; events in brackets)
+                   us            nse         index          cmdty             fx          bond         crypto
+A_buy               —    +0.735 (13)             —    +0.008 (26)              —             —   +0.194 (212)
+A_sell    +0.058 (15)    -0.300 (31)   -0.041 (23)              —   +0.076 (168)             —              —
+B_buy   -0.037 (2086)  -0.029 (2009)  -0.046 (912)  +0.034 (2133)  -0.011 (3212)  -0.002 (354)  -0.003 (2441)
+B_sell  +0.006 (2323)  +0.068 (2369)  +0.120 (905)  -0.023 (2329)  +0.045 (3280)  +0.087 (277)  +0.066 (2391)
+C_buy   -0.079 (1435)  -0.078 (1185)  -0.044 (766)  -0.011 (1303)  -0.057 (2102)  -0.058 (274)  -0.075 (1289)
+C_sell  -0.084 (1178)  +0.009 (1300)  -0.003 (314)  -0.032 (1456)  -0.020 (1807)  +0.027 (142)  +0.030 (1520)
+
+   ex crypto, by group
+         mean          size      
+grp    equity  macro equity macro
+key                              
+A_buy   0.735  0.008     13    26
+A_sell -0.136  0.076     69   168
+B_buy  -0.035  0.007   5007  5699
+B_sell  0.051  0.020   5597  5886
+C_buy  -0.071 -0.041   3386  3679
+C_sell -0.031 -0.023   2792  3405
+
+C. HOURLY · AS RULES · hold the signal's side 10 bars, next-open entry, net of costs · mean across instruments
+                  in_market  sharpe  hold_sharpe   cagr     dd  hold_dd  beats_hold  positive
+set mode                                                                                     
+A   long / short      0.041  -0.254        0.284 -0.008 -0.101   -0.276       0.125     0.375
+    long only         0.046   0.180        0.414  0.005 -0.129   -0.340       0.000     1.000
+B   long / short      0.175  -0.609        0.420 -0.040 -0.249   -0.332       0.113     0.232
+    long only         0.083  -0.397        0.420 -0.017 -0.159   -0.332       0.146     0.265
+C   long / short      0.116  -0.452        0.420 -0.024 -0.187   -0.332       0.159     0.245
+    long only         0.062  -0.288        0.420 -0.010 -0.126   -0.332       0.146     0.305
