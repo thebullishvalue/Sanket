@@ -454,12 +454,15 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
       LG_Risk_Mom / LG_Rising    ln(σ / σ[h]), and rising = past +10%
       LG_Ladder / LG_Lad_Up / LG_Lad_Dn   the stretch ladder's lean, and rungs outside
       A_Buy … C_Sell             each set's ▲ / ▼ on this bar
-      PRG_Ready / PRG_Ready_C    +1 / −1: set B's (set C's) side has every condition but the trigger
+      PRG_Ready / PRG_Ready_C    +1 / −1: set B's (set C's) side has every condition but the trigger,
+                                 the column armed (on the far side of zero, so its next crossing is the flip)
+      PRG_Near                   +1 / −1: armed and calm, the ladder within ledger.NEAR of agreeing
     STATE
       CVG_Cell / CVG_Action / CVG_Why / CVG_Units / CVG_Side / CVG_Held / CVG_Bars /
       CVG_From / CVG_Chart / CVG_Lead
       PRG_State                  the bar's standing across all three sets, first match wins:
-                                 ▲ A·B… / ▼ … (an event) · READY ▲ B·C / READY ▲ B (▼ mirrors) ·
+                                 ▲ A·B… / ▼ … (an event) · READY ▲ B·C / READY ▲ B · NEAR ▲ B·C /
+                                 NEAR ▲ B (▼ mirrors) ·
                                  IN PROVEN + / − · WARMING UP · LEARNING · WAITING
       Signal_Score               the trace — what the level views sort on
     """
@@ -550,6 +553,10 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     rdy = np.where(b("ready_b_buy"), 1, np.where(b("ready_b_sell"), -1, 0))
     rdy_c = np.where(b("ready_c_buy"), 1, np.where(b("ready_c_sell"), -1, 0))
     df["PRG_Ready"], df["PRG_Ready_C"] = rdy, rdy_c
+    near = np.where(b("near_b_buy"), 1, np.where(b("near_b_sell"), -1, 0))
+    df["PRG_Near"] = near
+    tr = f["lg_trend"].to_numpy(dtype=float)
+    near_c = (near != 0) & np.isfinite(tr) & (np.where(tr >= 0, 1, -1) == near)    # the trend agrees: C too
     decl = f["decl"].fillna(0).astype(int).to_numpy()
     since = f["decl_since"].fillna(-1).astype(int).to_numpy()
     pos = np.arange(T)
@@ -587,8 +594,11 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     df["CVG_Lead"] = f["cvg_lead"].fillna(0).astype(int)
 
     df["PRG_State"] = np.select(
-        [tb, ts, rdy_c > 0, rdy_c < 0, rdy > 0, rdy < 0, lproven > 0, lproven < 0, lstate < 0, ~np.isfinite(lz)],
+        [tb, ts, rdy_c > 0, rdy_c < 0, rdy > 0, rdy < 0,
+         near_c & (near > 0), near_c & (near < 0), near > 0, near < 0,
+         lproven > 0, lproven < 0, lstate < 0, ~np.isfinite(lz)],
         [ev_lab, ev_lab, "READY ▲ B·C", "READY ▼ B·C", "READY ▲ B", "READY ▼ B",
+         "NEAR ▲ B·C", "NEAR ▼ B·C", "NEAR ▲ B", "NEAR ▼ B",
          "IN PROVEN +", "IN PROVEN −", "WARMING UP", "LEARNING"], default="WAITING")
     df["Signal_Score"] = df["PRG_Trace"]
     return df
@@ -607,7 +617,7 @@ SNAPSHOT_COLUMNS = (
     "LG_State", "LG_State_Name", "LG_N", "LG_Edge", "LG_Post", "LG_Z", "LG_Proven", "LG_Sigma", "LG_Trend",
     "LG_U", "LG_Flip", "LG_Mid", "LG_Above_Mid", "LG_Risk_Rank", "LG_Calm", "LG_Risk_Mom", "LG_Rising",
     "LG_Ladder", "LG_Lad_Up", "LG_Lad_Dn", "A_Buy", "A_Sell", "B_Buy", "B_Sell", "C_Buy", "C_Sell", "PRG_Ready",
-    "PRG_Ready_C", "PRG_Buy_Sets", "PRG_Sell_Sets",
+    "PRG_Ready_C", "PRG_Near", "PRG_Buy_Sets", "PRG_Sell_Sets",
     "PRG_Decl", "PRG_Decl_Age",
     "PRG_Hold_Dir", "PRG_Hold_Age", "PRG_Hold_Kind",
     "CVG_Cell", "CVG_Action", "CVG_Why", "CVG_Units", "CVG_Side", "CVG_Held", "CVG_Bars",

@@ -7,6 +7,29 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.2.1] · 2026-11-13
+### The Watchlist, verified against history
+
+- **Checked** (`studies/v10_watch/watch_check.py`, 151 instruments, daily and hourly): for every
+  bar a name would be listed, did the promised event fire, against names on no list?
+- **Found**: 85% of "ready" bars had the surprise column already past zero, so the next flip could
+  not come next — 0.0% fired on the next bar. The rest were real: 20-27% next bar.
+- **Fixed — ready means armed.** `ready_b_*` / `ready_c_*` (`PRG_Ready`, `PRG_Ready_C`) now also
+  require the column on the far side of zero, so its next crossing IS the flip. Signals unchanged
+  (identical event counts). Ready names: B on the next bar ~19-27%, within 10 ~50-62%; names on no
+  list ~0.3% and ~9-10%. Daily and hourly agree.
+- **Added — near.** Half of B events were not ready the bar before; 81-87% of those were short only
+  the stretch ladder, which the flip itself tips over. `near_b_*` / `PRG_Near`: armed, risk calm and
+  not rising, the ladder within `ledger.NEAR` = 0.2 of agreeing. Near names: B on the next bar
+  ~9-12%, within 10 ~37-44%. Ready and near together held ~80% of B and C events the bar before.
+  `PRG_State` gains `NEAR ▲ B·C` / `NEAR ▲ B` (▼ mirrors).
+- **Watchlist**: four groups per side — ready B·C, ready B, near, in A — each card printing its
+  measured rate. "In A" is stated for what it is: the A triangle already fired; A fires again
+  (re-entry) ~20-28% within 5 bars. The ladder cell turns gold when it is the condition a near name
+  is short.
+
+---
+
 ## [v10.2.0] · 2026-11-13
 ### All three sets at once
 
