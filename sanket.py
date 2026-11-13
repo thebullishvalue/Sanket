@@ -91,7 +91,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v10.2.4"
+VERSION = "v10.2.5"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -598,6 +598,17 @@ def _set_counts(results_df: pd.DataFrame, sset: str, side: str) -> tuple:
     return n5, n0
 
 
+def _rate_text(rate: float) -> str:
+    """How often a set fires, in words a trader reads at a glance."""
+    per_k = rate * 1000
+    if per_k >= 1:
+        return f"~{per_k:.0f} per 1k bars"
+    if rate <= 0:
+        return "none yet"
+    n = 1 / rate                                   # two significant figures: ~1 per 170k bars
+    return f"~1 per {n / 1000:.0f}k bars" if n >= 10_000 else f"~1 per {round(n, -2):,.0f} bars"
+
+
 def _set_board_cards(results_df, study, *, when: str = "today", events: bool = True) -> list:
     """The three cards of the signal board — one per set, in the same grammar.
 
@@ -614,7 +625,7 @@ def _set_board_cards(results_df, study, *, when: str = "today", events: bool = T
             col = {"A": "LG_Proven", "B": "PRG_Ready", "C": "PRG_Ready_C"}[k]
             v = pd.to_numeric(results_df.get(col, pd.Series(dtype=float)), errors="coerce").fillna(0) \
                 if results_df is not None else pd.Series(dtype=float)
-            watch = ("In a proven state" if k == "A" else "Ready · next flip fires",
+            watch = ("In a proven state" if k == "A" else "Ready to fire",
                      f"{int((v > 0).sum())} ▲ · {int((v < 0).sum())} ▼")
         else:
             n = study.counts() if study is not None else {}
@@ -625,11 +636,13 @@ def _set_board_cards(results_df, study, *, when: str = "today", events: bool = T
         for sd in ("buy", "sell"):
             lbl, kind, detail, r = _set_verdict(study, k, sd)
             num = (f"{r.edge:+.3f}σ · {r.hit:.0f}% hit" if r is not None else "—")
+            if r is not None and r.n_events < edge.MIN_EVENTS:
+                num = f"{r.n_events} event{'s' if r.n_events != 1 else ''} · too few"
             edges.append((_SIDE_GLYPH[sd], lbl, kind, num, detail))
         cards.append({
             "key": k, "title": eng.SET_TITLE[k], "line": eng.SET_LINE[k],
             "tone": _set_tone(study, k),
-            "rate": (f"{study.rate(k) * 1000:.2f} / 1k bars" if study is not None else ""),
+            "rate": (_rate_text(study.rate(k)) if study is not None else ""),
             "sides": sides, "watch": watch, "edges": edges,
         })
     return cards
@@ -639,20 +652,15 @@ def _render_edge_study_panel(sid: eng.EngineSettings, study) -> None:
     """Full Edge Study readout — the numbers behind the verdict, per slice and per era."""
     ui.render_section_header(
         "Edge Study",
-        "Measured out-of-sample expectancy of the three signal sets on the symbols on screen · "
-        "re-measured daily",
+        "Each set's record on the symbols on screen · out of sample · re-measured daily",
         icon="activity", accent="violet",
     )
     if study is None:
         ui.render_interpretation_card(
             "Not measured on this universe",
-            "The signal set is a fixed, pre-declared rule; whether it carries an edge on THESE "
-            f"symbols is a separate empirical question, and the app measures it on every run — an "
-            f"event study over ~{_STUDY_YEARS} years through the same engine call the screener "
-            "makes, each instrument's own trailing drift removed (causally), vol-normalised, "
-            "block-bootstrapped over dates. This one did not complete: either the cross-section "
-            "was too thin to measure, or the deep history request came back short (yfinance "
-            "rate-limits deep requests from shared cloud IPs). It is retried on the next session.",
+            "The study runs with every screen — about 15 years of history through the same engine. "
+            "This one did not complete: too few symbols, or the data provider cut the history "
+            "request short. It retries next session.",
             "neutral",
         )
         return
@@ -679,10 +687,8 @@ def _render_edge_study_panel(sid: eng.EngineSettings, study) -> None:
     # The three sets, one card each: events measured, and each side's verdict with the
     # holdout number behind it. Hover a verdict for its interval.
     ui.render_set_board(_set_board_cards(None, study, events=False))
-    ui.render_note(f"**{study.n_symbols_studied}** names studied, {study.start} to {study.end} · they move "
-                   f"together enough to count as **{study.part_ratio:.1f}** independent names per date · "
-                   f"split for the holdout at {study.split_date}. Edge is gross, drift-free, in σ over "
-                   f"{study.horizon} bars; the holdout's number is shown where it exists.")
+    ui.render_note(f"**{study.n_symbols_studied}** names, {study.start} to {study.end} · "
+                   f"**{study.part_ratio:.1f}** independent names per date · held out from {study.split_date}.")
 
     ui.render_table_panel(
         pd.DataFrame(rows), key="edge-results",
@@ -695,7 +701,7 @@ def _render_edge_study_panel(sid: eng.EngineSettings, study) -> None:
                      "state proven on the name's own record. B: the column flips, close past the "
                      "midline, risk calm and not rising, the ladder agreeing. C: B with the trend "
                      "agreeing. Each set is judged on its own rows; none borrows another's verdict.",
-            "Edge (vol)": "Mean drift-free, vol-normalised return following an event. GROSS.",
+            "Edge (vol)": "Average return after an event, drift removed, in units of the instrument's volatility, before costs.",
             "CI low / high": "Block-bootstrap 95% bounds. An edge is claimed only when the low is > 0.",
             "Net": f"Edge minus the cost charge at {sid.cost_bps:.1f} bp, in the same vol units "
                    f"via each instrument's own h-bar sigma.",
@@ -711,25 +717,11 @@ def _render_edge_study_panel(sid: eng.EngineSettings, study) -> None:
     st.markdown(
         f'<div style="font-family:var(--data); font-size:var(--fs-xs); color:var(--ink-tertiary); '
         f'padding:0.7rem 0 0.1rem 0; line-height:1.6;">'
-        f'<b style="color:var(--ink-secondary);">Method.</b> Event study of the pre-declared '
-        f'signal sets ({html.escape(eng.TRIGGER_PROSE)}, {study.length}-bar conviction lookback, '
-        f'{study.horizon}-bar hold, entry the bar after the signal), through the same engine call '
-        f'the screener makes — the ledger\'s warm-up and record apply exactly as on screen. '
-        f'Each instrument\'s own mean forward return over the 500 returns already <i>realised</i> '
-        f'before the event is removed, so a rising market cannot read as edge and nothing from the '
-        f'future leaks in; the residual is divided by that instrument\'s own trailing sigma so asset '
-        f'classes are comparable. Confidence intervals come from a block bootstrap over '
-        f'<i>dates</i>. Parameters are never tuned here: this measures a fixed rule, it does not '
-        f'search for a better one.<br><br>'
-        f'<b style="color:var(--ink-secondary);">What the source measured.</b> pragati.pine\'s '
-        f'evidence covers conviction\'s components on eleven instruments across four timeframes: '
-        f'regular divergence ranked first (not established); participation weighting earns its '
-        f'place; the chart-only reversal trigger had no edge (+0.0003R). Nothing reached '
-        f'significance once overlapping windows were accounted for (best t = 1.9 of 48 cells). '
-        f'Three sets are measured side by side. Set A, Pragyam\'s proven-state triangles, is proven on '
-        f'each name\'s own past; pooled across 151 instruments no state reached |t| = 1.3 outside '
-        f'crypto. The nearest tested versions of sets B and C measured +0.7 and +0.9σ × 100 over 10 '
-        f'bars with t below 1 (Indicator repo, research/flips.txt). This study is the number for YOUR symbols.'
+        f'<b style="color:var(--ink-secondary);">Method.</b> Entry the bar after each event, held '
+        f'{study.horizon} bars. Each instrument\'s trailing drift is removed and returns are scaled by its '
+        f'own volatility, so markets and asset classes compare. Intervals are a block bootstrap over '
+        f'dates; the verdict is judged on the final 40% of dates, held out. Parameters are fixed — the '
+        f'study measures the rule, it does not search for a better one.'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -2668,34 +2660,27 @@ def render_footer():
 #: the three panels cannot drift apart in structure the way three hand-written
 #: HTML blocks did.
 _SYSTEM_PANELS = (
-    ("engine", "Pragati · Conviction × Value", "One trace, its push, two tapes",
-     "How far a move is stretched — in one-sided effort, and in price against what the "
-     "macro drivers explain — on one trace, with its own push beneath it. The two "
-     "ingredients are read apart, across horizons, on two tapes: who controls, and "
-     "where price stands.",
-     (("Conviction", "Σ(c·w) / Σ(|c|·w), c = ΔC / TR"),
-      ("Value", "Samanvaya: hedged RV ⊕ breadth"),
-      ("Trace", "blended in σ, bounded once · θ ±43"),
-      ("Ladders", "conviction ↓ 1m…4h·D (↺ W·D) · value W·D / M·W"))),
-    ("events", "Three Signal Sets, One State", "Events, and where a name stands",
-     "All three sets fire on every screen, side by side, each with its own measured verdict. "
-     "A - entering a state the name's own record has proven: rare. B - the surprise column "
-     "flips, the close past the midline, risk calm and not rising, the stretch ladder agreeing. "
-     "C - B with the trend tape agreeing. The watchlist holds the names one flip away. The "
-     "3 × 3 grid names where a name stands.",
-     (("A", "a state proven on this name"),
-      ("B · C", "a flip in calm risk, ladder (and trend) agreeing"),
-      ("Watch", "ready for B / B·C · in a proven state"),
-      ("Grid", "Buy 4 … Exit 0.25 (measured units)"),
-      ("Ranking", "▲▼ today, then stretch"))),
-    ("measured", "Measured, Not Inherited", "Expectancy on your symbols",
-     "The v9 audit measured the stack on 380 instruments; the Edge Study measures it on "
-     "YOUR universe, through the same engine call the screen makes. Nothing about "
-     "expectancy is hardcoded; until you measure, the app says \u201cnot measured\u201d.",
-     (("Method", "Event study, ~15y"),
-      ("Drift", "Removed causally (trailing)"),
-      ("Intervals", "Block bootstrap over dates"),
-      ("Power", "n_eff and MDE stated"))),
+    ("engine", "Readings", "Conviction × value",
+     "Who controls a move, and the price it was made at — one trace, its push, and two tapes "
+     "read across timeframes.",
+     (("Conviction", "who controls, 1m → W"),
+      ("Value", "rich or cheap vs. macro drivers"),
+      ("Trace", "conviction × value, ±100"),
+      ("Grid", "3 × 3 · Buy → Exit"))),
+    ("events", "Signals", "Three sets, side by side",
+     "Every set fires on every screen, each with its own tested record. A watchlist holds the "
+     "names one flip from firing.",
+     (("A", "entering a state proven on the name"),
+      ("B", "a flip in calm risk"),
+      ("C", "B, with the trend agreeing"),
+      ("Watchlist", "ready · near · proven"))),
+    ("measured", "Edge Study", "Tested on your symbols",
+     "Every run tests each set on the universe in front of you, out of sample, and shows the "
+     "verdict beside the signal.",
+     (("History", "~15 years"),
+      ("Drift", "removed, causally"),
+      ("Intervals", "block bootstrap"),
+      ("Verdict", "per set and side"))),
 )
 
 
@@ -2718,10 +2703,8 @@ def render_landing_page():
     # ── The proposition ───────────────────────────────────────────────────
     st.markdown(
         """<div class="lede">
-  <div class="lede-claim">Is the push paid for — and at what price? One indicator
-    across a universe: where a name's own record has proven the state it is in, where every
-    name stands between those events, and whether any of it has been worth
-    anything on the symbols you are actually looking at.</div>
+  <div class="lede-claim">A whole universe on one screen — what fired, what is about to,
+    where every name stands, and whether any of it has paid on these symbols.</div>
   <div class="lede-cta">Pick a universe and a mode in the rail, then
     <strong>Run</strong>.</div>
 </div>""",
@@ -2738,9 +2721,9 @@ def render_landing_page():
             {"label": "Analysis Modes", "value": "4",
              "subtext": "Single Date · Pulse Narrative · Historical Range · "
                         "Correlation"},
-            {"label": "History Per Run", "value": "~4.5y",
-             "subtext": "Daily; Weekly fetches deeper. Every reading is causal — "
-                        "a bar depends only on bars before it"},
+            {"label": "History Per Run", "value": "~3.5y",
+             "subtext": "Daily · ~16 years on Weekly · every reading uses only the bars "
+                        "before it"},
         ],
         max_cols=3,
         key="landing-coverage",
@@ -2767,13 +2750,11 @@ def render_landing_page():
     # ── What a run returns ────────────────────────────────────────────────
     ui.render_section_header("What a run returns", icon="target")
     _out = (
-        ("The fired events", "Every ▲ and ▼ in the last five bars, bucketed by age, with the "
-                             "ledger state, grid state, push, tapes and evidence behind each."),
-        ("The grid", "Where every name stands — Buy to Exit."),
-        ("A measured edge", "An event study on your own symbols: trailing drift removed, "
-                            "vol-normalised, with the interval and the power stated."),
-        ("The evidence", "Every computed column, with a legend that says which are signal "
-                         "and which are context. Exportable."),
+        ("Signals", "Each set's events, watch and tested record, then every event of the last "
+                    "five sessions."),
+        ("Watchlist", "The names one flip from firing, with how often each group has fired."),
+        ("Grid", "Where every name stands, from Buy to Exit."),
+        ("System Data", "The full frame, exports, definitions and the Edge Study."),
     )
     # ONE markdown block, not four panels. These four cards are static text, so
     # they gain nothing from a Streamlit container and lose something real to
@@ -3717,11 +3698,9 @@ def render_timeseries_dashboard():
     range_label = (f"{start_date} to {end_date}"
                    if start_date and end_date
                    else f"{len(daily_agg)} periods")
-    _iclass  = meta.get('iclass', '—')
-    _trigger = meta.get('trigger') or eng.TRIGGER_PROSE
     ui.render_section_header(
-        f"Historical Range ({range_label})",
-        f"{ENGINE_NAME} · {_trigger} · {_iclass}",
+        f"Historical Range · {range_label}",
+        f"{ts_df['Symbol'].nunique()} symbols · {timeframe} · sets A · B · C",
         icon="history", accent="violet",
     )
     _study = _edge_cache_get(_edge_key(meta.get("universe"), meta.get("selected_index"), timeframe,
@@ -3755,8 +3734,8 @@ def render_timeseries_dashboard():
     with tab1:
         # The three sets compared on THIS range first: what each would have delivered.
         ui.render_section_header("The Sets on This Range",
-                                 "What followed each set's events, in the event's direction · raw "
-                                 "returns from the signal bar's close, overlapping, not drift-adjusted",
+                                 "What followed each set's events over this range · raw returns, not "
+                                 "drift-adjusted",
                                  icon="target", accent="violet")
         _rows = []
         for k in lg.SETS:
@@ -3789,7 +3768,7 @@ def render_timeseries_dashboard():
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("Events by Set",
-                                 "▲ up and ▼ down per session — one panel per set, on a shared time axis",
+                                 "▲ above, ▼ below, per session",
                                  icon="bar-chart", accent="info")
         _ec = st.columns(3)
         for col, k in zip(_ec, lg.SETS):
@@ -3828,8 +3807,7 @@ def render_timeseries_dashboard():
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("The Watch Over Time",
-                                 "Ready for B (and B·C) — one flip from firing — and in a state proven on "
-                                 "the name (A). Long up, short down",
+                                 "Names ready to fire (B and B·C) and in a proven state (A) · ▲ above, ▼ below",
                                  icon="eye", accent="violet")
         w1, w2 = st.columns(2)
         for col, (up_c, dn_c, upc_c, dnc_c, ttl, key_) in zip(
@@ -3862,10 +3840,8 @@ def render_timeseries_dashboard():
             _ts = daily_agg[_tone_cols].rename(columns=lambda c: c[5:])
             ui.render_chart_panel(charts.create_tone_history(_ts), key='grid_breadth',
                                   context=_chart_ctx('% of names read'))
-            ui.render_note("Stacked in the order a book reads the grid — **build** (emerald), "
-                           "**watched** (cyan), **no edge** (grey), **caution** (amber), **cut** "
-                           "(rose). A band thickening toward the top is the universe climbing "
-                           "the grid; toward the bottom, sliding down it.")
+            ui.render_note("Build (emerald) at the top to cut (rose) at the bottom — a thickening top "
+                           "band is the universe moving up the grid.")
         else:
             fig_grid = go.Figure()
             fig_grid.add_trace(go.Scatter(x=daily_agg.index, y=daily_agg['Build_Pct'], mode='lines',
@@ -3893,7 +3869,7 @@ def render_timeseries_dashboard():
 
         st.markdown("<br>", unsafe_allow_html=True)
         ui.render_section_header("Flow-Zone Breadth",
-                                 "Accumulation vs Distribution over time — context, not signal",
+                                 "Accumulation vs distribution over time",
                                  icon="trending-up", accent="amber")
         fig_div = go.Figure()
         fig_div.add_trace(go.Bar(x=daily_agg.index, y=daily_agg['Overbought_Pct'],
@@ -4755,7 +4731,7 @@ def _state_cell(row, study=None) -> str:
         title = f"The last event of any set was {'▲' if d > 0 else '▼'}{age_t} ago. " + title
         return (f'<td class="numeric" style="color:{_long_c() if d > 0 else _short_c()}; '
                 f'font-size:{ui.FS["2xs"]};" title="{html.escape(title)}">'
-                f'{"▲" if d > 0 else "▼"} decl{age_t}</td>')
+                f'last {"▲" if d > 0 else "▼"} ·{age_t}</td>')
     return (f'<td class="numeric" style="color:{_dim()}; font-size:{ui.FS["2xs"]};" '
             f'title="{html.escape(title)}">—</td>')
 
@@ -4917,7 +4893,7 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
                 <td class="numeric" style="color:{_t["violet"]}; font-weight:600;">{confluence:.2f}</td>
             </tr>""")
     head = (_th("Rank") + _th("Symbol", numeric=False) + _th("Corr") + _th("Trace", _TH_TRACE)
-            + _th("State", "The ledger: an event on this bar, a proven state the name is still in, learning, or the standing declaration")
+            + _th("State", "The ledger: an event on this bar, a proven state the name is still in, learning, or how long since the last event")
             + _th("Grid", _TH_GRID, numeric=False)
             + _th("Zone", "Cumulative-delta flow zone — context only")
             + _th("Actual %", "Symbol's price change on the analysis date")
@@ -4928,13 +4904,25 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
     return _html_doc(head, rows, _MAXH)
 
 
-def _age_labels(timeframe: str) -> list:
+def _is_latest(analysis_date) -> bool:
+    """Is the screen on the latest session, or looking back at a past date?"""
+    try:
+        return analysis_date >= _today_ist()
+    except TypeError:
+        return True
+
+
+def _age_labels(timeframe: str, latest: bool = True) -> list:
+    """Age buckets, worded for the date on screen: 'Today' only when it is today."""
     if timeframe == 'Weekly':
-        return ["This Week", "1 Week Ago", "2 Weeks Ago", "3 Weeks Ago", "Within 5 Weeks"]
-    return ["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"]
+        return (["This Week", "1 Week Ago", "2 Weeks Ago", "3 Weeks Ago", "Within 5 Weeks"] if latest else
+                ["That Week", "1 Week Before", "2 Weeks Before", "3 Weeks Before", "Within 5 Weeks"])
+    return (["Today", "1 Day Ago", "2 Days Ago", "3 Days Ago", "Within 5 Days"] if latest else
+            ["On the Date", "1 Session Before", "2 Sessions Before", "3 Sessions Before", "Within 5 Sessions"])
 
 
-def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timeframe: str = 'Daily') -> tuple:
+def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timeframe: str = 'Daily',
+                           latest: bool = True) -> tuple:
     """Bucket fired events by age (Today, 1d, 2d, 3d, within 5d) for the timeline.
 
     side: 'buy' (long events, BUY_* columns) or 'sell' (short events, SELL_*). Each cell
@@ -4945,7 +4933,7 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timefram
     their per-age histories) plus an entry-exhaustion read.
     """
     prefix = 'BUY' if _is_buy_side(side) else 'SELL'
-    age_labels = _age_labels(timeframe)
+    age_labels = _age_labels(timeframe, latest)
     buckets = {label: [] for label in age_labels}
     col_map = dict(zip(age_labels, [f"{prefix}_Today", f"{prefix}_1d", f"{prefix}_2d",
                                     f"{prefix}_3d", f"{prefix}_5d"]))
@@ -5001,14 +4989,15 @@ def _bucket_signals_by_age(results_df: pd.DataFrame, side: str = 'buy', timefram
     return buckets, stats, trend, trend_color
 
 
-def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'Daily', study=None) -> str:
+def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'Daily', study=None,
+                             latest: bool = True) -> str:
     """Build the age-grouped HTML table of fired events, with section headers."""
     _pal = _side_palette(side)
     accent_light = _pal["accent_light"]
     _MAXH = 760
     _NCOLS = 12
     rows = []
-    for age in _age_labels(timeframe):
+    for age in _age_labels(timeframe, latest):
         if stats[age]['count'] == 0:
             continue
         s = stats[age]
@@ -5195,7 +5184,7 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy') -> str:
                 <td class="numeric" style="color: {abs_color}; font-weight: 600;">{abs_strength:.2f}×</td>
             </tr>""")
     head = (_th("Symbol", numeric=False) + _th("Price") + _th("% Change")
-            + _th("State", "The ledger: an event on this bar, a proven state still held, learning (gold), the standing declaration, or —")
+            + _th("State", "The ledger: an event on this bar, a proven state still held, learning (gold), or how long since the last event")
             + _th("Grid", _TH_GRID, numeric=False) + _th("Push", _TH_PUSH) + _th("Trace", _TH_TRACE)
             + _th("C", _TH_C) + _th("V", _TH_V)
             + _th("Hold", "Bars into the declared hold window of the latest event")
@@ -5253,7 +5242,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy') -> st
                                 "by stretch: the long side leads with the names stretched furthest "
                                 "down, the short side with the names stretched furthest up.")
             + _th("Price") + _th("% Change")
-            + _th("State", "The ledger: an event on this bar, a proven state still held, learning (gold), the standing declaration, or —")
+            + _th("State", "The ledger: an event on this bar, a proven state still held, learning (gold), or how long since the last event")
             + _th("Grid", _TH_GRID, numeric=False) + _th("Push", _TH_PUSH) + _th("Trace", _TH_TRACE)
             + _th("C", _TH_C) + _th("V", _TH_V)
             + _th("Regime", "HMM regime — risk context, not a signal input")
@@ -5325,8 +5314,6 @@ def render_correlation_results(corr_data: dict) -> None:
     target_name = corr_data["target_name"]
     lookback = corr_data["lookback"]
     method = corr_data["method"]
-    trigger = corr_data.get("trigger") or "▲ proven + · ▼ proven − (this name's ledger)"
-    iclass = corr_data.get("iclass", "—")
 
     tab1, tab2, tab3 = st.tabs([
         "Correlation Dashboard",
@@ -5340,7 +5327,7 @@ def render_correlation_results(corr_data: dict) -> None:
     with tab1:
         ui.render_section_header(
             "Correlation Dashboard",
-            f"Target: {target_name} ({target_ticker}) | {lookback}D Rolling {method}",
+            f"{target_name} ({target_ticker}) · {lookback}-day rolling {method}",
             icon="crosshair",
             accent="violet"
         )
@@ -5417,7 +5404,7 @@ def render_correlation_results(corr_data: dict) -> None:
     with tab2:
         ui.render_section_header(
             "Confluence Setups",
-            f"Confluence: Correlation × Pragati signal strength · {trigger} · {iclass}",
+            "Names where a strong correlation and a live reading line up",
             icon="zap",
             accent="cyan"
         )
@@ -5428,12 +5415,9 @@ def render_correlation_results(corr_data: dict) -> None:
         # have that failure mode because it takes text, not markup.
         ui.render_info_box(
             "How to read",
-            "Each setup type is ranked by Confluence Score (0-1) = |Correlation| \u00d7 "
-            "normalised signal strength. Highest rank = strongest overlap between the "
-            "correlation relationship and a live Pragati reading. Look for a score above "
-            "0.7, a divergence past \u00b13%, and an event (\u25b2 / \u25bc, a state proven on "
-            "the name's own record) or a proven state in State rather than a dash — and read the Grid column "
-            "for where the name already stands.",
+            "Confluence (0-1) is |correlation| × signal strength. The strongest setups score "
+            "above 0.7, diverge more than ±3% from what the correlation implies, and show an "
+            "event or a proven state in State.",
             color="cyan",
         )
 
@@ -5650,52 +5634,29 @@ def render_correlation_results(corr_data: dict) -> None:
 
 
 _SIGNAL_TYPE_REFERENCE = [
-    ("Set A · ▲ PROVEN + · ▼ PROVEN − — Pragyam's ledger", "emerald",
-     "The events are Pragyam's triangles (ledger.py, ported bar for bar from pragyam.pine). Every "
-     "closed bar sits in one of nine states: the trend - the move over 63, 126 and 252 bars in "
-     "units of the risk forecast - down, flat or up, crossed with where the close landed against "
-     "the cone drawn 10 bars ago - below, inside or above. For each state the ledger keeps THIS "
-     "name's record: the next 10 bars after every bar spent in it, from the next open, in units "
-     "of the risk forecast, against the name's own average. It shrinks that record toward 'no "
-     "edge' (a real edge is assumed to be about 0.10σ at most) and calls a state PROVEN past two "
-     "standard errors. ▲ fires on the first bar of a state proven positive, ▼ proven negative. "
-     "No cooldown and no gate on the Pragati stack; the last one stands as the declaration. "
-     "Rare by design: across 151 instruments about one triangle per 5,500 bars, and on random "
-     "walks the rule calls a state proven on 0.4% of bars. A triangle says the name's own past "
-     "has proven its state - not that the state carries an edge across names: pooled, no state "
-     "reached |t| = 1.3 outside crypto. The ledger needs about 563 bars before it can prove "
-     "anything."),
-    ("Set B · a flip in calm risk, the ladder agreeing", "cyan",
-     "▲ fires on one closed bar when all of these hold: the surprise column (the 10-bar move over "
-     "its forecast) flips positive - below zero on the bar before, at or above it now; the close is "
-     "above the midline (the middle of the landing band); risk is CALM - its rank in its last 500 "
-     "bars in the bottom third, the inner risk tape at its lightest; risk is NOT RISING - up no "
-     "more than 10% over 10 bars, the outer risk tape grey; and the stretch ladder (the outer trend "
-     "tape) leans up, at any strength. ▼ mirrors. No cooldown; a tape still warming blocks it. "
-     "READY marks a side with every condition in place but the flip. About 25 per 1,000 bars "
-     "across 151 instruments; the nearest tested version measured +0.7σ × 100 over 10 bars, t below 1."),
-    ("Set C · set B, the trend agreeing", "violet",
-     "Set B, and the trend tape (the inner trend tape: the move over 63, 126 and 252 bars in units "
-     "of risk) on the same side - up for ▲, down for ▼, at any strength. About 14 per 1,000 bars; "
-     "the nearest tested version measured +0.9σ × 100 over 10 bars, t below 1."),
-    ("The grid · where a name stands between signals", "violet",
-     "The conviction tape (who controls) is the row — UP past +30, DOWN past −30, FAINT "
-     "between — and the value tape (where price stands) the column — cheap past −θ, rich past "
-     "+θ, fair between: Pragyam's 3 × 3, the grid pragati.pine v9.3 draws. Its units were MEASURED "
-     "(studies/): Buy · capitulation 4 and Accumulate · washout 1½ where sellers "
-     "hold a cheap or fair price, Buy · turned 3, Hold · building 1½ and Trim · paid ¾ where "
-     "buyers do. Conviction's own histogram decides when a row may change — a confirmed push, "
-     "else the row is HELD (gold). The units are graded by where the name sits inside its "
-     "cell. A weight, not a forecast."),
-    ("Scope · measured on YOUR universe", "amber",
-     "The readings describe; the triangles are proven per name. The app measures whether "
-     "those proofs carry forward on YOUR symbols: an event study over ~15 years "
-     "through the same engine call the screener makes, each instrument's own drift removed "
-     "causally (its trailing drift), vol-normalised, block-bootstrapped over dates, with the power stated. "
-     "Parameters are never tuned to your data. A 'no edge' or 'underpowered' verdict is "
-     "reported, never applied: the signals still fire. The conviction ladder reads DOWN — "
-     "the intraday frames yfinance carries inside each bar — and falls back to W · D (↺) "
-     "on bars older than that history; PRG_Ladder says which."),
+    ("Set A · proven state", "emerald",
+     "▲ fires when a name enters a state its own history has proven positive; ▼ when proven "
+     "negative. A state is the trend (down, flat or up) crossed with where the close landed against "
+     "its 10-bar cone — nine in all. Each state's record is this name's own next-10-bar returns, "
+     "shrunk toward zero and called proven past two standard errors. Rare: about one event per "
+     "5,500 bars, and only after ~560 bars of history."),
+    ("Set B · flip in calm risk", "cyan",
+     "▲ fires when the surprise column — the 10-bar move against its forecast — turns positive "
+     "while the close is above the midline, risk is calm (the bottom third of its 500-bar range) "
+     "and not rising, and the stretch ladder leans up. ▼ mirrors. About 25 events per 1,000 bars."),
+    ("Set C · flip with the trend", "violet",
+     "Set B, with the trend tape on the same side — up for ▲, down for ▼. Every C event is also a "
+     "B event. About 14 per 1,000 bars."),
+    ("The grid · where a name stands", "violet",
+     "Rows are who controls — the conviction tape past ±30; columns are where price sits — the "
+     "value tape past ±θ. Each of the nine cells is an action with a position weight, from Buy · "
+     "capitulation (4 units) to Exit (¼). A row changes only on a confirmed push; until then it is "
+     "held, shown in gold."),
+    ("Edge Study · tested on your symbols", "amber",
+     "Every run tests each set on the universe on screen: about 15 years of events, each "
+     "instrument's own trailing drift removed, returns scaled by its volatility, intervals from a "
+     "block bootstrap over dates, judged on the final 40% held out. Parameters are fixed — nothing "
+     "is tuned to your data. A weak verdict is reported, never applied: signals still fire."),
 ]
 
 
@@ -5706,7 +5667,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
         sid = _active_engine_settings()
     ui.render_section_header(
         "System Data",
-        "Exports, raw signal frame, and reference legends",
+        "Exports, the full frame, definitions and the Edge Study",
         icon="database", accent="cyan",
     )
 
@@ -5837,7 +5798,7 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     # ── Signal Reference ──────────────────────────────────────────────────
     ui.render_section_header(
         "Signal Reference",
-        "The three sets, the one state, and where they hold",
+        "The three sets, the grid, and how they are tested",
         icon="info", accent="amber",
     )
     ref_cols = st.columns(2)
@@ -5858,12 +5819,17 @@ def _render_signals_tab(results_df, study, timeframe, n_analyzed, n_universe, da
     measured for it); the tables are read down (each name once, at its newest event, its sets
     lit). A trader never has to choose a set to see what the others did.
     """
-    timeframe_label = "This Week's" if timeframe == 'Weekly' else "Today's"
-    when = 'this week' if timeframe == 'Weekly' else 'today'
+    latest = _is_latest(analysis_date)
+    weekly = timeframe == 'Weekly'
+    if latest:
+        title = "This Week's Signals" if weekly else "Today's Signals"
+        when = 'this week' if weekly else 'today'
+    else:
+        title = f"Signals · {'week of ' if weekly else ''}{date_str}"
+        when = 'that week' if weekly else 'on the date'
+    span = "weeks" if weekly else "sessions"
     ui.render_section_header(
-        f"{timeframe_label} Signals",
-        f"{n_analyzed} / {n_universe} symbols · {timeframe} · {date_str} · sets A · B · C side by side "
-        f"· measured: {mv_label}",
+        title, f"{n_analyzed} / {n_universe} symbols · {timeframe} · events from the last 5 {span}",
         icon="zap", accent="amber",
     )
     ui.render_set_board(_set_board_cards(results_df, study, when=when))
@@ -5873,38 +5839,34 @@ def _render_signals_tab(results_df, study, timeframe, n_analyzed, n_universe, da
     sells_df = results_df[results_df['SELL_5d'].astype(str) != "—"].copy().sort_values(
         'Priority_Short', ascending=False, na_position='last')
     if buys_df.empty and sells_df.empty:
-        ui_info(
-            f"<b>No events fired</b> for {selected_index} on {analysis_date} ({timeframe}). All "
-            f"{n_analyzed} symbols were analyzed and no set fired a ▲ or ▼ in the last 5 bars. Set A "
-            "is rare by design; sets B and C need calm risk, so they go quiet when risk is high. The "
-            "Watchlist holds the names one flip away; the Grid shows where every name stands.")
+        ui.render_empty_state(
+            "No events",
+            f"No set fired a ▲ or ▼ in the last 5 {span}. Set A is rare by design, and sets B and C "
+            "stay quiet while risk is elevated. The Watchlist shows who is closest to firing.")
     else:
-        _age_order = _age_labels(timeframe)
+        _age_order = _age_labels(timeframe, latest)
         buy_tab, sell_tab = st.tabs([f"▲ Long events · {len(buys_df)}", f"▼ Short events · {len(sells_df)}"])
 
         def _render_age_table(df_, side_key):
-            _, _stats, _trend, _tcol = _bucket_signals_by_age(df_, side=side_key, timeframe=timeframe)
-            _html = _build_signal_table_html(_stats, side=side_key, timeframe=timeframe, study=study)
+            _, _stats, _trend, _tcol = _bucket_signals_by_age(df_, side=side_key, timeframe=timeframe, latest=latest)
+            _html = _build_signal_table_html(_stats, side=side_key, timeframe=timeframe, study=study, latest=latest)
             _g = sum(1 for a in _age_order if _stats[a]['count'] > 0)
             _r = sum(_stats[a]['count'] for a in _age_order)
             st.components.v1.html(_html, height=ui.table_iframe_height(_r, extra_rows=_g * 2, max_height=760),
                                   scrolling=True)
 
-        _how = (f"Each name once, at its newest event; its sets lit (A proven state · B flip in calm risk · "
-                f"C B with the trend). Within a day, A first, then B·C, then B. Entry is the next session's "
-                f"open; the declared hold is {sid.horizon} bars. Hover a set for what it means and what it "
-                f"measured here.")
+        _how = (f"Each name once, at its newest event. Lit letters are the sets that fired it — hover "
+                f"for their tested record. Entry is the next open; the hold is {sid.horizon} bars.")
         for tab, df_, key_ in ((buy_tab, buys_df, 'buy'), (sell_tab, sells_df, 'sell')):
             with tab:
                 st.markdown(f'<div style="font-family:var(--data); font-size:var(--fs-xs); '
                             f'color:var(--ink-tertiary); padding:0.2rem 0 0.5rem 0;">{html.escape(_how)}</div>',
                             unsafe_allow_html=True)
                 if df_.empty:
-                    ui_info(f"No {'long' if key_ == 'buy' else 'short'} events in the last 5 bars.")
+                    ui.render_empty_state("No events", f"No {'long' if key_ == 'buy' else 'short'} "
+                                                       f"events in the last 5 {span}.")
                 else:
                     _render_age_table(df_, key_)
-    if n_warming:
-        ui.render_note(f"{n_warming} symbol(s) excluded — fewer than {sid.min_bars} bars of history.")
 
 
 def _render_watch_tab(results_df, study, timeframe, key: str = "watch") -> None:
@@ -5916,8 +5878,7 @@ def _render_watch_tab(results_df, study, timeframe, key: str = "watch") -> None:
 
     ui.render_section_header(
         "Watchlist",
-        "What fires next: every condition in place but the flip (sets B and C), and the states a "
-        "name's own record has proven (set A)",
+        "Names one flip from firing, and names in a proven state",
         icon="eye", accent="violet",
     )
     kpis = []
@@ -5927,14 +5888,8 @@ def _render_watch_tab(results_df, study, timeframe, key: str = "watch") -> None:
                          "color_class": (("violet" if t == 3 else tone if t < 2 else "warning") if _n(w, t) else "neutral"),
                          "tooltip": what})
     ui.render_kpi_strip(kpis, max_cols=4, key=f"{key}-strip")
-    ui.render_note("Each group's rate is what it **measured** on 151 instruments (daily 2003-2026 and "
-                   "hourly 2024-2026 agree, studies/v10_watch/): the share of names in it that fired B on the "
-                   "next bar and within 10. Names on no list: ~0.3% and ~9-10%. Every ready and near name is **armed** — its "
-                   "surprise column is on the far side of zero, so the next crossing is the flip; "
-                   "**Column** is how far that is. Near names are short only the ladder, which the flip "
-                   "itself often tips over. Together, ready and near held ~80% of B events the bar before "
-                   "they fired. A watch is not a signal, and none of this says the event will pay — that "
-                   "is the Edge Study's question.")
+    ui.render_note("Each card shows how often names in that group have fired set B — on the next bar, "
+                   "and within 10 (names off the list: ~0.3% and ~9%). A watch is a heads-up, not an entry.")
     for w, side_key, label in ((wl, 'buy', "▲ Long watch"), (ws, 'sell', "▼ Short watch")):
         _p = _side_palette(side_key)
         st.markdown(f'<p style="font-family:var(--data); font-size:var(--fs-2xs); font-weight:600; '
@@ -5955,8 +5910,7 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
 
     ui.render_section_header(
         "Conviction-Value Grid",
-        f"{len(read)} of {len(results_df)} names read · the 3 × 3 the two tapes place each "
-        f"name in, named as an action",
+        f"{len(read)} of {len(results_df)} names read · who controls (rows) × where price sits (columns)",
         icon="grid", accent="violet",
     )
     # ── census by TONE — Pragyam's reading order: build → watched → no edge → caution → cut ──
@@ -5973,35 +5927,22 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
                      "color_class": cg.TONE_CHIP[tone],
                      "tooltip": charts.TONE_LABEL[tone]})
     ui.render_kpi_strip(kpis, max_cols=5, key=f"{key}-tone-strip")
-    ui.render_note(f"**{n_build}** names sit on the build side and **{n_cut}** on the cut side. "
-                   f"**{n_held}** rows are *held* — the tape moved, the push has not confirmed.")
+    ui.render_note(f"**{n_build}** on the build side · **{n_cut}** on the cut side · **{n_held}** held "
+                   f"(the tape moved; the push has not confirmed it yet).")
 
     # ── the plane: every name at its two tapes ──
     ui.render_sub_header("Conviction-value map")
     ui.render_chart_panel(charts.create_conviction_value_map(results_df), f"{key}-map",
                           units="conviction tape × value tape")
-    ui.render_note("Each name sits where its two tapes put it; its **shape and colour are its grid "
-                   "state**. Dotted lines are the knees (±30 conviction, ±θ value). A *hollow* "
-                   "point is a held row — the tape has moved into a new cell but the push has not "
-                   "yet backed it. An accent ring marks a ▲▼ on this bar.")
+    ui.render_note("Each point is a name at its two tapes, coloured by its grid state. Hollow: held. "
+                   "Ring: an event on this bar.")
 
     ui.render_sub_header("Census")
     n_un = int((cells == cg.UNREAD).sum())
     with ui.html_panel(f"{key}-census", context=_chart_ctx("cell counts · share of names read")):
         st.components.v1.html(_build_grid_census_html(results_df),
                               height=_census_iframe_height(n_un))
-    ui.render_note("Rows are who controls (the conviction tape: UP past +30, DOWN past −30); "
-                   "columns are where price stands (the value tape: cheap past −θ, rich past +θ). "
-                   "A cell wears its tone: **emerald** builds — capitulation or a turn; **cyan** "
-                   "accumulates a washout or a base; **amber** holds or trims — building, stalling, "
-                   "paid; **rose** exits distribution; grey waits. " + cg.READ_THE_PUSH)
-    ui.render_note("**Measured (v9 audit, scored without look-ahead):** across 380 instruments in "
-                   "six asset classes and three eras (2006-13, 2014-19, 2020-26), *Buy · capitulation* "
-                   "— sellers in control of a cheap price — was followed by gains in every era, daily "
-                   "and weekly (+0.06 to +0.08σ over 10-20 bars), and kept working after 2020 when "
-                   "plain oversold stopped; *Exit · distribution* was followed by underperformance in "
-                   "every era; the other cells are near zero. The v8 units held and beat the seed in "
-                   "Pragyam's own allocator. Crypto trends and is the stated exception.")
+    ui.render_note("Emerald builds, cyan accumulates, amber holds or trims, rose exits, grey waits.")
 
     # ── the lists, by what the grid says to do ──
     ui.render_sub_header("Names by action")
@@ -6027,8 +5968,7 @@ def _render_ranking_tab(results_df, sid, study, _mv_label, _mv_kind, key: str = 
     """Signal Strength — the whole cross-section, by priority (a ▲▼ today, then stretch)."""
     ui.render_section_header(
         "Signal Strength",
-        "Full universe by priority — a ▲▼ on this bar first, then by stretch: the long side "
-        "leads with names stretched furthest down, the short side with names stretched furthest up",
+        "Every name ranked — events on this bar first, then by stretch",
         icon="zap", accent="amber",
     )
     _n = max(len(results_df), 1)
@@ -6036,8 +5976,8 @@ def _render_ranking_tab(results_df, sid, study, _mv_label, _mv_kind, key: str = 
     n_long, n_short = int((side == 'Buy').sum()), int((side == 'Sell').sum())
     stretched = pd.to_numeric(results_df.get('Signal_Score', pd.Series(dtype=float)), errors='coerce').abs() >= sv.THETA_OSC
     s1, s2, s3, s4 = st.columns(4)
-    with s1: ui.render_metric_card("Events Today", f"{n_long + n_short}",
-                                   f"{n_long} ▲ · {n_short} ▼ · any of A · B · C", "info")
+    with s1: ui.render_metric_card("Events Fired", f"{n_long + n_short}",
+                                   f"{n_long} ▲ · {n_short} ▼ on the analysis bar", "info")
     with s2: ui.render_metric_card("Stretched", f"{int(stretched.sum())}",
                                    f"{stretched.sum()/_n*100:.0f}% of names with the trace past θ", "neutral")
     with s3:
@@ -6046,8 +5986,8 @@ def _render_ranking_tab(results_df, sid, study, _mv_label, _mv_kind, key: str = 
                               "1u is Wait · the universe's average stance", "neutral")
     with s4:
         ui.render_metric_card("Measured · Best Set", _mv_label,
-                              " · ".join(f"{k} ▲{_VERDICT_SHORT.get(study.verdict('buy', k)[0], '')} "
-                                         f"▼{_VERDICT_SHORT.get(study.verdict('sell', k)[0], '')}"
+                              " · ".join(f"{k} ▲ {_VERDICT_SHORT.get(study.verdict('buy', k)[0], '').lower()} "
+                                         f"▼ {_VERDICT_SHORT.get(study.verdict('sell', k)[0], '').lower()}"
                                          for k in lg.SETS) if study is not None
                               else "not measured on this universe", _mv_kind)
 
@@ -6058,10 +5998,8 @@ def _render_ranking_tab(results_df, sid, study, _mv_label, _mv_kind, key: str = 
                 f'margin:0 0 0.4rem 0;">{_p["mark"]} {side_label}</p>')
 
     ui.render_sub_header("Top 10 Each Side")
-    ui.render_note("Highest-priority rows in the universe. Ranking reads the trace as **reversion**: "
-                   "across ~15 years of five NSE universes, names stretched down (sellers in control, "
-                   "priced cheap) led the next 10 bars and names stretched up lagged — so the long "
-                   "side starts with the most stretched-down names. A ▲▼ on this bar ranks first.")
+    ui.render_note("Stretch tends to revert, so the long side leads with names stretched furthest down "
+                   "and the short side with names stretched furthest up.")
     top_buys = results_df.sort_values('Priority_Long', ascending=False, na_position='last').head(10)
     top_sells = results_df.sort_values('Priority_Short', ascending=False, na_position='last').head(10)
     _l, _s = st.columns(2)
@@ -6074,10 +6012,7 @@ def _render_ranking_tab(results_df, sid, study, _mv_label, _mv_kind, key: str = 
         st.components.v1.html(_build_signal_strength_table_html(top_sells, side='sell'),
                               height=ui.table_iframe_height(len(top_sells), max_height=900))
 
-    ui.render_note("Full universe ranked by long-side priority. The ranking is continuous, but "
-                   "the claim is in the EVENTS: a ▲▼ fired on this bar is a signal; "
-                   "the grid state beneath it is where the name stands between signals, not a "
-                   "forecast.")
+    ui.render_sub_header("Full Universe")
     _all = results_df.sort_values('Priority_Long', ascending=False, na_position='last')
     st.components.v1.html(_build_signal_strength_table_html(_all, side='buy'),
                           height=ui.table_iframe_height(len(_all), max_height=900))
@@ -6280,11 +6215,13 @@ def main():
         # notices hang BELOW it in the notice rail, so the thing being analysed
         # is always the first thing on screen rather than an apology about it.
         _run_stats = st.session_state.get("screener_run_stats", {}) or {}
-        _cb_meta = [
-            ("Timeframe", timeframe),
-            ("As of", analysis_date.strftime("%d %b %Y")
-             if hasattr(analysis_date, "strftime") else str(analysis_date)),
-        ]
+        _tsm = st.session_state.get("ts_meta") or {}
+        if mode == "Historical Range" and _tsm.get("start_date") and _tsm.get("end_date"):
+            _when = ("Range", f"{_tsm['start_date']:%d %b %Y} – {_tsm['end_date']:%d %b %Y}")
+        else:
+            _when = ("As of", analysis_date.strftime("%d %b %Y")
+                     if hasattr(analysis_date, "strftime") else str(analysis_date))
+        _cb_meta = [("Timeframe", timeframe), _when]
         if _run_stats.get("analyzed"):
             _cb_meta.insert(0, ("Symbols", f"{_run_stats['analyzed']} / "
                                            f"{_run_stats.get('total_in_universe', '—')}"))
@@ -6303,49 +6240,35 @@ def main():
         if _run_stats.get("warming_up"):
             _notices.append({
                 "kind": "info", "title": "Warming up",
-                "body": f"{_run_stats['warming_up']} symbol(s) excluded — fewer than "
-                        f"{sid.min_bars} bars, so the trace's histogram is not calibrated.",
+                "body": f"{_run_stats['warming_up']} symbol(s) skipped — not enough history yet "
+                        f"({sid.min_bars} bars needed).",
             })
         if _run_stats.get("failed"):
             _notices.append({
                 "kind": "warning", "title": "Incomplete fetch",
-                "body": f"{_run_stats['failed']} symbol(s) failed to fetch or analyse; "
-                        f"the cross-section below is the remainder.",
+                "body": f"{_run_stats['failed']} symbol(s) could not be fetched; the screen shows "
+                        f"the rest.",
             })
         if study is None:
             _notices.append({
-                "kind": "info", "title": "Expectancy not measured",
-                "body": "No edge study exists for this selection yet. Signals still fire — "
-                        "the measurement is reported, never applied.",
+                "kind": "info", "title": "Not yet tested",
+                "body": "The Edge Study has not measured this universe yet. Signals fire as usual.",
             })
         if _run_stats.get("drivers") is False:
             _notices.append({
-                "kind": "warning", "title": "Value runs unhedged",
-                "body": "The macro drivers could not be fetched, so the value ingredient is the "
-                        "name's own path (the Pine's 'Macro hedge: Off') — breadth and the RV "
-                        "leg without its hedge. Signals still fire; value means less.",
+                "kind": "warning", "title": "Value unhedged",
+                "body": "Macro drivers were unavailable, so value is read without its hedge on "
+                        "this run.",
             })
         _paused = int(_run_stats.get("paused", 0) or 0)
         if _paused:
             _notices.append({
-                "kind": "info", "title": "Tapes warming on some names",
-                "body": f"{_paused} symbol(s) have a calibrated histogram but a tape still warming "
-                        f"— they read unread on the grid until both tapes are ready. The deepest "
-                        f"wait is the value ladder's parent rung ({sid.value_ladder_label}). The ▲▼ "
-                        f"do not wait for the tapes: they come from each name's own ledger.",
+                "kind": "info", "title": "Tapes calibrating",
+                "body": f"{_paused} symbol(s) are still calibrating a tape and show as unread on "
+                        f"the Grid. Their signals are unaffected.",
             })
-        if sid.norm_is_adapted:
-            # The one indicator input on screen that is Sanket's rather than the Pine's. It
-            # belongs here and not in the rail: it is a fact about THIS run, it only applies
-            # on Weekly, and the notice rail is where facts about this run go.
-            _notices.append({
-                "kind": "info", "title": "Adapted normalization window",
-                "body": f"Weekly runs a {sid.norm}-bar window, not the indicator's "
-                        f"{eng.PRG_NORM}. Calibration costs two of them, so at {eng.PRG_NORM} a "
-                        f"weekly symbol would need "
-                        f"{eng.pg.warmup_bars(eng.pg.Params(norm=eng.PRG_NORM))} weekly bars before "
-                        f"its histogram was calibrated.",
-            })
+        # (The adapted weekly normalization window is a setting, not news about this run:
+        # it is stated in System Data ▸ Run Configuration, not on every weekly page.)
         ui.render_notice_rail(_notices)
 
         # Body renders directly from session-state — analysis (when triggered)
@@ -6376,8 +6299,7 @@ def main():
                 with tab_narrative:
                     ui.render_section_header(
                         f"Pulse Narrative — {timeframe} Universe State",
-                        f"{_n_analyzed} / {_n_universe} symbols · {_date_str} · {sid.iclass} · "
-                        f"full universe, every name's state",
+                        f"{_n_analyzed} / {_n_universe} symbols · {_date_str} · every name's state",
                         icon="zap", accent="amber"
                     )
                     _n = max(len(results_df), 1)
@@ -6413,9 +6335,6 @@ def main():
                             st.components.v1.html(
                                 _build_narrative_table_html(sell_rank_df, side='sell'),
                                 height=ui.table_iframe_height(len(sell_rank_df), max_height=1200))
-                    if _n_warming:
-                        ui.render_note(f"{_n_warming} symbol(s) excluded — fewer than {sid.min_bars} bars, "
-                                       "so the trace's histogram is not calibrated yet.")
                 with tab_watch:
                     _render_watch_tab(results_df, study, timeframe, key="pn-watch")
                 with tab_grid:

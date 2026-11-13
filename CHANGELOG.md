@@ -7,6 +7,29 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.2.5] · 2026-11-14
+### Production copy, and the date on screen
+
+- **Fixed — the date on screen.** A past analysis date read "Today's Signals", "fired today" and
+  "Today / 1 Day Ago". The Signals heading is now "Signals · 16 Oct 2026" (Weekly: "week of"), the
+  board says "on the date", and the age buckets read "On the Date / 1 Session Before …" ("That
+  Week / 1 Week Before …"). "Today" appears only on today.
+- **Fixed — Historical Range command bar** showed today's date as "As of"; it now shows the range.
+- **Fixed — tiny samples.** A set tested on fewer than 30 events printed its edge (e.g. "+1.495σ ·
+  100% hit" from one event); the board now reads "1 event · too few". Fire rates read "~22 per 1k
+  bars" or "~1 per 5,500 bars" instead of "21.49 / 1k bars" or "1 per 171,715".
+- **Fixed — landing claim.** History per run is ~3.5 years Daily, ~16 Weekly (it said ~4.5y).
+- **Copy, every page.** The landing page states the product in a few lines; its three panels are
+  Readings, Signals and Edge Study with plain specs (no formulas), and "What a run returns" maps
+  to the tabs. Each tab has a one-line subtitle and at most one reading note; methodology moved
+  into tooltips, System Data and the README. Removed from screen: audit names and numbers ("v9
+  audit", "380 instruments"), file and study paths, the Pine, and repeated disclaimers. Signal
+  Reference cards are now rule definitions; the Edge Study method is four sentences; notices are
+  one line each, and the weekly normalization notice moved to Run Configuration. State cells read
+  "last ▲ · 21b" instead of "▲ decl 21b". Set cards label their verdict rows "tested".
+
+---
+
 ## [v10.2.4] · 2026-11-13
 ### The Watchlist, verified against history
 

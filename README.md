@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.2.4`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.2.5`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -483,6 +483,14 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 
 ## What Changed
 
+**v10.2.5 — production copy.** Every page's text rewritten to read as a finished product: the
+landing page says what Sanket is in a few lines; each tab carries a one-line subtitle and at most
+one reading note; detail lives in hover tooltips and System Data; research history (audits, study
+paths, source files) lives here, not on screen. Fixes: a past date no longer reads "Today's Signals"
+or "fired today"; age buckets read "1 Session Before" off the latest date; the Historical Range
+command bar shows its range, not today; a set tested on too few events shows "N events · too few"
+instead of an edge; the landing page's history-per-run is ~3.5 years Daily (it said ~4.5).
+
 **v10.2.4 — the Watchlist, verified.** Tested against history on 151 instruments
 ([`studies/v10_watch/`](studies/v10_watch/README.md)): 85% of v10.2.0's "ready" names had a surprise
 column already past zero and could not fire next (0% did). Ready now requires the column **armed**
@@ -927,4 +935,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v10.2.4 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v10.2.5 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

@@ -1101,7 +1101,7 @@ def render_set_board(cards: "list[dict]") -> None:
         watch = (f'<div class="sc-watch"><span class="k">{e(wl)}</span>'
                  f'<span class="v">{e(wv)}</span></div>') if wl else ""
         edges = "".join(
-            f'<div class="sc-edge-row" title="{e(tip)}"><span class="k">{e(g)} here</span>'
+            f'<div class="sc-edge-row" title="{e(tip)}"><span class="k">{e(g)} tested</span>'
             f'{render_chip(lbl, ctone, as_html=True)}<span class="e">{e(num)}</span></div>'
             for g, lbl, ctone, num, tip in c.get("edges", []))
         out.append(
