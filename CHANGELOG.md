@@ -7,6 +7,15 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.2.3] · 2026-11-13
+### The chart's bottom edge
+- **The chart's own box holds its figure.** v10.2.2 gave the chart box 8px of bottom padding, but
+  Streamlit fixes that box at the figure's height, so the padding (with the 8px on top) only pushed
+  the figure's bottom 8px out of its container, toward the panel's clipping edge. Both now sit on the
+  chart's container and the figure fits inside it: 8px clear above and below every chart.
+
+---
+
 ## [v10.2.2] · 2026-11-13
 ### Nothing touches a panel's edge
 - **The chosen day is one disc.** v10.2.1 filled the day's inner box, which drew a square inside BaseWeb's ring.

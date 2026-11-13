@@ -2264,12 +2264,18 @@
 
 [class*="st-key-panel-"] .stPlotlyChart {
     background: transparent; border: none; border-radius: 0;
-    /* No SIDE padding: Plotly draws at the element's full width, so 8px each side
-       pushed the svg 16px past its padded box and the panel clipped its right edge
-       — the last x tick ("100" read "10(") and the legend's end. The inset now
-       lives in the figure's own margins (PLOTLY_MARGIN l/r + 8). The bottom 8px
-       keeps a legend off the panel's border. */
-    padding: var(--s2) 0 var(--s2);
+    padding: 0;
+}
+/* The chart's inset lives OUTSIDE the chart box. Streamlit fixes the chart's
+   element container at the figure's height and Plotly fills the box it is
+   given, so padding on the chart box only displaced the figure: 8px down
+   pushed its bottom out of the container (onto a footer's rule, or under the
+   panel's clipping edge: the x labels, the legend), and 8px each side pushed
+   it 16px past the panel's right edge ("100" read "10("). Top and bottom are
+   padding on the container (the figure fits inside it); left and right are
+   the figure's own margins (PLOTLY_MARGIN l/r + 8). */
+[class*="st-key-panel-"] [data-testid="stElementContainer"]:has(.stPlotlyChart) {
+    padding: var(--s2) 0 !important;
 }
 /* Streamlit gives every markdown block a -16px bottom margin (to cancel a
    paragraph's own). Inside a panel, which clips at overflow: hidden, that made
