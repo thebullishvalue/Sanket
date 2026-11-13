@@ -123,8 +123,19 @@ state    3 · trend + where the close landed against the cone drawn 10 bars ago 
 record   y = (ln C[t] − ln O[t−9]) / (σ √10) of the bar 10 back, clipped ±6; per-state means;
          samples independent only ≥ 10 bars apart; needs ≥ 5 of them and > 300 settled overall
 proof    se² = var / n_eff,  B = 0.10² / (0.10² + se²),  z = (mean − grand mean) · √(B / se²)
-events   ▲ the first bar of a state with z ≥ +2,  ▼ with z ≤ −2
+set A    ▲ the first bar of a state with z ≥ +2,  ▼ with z ≤ −2
+ladder   four cones (5 / 10 / 20 / 40 bars), each learned as above; lean = mean over them of
+         each surprise as a fraction of its own band
+mid      the middle of the 10-bar cone drawn 10 bars ago (the landing band)
+set B    ▲ surprise flips ≥ 0 · close > mid · risk rank < 33.3 · ln(σ/σ[10]) ≤ 0.10 · lean ≥ 0
+         ▼ surprise flips < 0 · close < mid · the same risk tests · lean < 0
+set C    set B, and T ≥ 0 for ▲, T < 0 for ▼
 ```
+
+**Three sets, one selected.** The rail's Signal Set chooses which the screen fires; all three are
+computed on every run and the Edge Study measures them side by side. Sets B and C first fire at bar
+~752 (risk's rank needs 500 readings); the Weekly fetch was deepened for them. READY marks a side of
+B or C with every condition in place but the flip.
 
 No cooldown, no gate on the Pragati stack; the last event stands as the declaration. On random
 walks the rule calls a state proven on about 0.4% of bars; across 151 instruments it fired about
@@ -235,10 +246,9 @@ cost gate is a flag on the row.
 
 ## The Edge Study
 
-`edge.py` measures the event set on the symbols on screen, through `engine.compute_frame` — the
-exact call the screener makes — so the ledger's warm-up and record apply to the study by
-construction. Two slices: every ▲ and every ▼. Each triangle is proven on its own name's past, so
-the study asks whether those proofs carry forward.
+`edge.py` measures the event sets on the symbols on screen, through `engine.compute_frame` — the
+exact call the screener makes — so every warm-up applies to the study by construction. Six slices:
+sets A, B and C, each side alone, measured together whichever set is selected.
 
 | # | Step | The failure it prevents |
 |:--|:---|:---|

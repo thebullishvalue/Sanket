@@ -12,14 +12,17 @@ not a number for yours. This measures it, on your symbols.
 
 What is measured
 ----------------
-Two slices, each with the full method below:
+Six slices - the three signal sets, each side alone - each with the full method below:
 
-    buy / sell    every ▲ (a state proven positive on the name's own record) / every ▼
+    A_buy / A_sell    set A: entering a state proven + / - on the name's own record
+    B_buy / B_sell    set B: the column flips, close past the midline, risk calm and not
+                      rising, the stretch ladder agreeing
+    C_buy / C_sell    set C: set B with the trend tape agreeing
 
-The triangles are rare by construction - about one per 5,500 bars across 151 instruments -
-so both slices will often read UNDERPOWERED, and the app says so rather than quoting a
-number it cannot resolve. Note what is being tested: each triangle is proven on its own
-name's past, so this study asks whether that per-name proof carries forward.
+All three are measured on every run whichever the screen fires, so they can be compared on the
+same symbols and dates. The screen's 'buy' / 'sell' verdicts read the selected set's slices.
+Set A is rare by construction (about one triangle per 5,500 bars) and will often read
+UNDERPOWERED; sets B and C fire roughly 140 and 80 times as often.
 
 Method (each step exists to kill a specific way of fooling yourself)
 -------------------------------------------------------------------
@@ -87,11 +90,17 @@ LARGEST_KNOWN_EFFECT = eng.LARGEST_KNOWN_EFFECT
 MIN_EVENTS = 30
 
 # The slices measured: key -> (side, kind or None for both kinds).
-SLICES = {
-    "buy":  (1.0, None),
-    "sell": (-1.0, None),
+SLICES = {f"{k}_{side}": (sgn, k) for k in ("A", "B", "C") for side, sgn in (("buy", 1.0), ("sell", -1.0))}
+SLICE_LABEL = {
+    "A_buy": "A · ▲ proven +", "A_sell": "A · ▼ proven −",
+    "B_buy": "B · ▲ flip", "B_sell": "B · ▼ flip",
+    "C_buy": "C · ▲ flip + trend", "C_sell": "C · ▼ flip + trend",
 }
-SLICE_LABEL = {"buy": "▲ proven +", "sell": "▼ proven −"}
+
+
+def slice_key(side: str, sset: str = "A") -> str:
+    """'buy' / 'sell' (the screen's two sides) resolved to the selected set's slice."""
+    return side if side in SLICES else f"{(sset or 'A').upper()[:1]}_{side}"
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
@@ -103,7 +112,8 @@ def symbol_events(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
 
     ``df`` is the chart's OHLCV (Title-case, ascending) — weekly bars on a weekly study,
     with ``daily`` the bars behind them. ``side`` is +1 long / -1 short, ``kind`` is
-    'proven' (the ledger's ▲▼), ``fwd`` the raw h-bar forward return from the next bar.
+    the set ('A' / 'B' / 'C'), ``fwd`` the raw h-bar forward return from the next bar. All three
+    sets are harvested whichever the screen fires.
     Drift removal and vol normalisation happen later, in :func:`measure`, causally.
 
     THE EVENTS COME FROM THE ENGINE ITSELF (``engine.compute_frame``), so every guard
@@ -128,7 +138,8 @@ def symbol_events(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
     fwd = (exit_ / entry - 1.0).to_numpy()
 
     parts = []
-    for col, side, kind in (("turn_buy", 1.0, "proven"), ("turn_sell", -1.0, "proven")):
+    for col, side, kind in ((f"{k.lower()}_{s}", sgn, k) for k in ("A", "B", "C")
+                            for s, sgn in (("buy", 1.0), ("sell", -1.0))):
         m = f[col].fillna(False).astype(bool).to_numpy() & np.isfinite(fwd)
         if m.any():
             parts.append(pd.DataFrame({"date": pd.to_datetime(f.index[m]), "side": side,
@@ -327,18 +338,25 @@ class EdgeStudy:
     start: str
     end: str
     part_ratio: float
-    fire_rate: float                  # fraction of usable bars that fired any event
+    fire_rate: float                  # fraction of usable bars that fired set A (kept for old caches)
     split_date: str
     # Results, keyed by SLICES -> era -> SideResult (as dicts for cache round-tripping)
     results: dict = field(default_factory=dict)
     measured_at: str = ""
     partial: bool = False             # some symbols failed to fetch
     note: str = ""
+    fire_rates: dict = field(default_factory=dict)   # set -> fraction of usable bars it fired
+    active: str = "A"                 # the set the screen fires; 'buy' / 'sell' resolve to it
 
     # ── accessors ──
     def get(self, side: str, era: str) -> SideResult | None:
-        d = (self.results.get(side) or {}).get(era)
+        d = (self.results.get(slice_key(side, self.active)) or {}).get(era)
         return SideResult(**d) if isinstance(d, dict) else d
+
+    def rate(self, sset: str | None = None) -> float:
+        """Fraction of usable bars on which a set fired - the selected one by default."""
+        k = (sset or self.active or "A").upper()[:1]
+        return float(self.fire_rates.get(k, self.fire_rate if k == "A" else 0.0))
 
     def verdict(self, side: str) -> tuple:
         """(label, css_kind, detail) for one side, from the measured intervals."""
@@ -538,7 +556,8 @@ def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
 
     # Total usable bars across studied symbols -> the fire rate the cost story hinges on.
     total_bars = sum(len(b) for b in baselines.values()) or 1
-    fire_rate = float(len(ev) / total_bars)
+    fire_rates = {k: float((ev["kind"] == k).sum() / total_bars) for k in ("A", "B", "C")} if "kind" in ev.columns else {}
+    fire_rate = fire_rates.get("A", float(len(ev) / total_bars))
 
     eras = {
         "full":      (lo_all, hi_all),
@@ -564,5 +583,5 @@ def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
         n_bars_median=int(n_bars_median),
         start=str(lo_all.date()), end=str(hi_all.date()),
         part_ratio=float(pr), fire_rate=fire_rate, split_date=str(split.date()),
-        results=results, measured_at=measured_at, partial=partial,
+        results=results, measured_at=measured_at, partial=partial, fire_rates=fire_rates,
     )

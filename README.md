@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.0.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.1.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -9,12 +9,10 @@ Conviction-Value Grid already reads — and asks of every name the indicator's o
 
 It reports three things, and keeps them apart:
 
-- **Events** (v10 — Pragyam's ledger). ▲ **PROVEN +** / ▼ **PROVEN −** — the first bar of a
-  state that the name's **own record** has proven positive or negative. Every bar sits in one of
-  nine states (the trend × where the close landed against the cone drawn 10 bars ago); the ledger
-  scores each state on what followed it on that name, shrinks the record toward "no edge", and
-  calls a state proven past two standard errors. Rare by design. Bucketed by age, ranked, and
-  measured.
+- **Events** (v10.1 — three signal sets, picked in the rail, all read from Pragyam's engine).
+  **A** — entering a state the name's own record has proven (rare). **B** — the surprise column
+  flips, the close past the midline, risk calm and not rising, the stretch ladder agreeing.
+  **C** — B with the trend agreeing. Bucketed by age, ranked, and measured side by side.
 - **State.** Every name's cell in the **3 × 3 conviction-value grid** (v8), named as an action —
   Buy · Accumulate · Hold · Wait · Trim · Exit — with the measured v8 units, the same units
   Pragyam's book now sizes from. Where the name stands *between* events.
@@ -115,34 +113,44 @@ to 1e-13.
 
 ## The Signals
 
-v10 takes the ▲▼ from **Pragyam's ledger** (`ledger.py`, ported bar for bar from `pragyam.pine`
-and checked against its reference on 151 instruments). Pragati's own signal set — the grid's
-▲ capitulation / ▼ distribution, the ◆ RESUME and the watchlist — is no longer computed.
+Three sets, chosen in the rail (**Signal Set**), all read from **Pragyam's engine** (`ledger.py`,
+ported bar for bar from `pragyam.pine` and checked against its reference on 151 instruments:
+identical states, z-scores, cones, ladder and signals on every bar). Pragati's own signal set — the
+grid's capitulation / distribution, the ◆ RESUME and the watchlist — is not computed.
 
-**Nine states.** Every closed bar sits in one of them: the **trend** — the move over 63, 126 and
-252 bars in units of the risk forecast — down, flat or up, crossed with where the **close landed**
-against the cone drawn 10 bars ago — below it, inside it, above it. The cone is learned per name so
-it holds its stated 80%.
+| Set | ▲ fires on one closed bar when… | ▼ | Per 1,000 bars (151 instruments) |
+|:---|:---|:---|:---|
+| **A · proven** | the name enters a state its own record has proven positive | proven negative | 0.2 |
+| **B · flip** | the surprise column flips positive · the close is above the midline · risk is calm · risk is not rising · the stretch ladder leans up | mirrors | 25 |
+| **C · flip + trend** | set B's ▲, and the trend tape up | set B's ▼, and the trend down | 14 |
 
-**The ledger.** For each state it keeps the name's own record: after every bar spent in that
-state, what the next 10 bars did from the next open, in units of the risk forecast, against the
-name's own average. Samples count as independent only when 10 or more bars apart. The record is
-shrunk toward "no edge" — a real edge is assumed to be about 0.10σ at most — and a state is
-**proven** when the shrunk edge clears two standard errors.
+What each term means, exactly:
 
-**▲ PROVEN +** — the first closed bar of a state the name's record has proven positive.
-**▼ PROVEN −** — the same, proven negative.
+| Term | Definition |
+|:---|:---|
+| Surprise column | the 10-bar move over the forecast made 10 bars ago, in σ. It **flips** when it is below zero on one bar and at or above zero on the next (negative mirrors) |
+| Midline | the middle of the landing band — the cone drawn 10 bars ago |
+| Risk calm | risk's rank in its last 500 bars in the bottom third (the inner risk tape at its lightest) |
+| Risk not rising | risk up no more than 10% over 10 bars (the outer risk tape grey) |
+| Stretch ladder leans up / down | the mean, over the 5-, 10-, 20- and 40-bar horizons, of each surprise as a fraction of its own band is ≥ 0 / < 0 (the outer trend tape green / red, any shade) |
+| Trend up / down | the move over 63, 126 and 252 bars in units of risk is ≥ 0 / < 0 (the inner trend tape green / red, any shade) |
+| Proven (set A) | nine states (trend × where the close landed against the cone); each scored on the name's own next-10-bar outcomes, shrunk toward no edge, proven past two standard errors |
 
-No cooldown and no gate on the Pragati stack: the ledger is the whole rule. The last event stands
-as the declaration, with no exit. The ledger needs about 563 bars before it can prove anything
-(252 bars of risk warm-up, then 30 horizons of settled record), so the Daily fetch (~1,150 bars)
-clears it and the Weekly fetch was deepened to ~710 bars.
+**READY** (sets B and C): every condition of a side in place except the trigger — the flip and
+the close crossing the midline, which arrive together. The next flip that way fires. The State
+column, the Pulse and the Historical Range show how many names are ready.
 
-**What it claims, and what it does not.** On random walks the rule calls a state proven on about
-0.4% of bars; across 151 real instruments it fired about once per 5,500 bars. A triangle says the
-name's own history has proven its state. It does not say the state carries an edge across names:
-pooled, no state reached |t| = 1.3 outside crypto. Sanket's per-name record is also shorter than a
-TradingView chart's, so the ledger proves less here than the Pine does on a long chart.
+No set has a cooldown; a tape still warming blocks B and C. The last event stands as the
+declaration. **Warm-up:** set A can prove a state from bar ~563; sets B and C fire from bar ~752,
+when risk's rank has 500 readings. Daily (~1,150 bars) leaves about 1.5 years in which B and C can
+fire; the Weekly fetch was deepened to ~880 bars for them.
+
+**What was measured before shipping.** Set A: on random walks it calls a state proven on 0.4% of
+bars, and pooled across names no state reached |t| = 1.3 outside crypto — a triangle says the
+name's own past has proven its state. Sets B and C: the nearest tested versions (the Indicator
+repo's `research/flips.txt`, which did not include the risk-not-rising condition) measured +0.7
+and +0.9σ × 100 over 10 bars with t below 1, and changed sign between eras. The Edge Study measures
+all three on your universe; read it before leaning on any of them.
 
 **Divergence is off by default.** The Pine's R (regular) and H (hidden) marks remain available.
 Re-measured, R read about zero in every era on daily and weekly bars and H was negative or mixed;
@@ -233,9 +241,9 @@ proven on the name's own record; no study has placed it on top of the stretch.
 ## Edge Study — expectancy measured on your universe
 
 `edge.py` runs an event study on your symbols through **the exact engine call the screener
-makes** (`engine.compute_frame`), so the ledger's warm-up and record apply to the study by
-construction. Two slices: every ▲ (proven +) and every ▼ (proven −). Because each triangle is
-proven on its own name's past, this asks whether those proofs carry forward.
+makes** (`engine.compute_frame`), so every warm-up applies to the study by construction. Six
+slices — sets A, B and C, each side alone — measured on the same symbols and dates whichever set
+the screen fires, so they can be compared directly. The screen's verdicts read the selected set.
 
 Each step kills one way of fooling yourself (step 2 changed in v9):
 
@@ -251,8 +259,8 @@ Each step kills one way of fooling yourself (step 2 changed in v9):
 
 Verdicts: `CONFIRMED` · `GROSS ONLY` · `DISCOVERY ONLY` · `NO EDGE` · `ANTI-PREDICTS` ·
 `UNDERPOWERED` (the MDE exceeds 0.036, the largest effect this indicator family has shown
-anywhere). **Expect UNDERPOWERED often**: the triangles are rare, which one universe's history
-can rarely resolve, and the app says "we could not tell" rather than "there is no edge".
+anywhere). **Expect UNDERPOWERED often**, set A above all — it is rare — and the app says "we
+could not tell" rather than "there is no edge".
 
 It fetches ~15 years once a day per universe (80-symbol fixed-seed sample above that), streams
 in chunks of 20, and reuses the measurement until the date rolls.
@@ -285,10 +293,15 @@ Per symbol, on each run:
 
 | Column | Meaning |
 |:---|:---|
-| `turn_buy` / `turn_sell` | ▲ / ▼ on this bar — a state proven + / − on this name's record |
+| `turn_buy` / `turn_sell` | ▲ / ▼ of the selected set on this bar |
+| `A_Buy` … `C_Sell` | each set's ▲ / ▼ on this bar, whichever is selected |
+| `PRG_Ready` | sets B and C: +1 / −1 when every condition of a side is in place but the flip |
+| `LG_U` / `LG_Flip` / `LG_Mid` / `LG_Above_Mid` | the surprise column, its flip, the midline, and the close against it |
+| `LG_Risk_Rank` / `LG_Calm` / `LG_Risk_Mom` / `LG_Rising` | risk's rank, calm, its 10-bar change, and rising |
+| `LG_Ladder` / `LG_Lad_Up` / `LG_Lad_Dn` | the stretch ladder's lean and the rungs outside |
 | `BUY_*` / `SELL_*` | the long / short event by age — ▲ / ▼, — none |
 | `Side` / `Signal_Kind` / `PRG_Event` | an event on this bar (kind PROVEN) and its label |
-| `PRG_State` | the ledger: PROVEN ▲ / ▼, IN PROVEN + / −, LEARNING, UNPROVEN, WARMING UP |
+| `PRG_State` | set A: PROVEN ▲ / ▼, IN PROVEN + / −, LEARNING, UNPROVEN, WARMING UP · sets B, C: ▲ B … ▼ C, READY ▲ / ▼, WAITING, WARMING UP |
 | `LG_State_Name` / `LG_N` / `LG_Edge` / `LG_Post` / `LG_Z` / `LG_Proven` | the state, its samples on this name, its edge raw and shrunk, its z, and whether it is proven |
 | `LG_Sigma` / `LG_Trend` | the risk forecast per bar and the trend in σ |
 | `PRG_Decl` / `PRG_Decl_Age` | the standing ▲/▼ declaration |
@@ -313,7 +326,7 @@ Per symbol, on each run:
 sanket.py            ← Streamlit entry point: UI, data + macro-driver fetch, screen routing
 engine.py            ← settings, per-symbol features, the snapshot row, ranking, cost gate
 pragati.py           ← pragati.pine v9.3: conviction, ladders, trace, histogram, tapes (readings only)
-ledger.py            ← the ▲▼: Pragyam's proven-state triangles, ported from pragyam.pine
+ledger.py            ← the signals: Pragyam's engine (risk, trend, cones, ladder, ledger) and sets A / B / C
 samanvaya.py         ← the value engine (Samanvaya, section 4c), carried from Pragyam
 cvgrid.py            ← the 3 × 3 conviction-value grid: the state engine, names, units, tones
 pragati.pine         ← the indicator itself, v9.3 — the Pine the port mirrors (archive/: v5, v7, v8)
@@ -462,6 +475,14 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 ---
 
 ## What Changed
+
+**v10.1.0 — three signal sets.** A (the proven-state triangles of v10.0) is joined by B — the
+surprise column flips with the close past the midline, risk calm and not rising, the stretch ladder
+agreeing — and C, which adds the trend. Chosen in the rail; all three are always computed and the
+Edge Study measures them side by side (six slices, one study). `ledger.py` now carries Pragyam's
+four-horizon stretch ladder, the midline and risk momentum, checked bar for bar on 151 instruments.
+A READY state marks names with every B / C condition in place but the flip. Weekly fetch deepened to
+~17 years so B and C can fire. Edge Study cache key `prg6`.
 
 **v10.0.0 — the signals are Pragyam's proven-state triangles.** Pragati's signal set is stripped:
 `pragati.signals()`, the grid's ▲ capitulation / ▼ distribution, the ◆ RESUME, its candidates and
@@ -883,4 +904,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v10.0.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v10.1.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

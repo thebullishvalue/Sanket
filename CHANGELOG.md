@@ -7,6 +7,29 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.1.0] · 2026-11-13
+### Three signal sets
+
+- **Set A** is v10.0's proven-state triangles, unchanged. **Set B**: ▲ when the surprise column
+  flips positive, the close is above the midline, risk is calm (bottom third of 500 bars), risk is
+  not rising (≤ +10% over 10 bars) and the stretch ladder leans up; ▼ mirrors. **Set C**: set B
+  with the trend on the same side. No cooldown; a warming tape blocks B and C.
+- **Signal Set selector** in the rail (default A). `EngineSettings.signal_set`; every settings
+  call reads it. Labels, the State column (READY ▲ / ▼ and WAITING for B and C), ranking reasons,
+  Pulse cards, the Historical Range charts and the reference card follow the selected set.
+- **`ledger.py`** now ports Pragyam's four-horizon stretch ladder (5 / 10 / 20 / 40 bars, each
+  with its own learned cone), the midline and risk momentum, and computes all three sets on every
+  run. Checked against `pragyam.pine`'s Python reference on 151 instruments: identical states,
+  z-scores, cones, ladder, midline and signals. Fire rates there: A 0.2, B 25, C 14 per 1,000 bars.
+- **Edge Study**: six slices (A / B / C × ▲ / ▼) measured together in one study whichever set is
+  selected; the screen's verdicts read the selected set. Cache key `prg5` → `prg6`.
+- **Weekly fetch 4,600 → 5,800 days**: B and C first fire at bar ~752.
+- Verified: lint clean (one pre-existing warning); the app runs end to end under Streamlit's test
+  harness for sets A, B and C on Daily, a Daily Historical Range on B and Weekly screens on B and C,
+  with no exception.
+
+---
+
 ## [v10.0.0] · 2026-11-13
 ### The signals are Pragyam's proven-state triangles
 

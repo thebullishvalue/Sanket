@@ -16,10 +16,9 @@ THE STACK, bottom to top
     pragati.py     CONVICTION — who controls, how firmly, on the chart and its
                    ladder; the TRACE (conviction × value) and its HISTOGRAM;
                    divergence evidence
-    ledger.py      THE SIGNALS — Pragyam's proven-state triangles: nine states
-                   (trend × where the close landed against its cone), each with
-                   this name's own record, shrunk toward no edge; ▲▼ on entering
-                   a state that record has proven
+    ledger.py      THE SIGNALS — three sets read from Pragyam's engine: A, entering
+                   a state this name's own record has proven; B, a column flip in
+                   calm risk with the stretch ladder agreeing; C, B with the trend
     cvgrid.py      THE GRID — the 3 × 3 state the two tapes place a name in,
                    named as an action with its measured units
     engine.py      THIS FILE — the Sanket-facing layer: settings, per-symbol
@@ -29,12 +28,18 @@ THE STACK, bottom to top
 
 THREE KINDS OF OUTPUT, AND WHAT EACH CLAIMS
 ───────────────────────────────────────────
-    EVENTS    ▲ PROVEN + — the first closed bar of a state this name's own history
-              has proven POSITIVE (the shrunk edge past two standard errors).
-              ▼ PROVEN − — the same, proven NEGATIVE. Pragyam's triangles, read by
-              ledger.py; the last one stands as the DECLARATION. Rare by design:
-              about one per 5,500 bars on 151 instruments, 0.4% of bars on random
-              walks. No cooldown, no gate on the Pragati stack.
+    EVENTS    one of three sets, chosen in the rail (EngineSettings.signal_set), all
+              read by ledger.py from Pragyam's engine:
+              A · PROVEN   ▲▼ on entering a state this name's own record has proven
+                           (the shrunk edge past two standard errors). Rare: about one
+                           per 5,500 bars on 151 instruments.
+              B · FLIP     the surprise column flips, the close past the midline, risk
+                           calm and not rising, the stretch ladder agreeing.
+              C · FLIP + TREND   B with the trend tape agreeing.
+              The last event stands as the DECLARATION. No cooldown; no gate on the
+              Pragati stack. Sets B and C first fire at bar ~752 (risk's rank needs
+              500 readings). The Edge Study measures all three.
+    READY     sets B and C: every condition of a side in place but the flip.
     LEDGER    every bar's state and its record on this name: the samples behind
               it, the believed edge and its z - proven, unproven or learning.
     STATE     the grid cell — Buy / Accumulate / Hold / Wait / Trim / Exit —
@@ -170,6 +175,7 @@ class EngineSettings:
     timeframe: str
     params: pg.Params = field(default_factory=pg.Params)
     horizon: int = HORIZON
+    signal_set: str = "A"          # which of ledger.py's three sets the screen fires: A / B / C
     cost_bps: float = COST_BPS
     iclass: str = "Other / unknown"
 
@@ -189,11 +195,12 @@ class EngineSettings:
                 p.vol_n, float(p.cap), float(p.z1), float(p.z2), float(p.mix), p.signal,
                 float(p.k),
                 p.pl, p.pr, p.gap_min, p.gap_max, p.zone_gate, p.quiet, p.parent_norm,
-                int(self.horizon), sv.DEFAULT_BASKET)
+                int(self.horizon), sv.DEFAULT_BASKET, self.signal_set)
 
     @property
     def study_sig(self) -> tuple:
-        return self.params_sig
+        """The Edge Study measures all three sets at once, so the selection is not part of it."""
+        return self.params_sig[:-1]
 
     @property
     def norm_is_adapted(self) -> bool:
@@ -213,11 +220,11 @@ class EngineSettings:
     @property
     def trigger_label(self) -> str:
         """How the signal set reads in prose — the one place it is worded."""
-        return "▲ proven + · ▼ proven − (this name's ledger)"
+        return SET_PROSE[self.signal_set]
 
     @property
     def trigger_short(self) -> str:
-        return f"▲▼ ledger · {self.horizon}b"
+        return f"set {self.signal_set} · {self.horizon}b"
 
     @property
     def min_bars(self) -> int:
@@ -243,6 +250,8 @@ def settings_for(universe, selected_index, timeframe, overrides: dict | None = N
     horizon / cost_bps — for research, never from the UI.
     """
     o = dict(overrides or {})
+    sset = str(o.pop("signal_set", "A") or "A").upper()[:1]
+    sset = sset if sset in lg.SETS else "A"
     pfields = {k: o.pop(k) for k in list(o) if k in pg.Params.__dataclass_fields__}
     p = pg.Params(norm=PRG_NORM_WEEKLY if str(timeframe) == "Weekly" else PRG_NORM)
     if pfields:
@@ -250,7 +259,7 @@ def settings_for(universe, selected_index, timeframe, overrides: dict | None = N
     return EngineSettings(timeframe=str(timeframe), params=p,
                           horizon=int(o.get("horizon", HORIZON)),
                           cost_bps=float(o.get("cost_bps", COST_BPS)),
-                          iclass=instrument_class(universe, selected_index))
+                          iclass=instrument_class(universe, selected_index), signal_set=sset)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
@@ -299,8 +308,24 @@ def cost_in_vol_units(cost_bps: float, sigma_h: float) -> float:
 # ════════════════════════════════════════════════════════════════════════════════════════
 # PER-SYMBOL FEATURES  (time-series; one name, every bar)
 # ════════════════════════════════════════════════════════════════════════════════════════
-KIND_GLYPH = {"proven": "▲"}                     # per side: ▲ / ▼ — the ledger's triangles
-EVENT_LABEL = {("proven", 1): "▲ PROVEN +", ("proven", -1): "▼ PROVEN −"}
+KIND_GLYPH = {"A": "▲", "B": "▲", "C": "▲"}       # per side: ▲ / ▼, whichever set fires
+EVENT_LABEL = {("A", 1): "▲ A · PROVEN +", ("A", -1): "▼ A · PROVEN −",
+               ("B", 1): "▲ B · FLIP", ("B", -1): "▼ B · FLIP",
+               ("C", 1): "▲ C · FLIP + TREND", ("C", -1): "▼ C · FLIP + TREND"}
+SET_PROSE = {
+    "A": "set A · ▲▼ on entering a state proven on the name's own record",
+    "B": "set B · the column flips, close past the midline, risk calm and not rising, the ladder agreeing",
+    "C": "set C · set B, and the trend tape agreeing",
+}
+# What each set's ▲ needs, in the order the screen lists them (▼ mirrors).
+SET_CONDITIONS = {
+    "A": ("entering a state proven positive on this name's record",),
+    "B": ("the column flips positive", "close above the midline", "risk calm (inner tape)",
+          "risk not rising (outer tape grey)", "ladder leaning up (outer tape green)"),
+    "C": ("the column flips positive", "close above the midline", "risk calm (inner tape)",
+          "risk not rising (outer tape grey)", "ladder leaning up (outer tape green)",
+          "trend up (inner tape green)"),
+}
 
 
 def _lower(df: pd.DataFrame) -> pd.DataFrame:
@@ -361,7 +386,7 @@ def compute_frame(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
     grid = cg.classify(out, ch["osc"], ch["raw_sd"], cv_ready, p)
     # The ▲▼ are the ledger's (ledger.py): Pragyam's proven-state triangles, on the
     # chart's own OHLC. They read nothing from the Pragati stack above.
-    led = lg.compute(lo, settings.horizon).reindex(out.index)
+    led = lg.compute(lo, settings.horizon, signal_set=settings.signal_set).reindex(out.index)
     extra = val[["rv_z", "breadth_z", "legs_split", "hedge", "drivers", "n_obs", "enough",
                  "basket_warm", "bars_since_rot"]]
     return pd.concat([out, grid, led, extra], axis=1)
@@ -391,8 +416,8 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     EVIDENCE
       PRG_Bull_Div / PRG_Bear_Div       a qualified divergence confirmed on this bar
       PRG_Div_Seen_Bull / _Bear, PRG_Abs_Seen   in the last 20 bars (context only)
-    EVENTS  (ledger.py — Pragyam's proven-state triangles)
-      turn_buy / turn_sell       ▲ / ▼: the first bar of a state this name's record has proven
+    EVENTS  (ledger.py — the selected set: A proven state · B flip · C flip + trend)
+      turn_buy / turn_sell       ▲ / ▼ of the selected set on this bar
       long_cond / short_cond     the same, per side
       PRG_Event                  the label of the event on this bar, else ''
       PRG_Decl / PRG_Decl_Age    the standing declaration (+1 ▲ / −1 ▼) and its age
@@ -404,11 +429,20 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
                                  the edge after shrinkage, and that in standard errors
       LG_Proven                  +1 / −1 when |z| ≥ 2, else 0
       LG_Sigma / LG_Trend        the risk forecast per bar, and the trend in σ
+    THE SETS' READINGS (Pragyam's pane, per bar)
+      LG_U / LG_Flip             the surprise column, and +1 / −1 when it flipped on this bar
+      LG_Mid / LG_Above_Mid      the midline (middle of the landing band), and close above it
+      LG_Risk_Rank / LG_Calm     σ's rank in its last 500 bars, and calm = bottom third
+      LG_Risk_Mom / LG_Rising    ln(σ / σ[h]), and rising = past +10%
+      LG_Ladder / LG_Lad_Up / LG_Lad_Dn   the stretch ladder's lean, and rungs outside
+      A_Buy … C_Sell             each set's ▲ / ▼ on this bar, whichever set is selected
+      PRG_Ready                  +1 / −1: the selected set's side has every condition but the trigger
     STATE
       CVG_Cell / CVG_Action / CVG_Why / CVG_Units / CVG_Side / CVG_Held / CVG_Bars /
       CVG_From / CVG_Chart / CVG_Lead
-      PRG_State                  WARMING UP / PROVEN ▲ / PROVEN ▼ / IN PROVEN + / IN PROVEN − /
+      PRG_State                  set A: WARMING UP / PROVEN ▲ / PROVEN ▼ / IN PROVEN + / IN PROVEN − /
                                  LEARNING (too few samples) / UNPROVEN
+                                 sets B, C: WARMING UP / ▲ B … / ▼ C … / READY ▲ / READY ▼ / WAITING
       Signal_Score               the trace — what the level views sort on
     """
     settings = settings or settings_for(None, None, "Daily")
@@ -462,7 +496,8 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
 
     df["turn_buy"], df["turn_sell"] = tb, ts
     df["long_cond"], df["short_cond"] = long_c, short_c
-    df["PRG_Event"] = np.select([tb, ts], [EVENT_LABEL[("proven", 1)], EVENT_LABEL[("proven", -1)]], "")
+    sset = settings.signal_set
+    df["PRG_Event"] = np.select([tb, ts], [EVENT_LABEL[(sset, 1)], EVENT_LABEL[(sset, -1)]], "")
 
     # ── the ledger behind them ──
     lstate = f["lg_state"].fillna(-1).astype(int).to_numpy()
@@ -477,6 +512,21 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     df["LG_Proven"] = lproven
     df["LG_Sigma"] = f["lg_sigma"]
     df["LG_Trend"] = f["lg_trend"]
+    df["LG_U"] = f["lg_u"]
+    df["LG_Flip"] = f["lg_flip"].fillna(0).astype(int)
+    df["LG_Mid"] = f["lg_mid"]
+    df["LG_Above_Mid"] = (pd.to_numeric(df["Close"], errors="coerce") > f["lg_mid"]).where(f["lg_mid"].notna())
+    df["LG_Risk_Rank"] = f["lg_prk"]
+    df["LG_Calm"] = b("lg_calm")
+    df["LG_Risk_Mom"] = f["lg_rmom"]
+    df["LG_Rising"] = b("lg_rising")
+    df["LG_Ladder"] = f["lg_ladx"]
+    df["LG_Lad_Up"] = f["lg_lad_up"]
+    df["LG_Lad_Dn"] = f["lg_lad_dn"]
+    for k in ("a", "b", "c"):
+        df[f"{k.upper()}_Buy"], df[f"{k.upper()}_Sell"] = b(f"{k}_buy"), b(f"{k}_sell")
+    rdy = np.where(b("ready_buy"), 1, np.where(b("ready_sell"), -1, 0))
+    df["PRG_Ready"] = rdy
     decl = f["decl"].fillna(0).astype(int).to_numpy()
     since = f["decl_since"].fillna(-1).astype(int).to_numpy()
     pos = np.arange(T)
@@ -486,7 +536,7 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     # ── the hold window: the latest event, while it is inside the declared horizon ──
     fires = long_c | short_c
     fire_dir = np.where(long_c, 1.0, np.where(short_c, -1.0, np.nan))
-    fire_kind = np.where(tb, "▲ proven +", np.where(ts, "▼ proven −", None))
+    fire_kind = np.where(tb, EVENT_LABEL[(sset, 1)], np.where(ts, EVENT_LABEL[(sset, -1)], None))
     last_fire = pd.Series(np.where(fires, pos.astype(float), np.nan)).ffill().to_numpy()
     held_dir = pd.Series(fire_dir).ffill().to_numpy()
     held_kind = pd.Series(fire_kind, dtype=object).ffill().to_numpy()
@@ -513,10 +563,16 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     df["CVG_Chart_Action"] = [cg.NAMES[c] for c in chart_cell]
     df["CVG_Lead"] = f["cvg_lead"].fillna(0).astype(int)
 
-    df["PRG_State"] = np.select(
-        [lstate < 0, tb, ts, lproven > 0, lproven < 0, ~np.isfinite(lz)],
-        ["WARMING UP", "PROVEN ▲", "PROVEN ▼", "IN PROVEN +", "IN PROVEN −", "LEARNING"],
-        default="UNPROVEN")
+    if sset == "A":
+        df["PRG_State"] = np.select(
+            [lstate < 0, tb, ts, lproven > 0, lproven < 0, ~np.isfinite(lz)],
+            ["WARMING UP", "PROVEN ▲", "PROVEN ▼", "IN PROVEN +", "IN PROVEN −", "LEARNING"],
+            default="UNPROVEN")
+    else:
+        warm = ~np.isfinite(f["lg_ladx"].to_numpy(dtype=float)) | ~np.isfinite(f["lg_prk"].to_numpy(dtype=float))
+        df["PRG_State"] = np.select(
+            [tb, ts, warm, rdy > 0, rdy < 0],
+            [f"▲ {sset}", f"▼ {sset}", "WARMING UP", "READY ▲", "READY ▼"], default="WAITING")
     df["Signal_Score"] = df["PRG_Trace"]
     return df
 
@@ -532,6 +588,8 @@ SNAPSHOT_COLUMNS = (
     "PRG_Div_Seen_Bull", "PRG_Div_Seen_Bear", "PRG_Abs_Seen", "PRG_Event",
     "turn_buy", "turn_sell", "long_cond", "short_cond",
     "LG_State", "LG_State_Name", "LG_N", "LG_Edge", "LG_Post", "LG_Z", "LG_Proven", "LG_Sigma", "LG_Trend",
+    "LG_U", "LG_Flip", "LG_Mid", "LG_Above_Mid", "LG_Risk_Rank", "LG_Calm", "LG_Risk_Mom", "LG_Rising",
+    "LG_Ladder", "LG_Lad_Up", "LG_Lad_Dn", "A_Buy", "A_Sell", "B_Buy", "B_Sell", "C_Buy", "C_Sell", "PRG_Ready",
     "PRG_Decl", "PRG_Decl_Age",
     "PRG_Hold_Dir", "PRG_Hold_Age", "PRG_Hold_Kind",
     "CVG_Cell", "CVG_Action", "CVG_Why", "CVG_Units", "CVG_Side", "CVG_Held", "CVG_Bars",
@@ -650,7 +708,9 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
     ln = _f("LG_N")
 
     df["Side"] = np.where(tb, "Buy", np.where(ts, "Sell", "—"))
-    df["Signal_Kind"] = np.where(tb | ts, "PROVEN", "")
+    sset = settings.signal_set
+    df["Signal_Kind"] = np.where(tb | ts, f"SET {sset}", "")
+    rdy = _f("PRG_Ready", 0.0)
     p_long, p_short = priorities(tb, ts, _f("PRG_Trace"), ready)
     p_long = pd.Series(p_long, index=idx)
     p_short = pd.Series(p_short, index=idx)
@@ -692,11 +752,22 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
             continue
         if tb[i] or ts[i]:
             side_key = "buy" if tb[i] else "sell"
-            lab = EVENT_LABEL[("proven", 1 if tb[i] else -1)]
-            st_name = rd.get("LG_State_Name") or "its state"
-            z = f"z {lz[i]:+.1f}, {int(ln[i])} samples" if np.isfinite(lz[i]) and np.isfinite(ln[i]) else ""
-            reasons.append(f"{lab} · entered {st_name}, proven {'positive' if tb[i] else 'negative'} on this "
-                           f"name's own record ({z}) · {notes[side_key]} · {grid}{cost_txt}")
+            lab = EVENT_LABEL[(sset, 1 if tb[i] else -1)]
+            if sset == "A":
+                st_name = rd.get("LG_State_Name") or "its state"
+                z = f"z {lz[i]:+.1f}, {int(ln[i])} samples" if np.isfinite(lz[i]) and np.isfinite(ln[i]) else ""
+                why = f"entered {st_name}, proven {'positive' if tb[i] else 'negative'} on this name's own record ({z})"
+            else:
+                why = ("the column flipped " + ("up, close above" if tb[i] else "down, close below") + " the midline, "
+                       "risk calm and not rising, the ladder " + ("leaning up" if tb[i] else "leaning down")
+                       + ((", the trend " + ("up" if tb[i] else "down")) if sset == "C" else ""))
+            reasons.append(f"{lab} · {why} · {notes[side_key]} · {grid}{cost_txt}")
+            continue
+        if sset != "A" and np.isfinite(rdy[i]) and rdy[i] != 0:
+            up = rdy[i] > 0
+            reasons.append(f"{_stretch(trace[i])} · READY {'▲' if up else '▼'} — every set-{sset} condition is in "
+                           f"place; the next column flip {'up with the close above' if up else 'down with the close below'} "
+                           f"the midline fires · {grid}")
             continue
         hd = int(h_dir[i]) if np.isfinite(h_dir[i]) else 0
         if hd != 0 and np.isfinite(h_age[i]):
@@ -710,7 +781,7 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
 
 
 __all__ = [
-    "COST_BPS", "EVENT_LABEL", "EngineSettings", "HOLD_HORIZONS", "HORIZON", "KIND_GLYPH",
+    "COST_BPS", "EVENT_LABEL", "EngineSettings", "HOLD_HORIZONS", "HORIZON", "KIND_GLYPH", "SET_CONDITIONS", "SET_PROSE",
     "LARGEST_KNOWN_EFFECT", "POOLED_BREAKEVEN_BPS", "PRG_NORM", "PRG_NORM_WEEKLY",
     "RANK_CONTRACT", "SNAPSHOT_COLUMNS", "add_pragati_features", "chart_of", "compute_frame",
     "compute_ranking", "cost_basis", "cost_in_vol_units", "cost_ok", "grid_weight",
