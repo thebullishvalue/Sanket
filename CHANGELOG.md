@@ -7,6 +7,21 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.2.1] · 2026-11-13
+### UI fixes shared with the other terminals
+- **iPad portrait: a blank strip when the sidebar is collapsed.** At 1024px and below the narrow-rail floor
+  (200px) also held the collapsed sidebar's slot; it now applies only while the sidebar is open.
+- **Icons drawn from `<rect>`** rendered blank or dotted: icon normalisation now strips sizes only from the outer `<svg>`.
+- **Rows of columns stopped 16px short** of the panels around them: each unwrapped row gets the exact basis for its column count.
+- **Tables lost their bottom 8px**: the gap under a panel header is container padding the iframe height includes.
+- **Black native surfaces when the OS disagrees with the app.** `.streamlit/config.toml` declared both `[theme.light]` and
+  `[theme.dark]`, so Streamlit's native widgets followed the viewer's OS; it now has exactly one `[theme]` section (dark,
+  matching Slate, the first-run appearance). The tab strip's overflow fade is painted from `var(--bg)`, and the date picker
+  takes the token-painted calendar block (empty cells clear in both appearances), with the chosen day filled from the accent.
+- **Tattva's tab icon** — the same cobalt mark, in Tattva's own encoding, as every other terminal.
+
+---
+
 ## [v10.2.0] · 2026-11-13
 ### All three sets at once
 

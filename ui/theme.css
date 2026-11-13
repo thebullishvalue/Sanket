@@ -1910,6 +1910,99 @@
 }
 [data-baseweb="calendar"] button svg { fill: var(--ink-secondary) !important; }
 
+/* The rules above paint the calendar's real elements; BaseWeb draws each day
+   cell's band and disc with ::before/::after pseudo-elements, which `*` and the
+   rules above never reach — with the native layer fixed dark, the empty cells
+   before the 1st and after the last day showed as near-black bands on Paper.
+   Pragyam's calendar block follows: it blanks every node and both pseudos, then
+   reinstates the selected day's disc from our accent. */
+/* The calendar, and why it takes a sledgehammer.
+
+   BaseWeb builds this widget from a JS theme object constructed at page load
+   from `.streamlit/config.toml` — NOT from CSS custom properties. That config
+   is static: it cannot follow the in-app appearance toggle, so on Paper the
+   whole overlay arrives painted for Slate and nothing the app injects reaches
+   it except CSS.
+
+   Naming the root and its first child is not enough, and the failure is
+   legible: the day grid went white while the month/year header, the weekday
+   row and the empty leading cells stayed black — those are painted by nodes
+   three and four levels down, each with its own background. Enumerating them
+   is a losing game against a library that reserves the right to renest.
+
+   So: paint the root, make every descendant transparent, then put back the
+   two states that genuinely carry a fill. Source order matters — the reset
+   must precede the states it is reinstating. */
+[data-baseweb="calendar"],
+[data-baseweb="popover"] [data-baseweb="calendar"] {
+    background: var(--surface-1) !important;
+    color: var(--ink) !important;
+    border-color: var(--line) !important;
+    box-shadow: var(--shadow-pop);
+}
+[data-baseweb="calendar"] * { background-color: transparent !important; }
+
+/* And the pseudo-elements, which `*` does NOT match — `*` selects elements,
+   and BaseWeb draws each day cell with two pseudos: `::before` is the
+   range-highlight band, `::after` is the day's own disc. That is precisely
+   the block that survived the reset above: a filled rectangle over the empty
+   leading and trailing cells of the month, glaring on Paper and merely dark
+   on Slate, because the band is painted from the same static base as
+   everything else in this widget.
+   Both are blanked rather than just the one that looks guilty — which of the
+   two paints the band is BaseWeb's implementation detail and has moved
+   between versions — and the selected day's disc is then reinstated
+   explicitly on both, from our own accent. That way the reset cannot cost the
+   one state this widget must show. */
+[data-baseweb="calendar"] *::before,
+[data-baseweb="calendar"] *::after { background-color: transparent !important; }
+[data-baseweb="calendar"] [aria-selected="true"]::after,
+[data-baseweb="calendar"] [aria-selected="true"] > div::after,
+[data-baseweb="calendar"] [aria-selected="true"]::before,
+[data-baseweb="calendar"] [aria-selected="true"] > div::before {
+    background-color: var(--accent) !important;
+}
+
+/* Days are gridcells, not buttons — a `button` rule alone leaves the grid
+   unstyled. Both are named, and the states come after the reset above. */
+[data-baseweb="calendar"] button,
+[data-baseweb="calendar"] [role="gridcell"],
+[data-baseweb="calendar"] [role="gridcell"] > div {
+    color: var(--ink-secondary) !important;
+}
+[data-baseweb="calendar"] button:hover,
+[data-baseweb="calendar"] [role="gridcell"]:hover > div {
+    background-color: var(--surface-2) !important;
+}
+[data-baseweb="calendar"] [aria-selected="true"],
+[data-baseweb="calendar"] [aria-selected="true"] > div,
+[data-baseweb="calendar"] [aria-selected="true"]:hover > div {
+    background-color: var(--accent) !important; color: #FFFFFF !important;
+}
+[data-baseweb="calendar"] [aria-disabled="true"],
+[data-baseweb="calendar"] [aria-disabled="true"] > div {
+    color: var(--ink-quaternary) !important;
+}
+/* Weekday header row, and the month/year selects in the calendar's own
+   header — selects inside a portal, which neither the page's select rules
+   nor the popover's reach. */
+[data-baseweb="calendar"] [role="columnheader"] {
+    color: var(--ink-quaternary) !important;
+    font-family: var(--mono); font-size: var(--fs-3xs);
+    text-transform: uppercase; letter-spacing: 0.1em;
+}
+[data-baseweb="calendar"] [data-baseweb="select"] > div {
+    background-color: var(--surface-2) !important;
+    border-color: var(--line) !important;
+}
+[data-baseweb="calendar"] [data-baseweb="select"] div,
+[data-baseweb="calendar"] [data-baseweb="select"] span,
+[data-baseweb="calendar"] [data-baseweb="select"] svg,
+[data-baseweb="calendar"] [data-baseweb="button"] svg {
+    color: var(--ink-secondary) !important;
+}
+
+
 /* Select control height and value type, matched to the inputs beside it. */
 .stSelectbox [data-baseweb="select"] > div {
     min-height: 34px !important;
@@ -2190,7 +2283,11 @@
 /* The embedded table needs breathing room under the panel header: its own
    sticky column-header row is opaque and was landing directly against the
    panel's header rule, so the two read as one doubled, overlapping band. */
-[class*="st-key-panel-"] [data-testid="stIFrame"] { margin-top: var(--s2); }
+/* As padding on the iframe's element container, not a margin on the iframe:
+   the container takes its height from the iframe, so a margin pushed the
+   table 8px past its own box and the panel cut off its last 8px (measured). */
+[class*="st-key-panel-"] [data-testid="stElementContainer"]:has(> [data-testid="stIFrame"]),
+[class*="st-key-panel-"] [data-testid="stElementContainer"]:has(> iframe) { padding-top: var(--s2) !important; }
 
 /* The table iframe sits flush inside its panel — the frame, radius and
    header all belong to the panel, so the embed must contribute no chrome of
@@ -2433,6 +2530,20 @@
        what it is. */
     flex-grow: 0 !important;
 }
+/* Exact tracks for an unwrapped row. Streamlit's basis is calc(100%/n - gap),
+   which relies on flex-grow to cover the last gap; with grow off (above) every
+   row stopped one gap (16px) short of the panels around it. Every column grid
+   here uses gap="small" (1rem), so the exact basis is (100% - (n-1)·1rem)/n. */
+[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"]:nth-child(2):last-child)
+    > [data-testid="stColumn"] { flex-basis: calc((100% - 1 * 1rem) / 2) !important; }
+[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"]:nth-child(3):last-child)
+    > [data-testid="stColumn"] { flex-basis: calc((100% - 2 * 1rem) / 3) !important; }
+[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"]:nth-child(4):last-child)
+    > [data-testid="stColumn"] { flex-basis: calc((100% - 3 * 1rem) / 4) !important; }
+[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"]:nth-child(5):last-child)
+    > [data-testid="stColumn"] { flex-basis: calc((100% - 4 * 1rem) / 5) !important; }
+[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"]:nth-child(6):last-child)
+    > [data-testid="stColumn"] { flex-basis: calc((100% - 5 * 1rem) / 6) !important; }
 
 /* ── Breakpoints ──────────────────────────────────────────────────────────
    Large desktop → phone. Only two things change across them: how much air
@@ -2455,8 +2566,11 @@
     :root { --col-min: 200px; --page-pad: var(--s5); }
     /* The rail is a quarter of an iPad's width. Narrowed here, not hidden:
        the instrument selector is how you change what every page is about. */
-    [data-testid="stSidebar"] { min-width: 200px !important; max-width: 200px !important; }
-    [data-testid="stSidebar"] > div { min-width: 200px !important; }
+    /* OPEN rail only. Unscoped, this floor also held the COLLAPSED rail at
+       200px in the layout: Streamlit slides it off-screen but the page kept
+       its slot, leaving a 200px blank strip on iPad portrait (measured). */
+    [data-testid="stSidebar"][aria-expanded="true"] { min-width: 200px !important; max-width: 200px !important; }
+    [data-testid="stSidebar"][aria-expanded="true"] > div { min-width: 200px !important; }
 }
 @media (max-width: 768px) {                         /* iPad portrait */
     :root { --col-min: 180px; }
@@ -2694,3 +2808,17 @@
 
 /* Set chips inside the iframe tables are drawn by sanket.py's _sets_cell (the
    iframe does not inherit this sheet). */
+
+/* The tab strip's overflow fade is Streamlit's own `.stTabs::after`, a gradient
+   into the NATIVE theme's background — near-black on Paper while the native
+   layer is dark. Painted from our page token in both appearances. */
+.stTabs::after { background-image: linear-gradient(to right, transparent, var(--bg)) !important; }
+
+/* The chosen day. This BaseWeb build marks it with aria-label="Selected. ...",
+   not aria-selected, so the reinstatement above never matched, and the blanket
+   transparent reset wiped the fill BaseWeb paints on the day's inner box. The
+   fill goes back on that box, from our accent, in both appearances. */
+[data-baseweb="calendar"] [role="gridcell"][aria-label^="Selected"] > div {
+    background-color: var(--accent) !important; color: #FFFFFF !important;
+}
+
