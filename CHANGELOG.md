@@ -7,6 +7,21 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.2.2] · 2026-11-13
+### Nothing touches a panel's edge
+- **The chosen day is one disc.** v10.2.1 filled the day's inner box, which drew a square inside BaseWeb's ring.
+  The inner box stays clear; the ring itself (the cell's own `::after`) takes the accent.
+- **A panel's last line was cut at the bottom on phones.** Streamlit gives every markdown block a −16px bottom
+  margin; inside a panel that clips at `overflow: hidden` the panel ended 16px before its copy did. Body markdown
+  inside panels keeps a zero margin, so the last line sits a full step above the border.
+- **Charts lost their right edge — the last x tick ("100" read "10(") and the end of the legend.** Plotly draws at
+  the element's full width, so the 8px side padding pushed the figure 16px past the panel. The side inset moved
+  into the figure's own margins (`PLOTLY_MARGIN` and the two charts with their own margins, l/r +8), and the chart
+  keeps 8px under it so a legend never sits on the border.
+- **A long panel-header context line ran off the panel** ("… CONVICTION TAPE × VA"). It wraps at word breaks.
+
+---
+
 ## [v10.2.1] · 2026-11-13
 ### UI fixes shared with the other terminals
 - **iPad portrait: a blank strip when the sidebar is collapsed.** At 1024px and below the narrow-rail floor

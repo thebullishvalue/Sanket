@@ -147,7 +147,7 @@ def create_conviction_value_map(df: "pd.DataFrame | None") -> go.Figure:
                         line=dict(width=2, color=COLORS["accent"])),
             hoverinfo="skip"))
     fig.update_layout(**chart_layout(height=500, show_legend=True,
-                                     margin=dict(t=16, l=60, r=16, b=64)))
+                                     margin=dict(t=16, l=68, r=24, b=64)))
     fig.update_layout(hovermode="closest")
     style_axes(fig, y_title="Value tape · rich ↑  cheap ↓",
                x_title="Conviction tape · sellers ←  → buyers",
@@ -195,7 +195,7 @@ def create_correlation_heatmap(names, corr_values) -> go.Figure:
         hovertemplate="<b>%{y}</b> · ρ %{z:+.3f}<extra></extra>",
         colorbar=dict(title="ρ", thickness=12, len=0.7, outlinewidth=0)))
     fig.update_layout(**chart_layout(height=max(320, 18 * len(names) + 80), show_legend=False,
-                                     margin=dict(l=140, r=40, t=16, b=32)))
+                                     margin=dict(l=148, r=48, t=16, b=32)))
     fig.update_layout(plot_bgcolor=panel_bg())
     return fig
 

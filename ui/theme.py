@@ -325,7 +325,7 @@ PLOTLY_LEGEND = dict(
 #: Plot margins. `t`/`b` are set per-figure by ``chart_layout`` — a legend needs
 #: room to sit in, and a single fixed margin either clips every legended chart
 #: or wastes the same space on every chart without one.
-PLOTLY_MARGIN = dict(t=28, l=52, r=16, b=38)
+PLOTLY_MARGIN = dict(t=28, l=60, r=24, b=38)
 
 # ── The one Plotly config, passed to EVERY st.plotly_chart in the app ────────
 # Without this every chart renders Plotly's stock toolbar — including the Plotly
