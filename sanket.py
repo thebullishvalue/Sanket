@@ -91,7 +91,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v10.2.14"
+VERSION = "v10.2.15"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -4824,17 +4824,62 @@ def _status_cell(status) -> str:
             f'title="{_t}">{html.escape(str(label))}</td>')
 
 
-def _html_doc(head_cells: str, rows: list, max_h: int) -> str:
+#: Every column a bespoke table can carry, by KIND: where its content sits.
+#:
+#: The rule, the same in every table: words to the left (the name, the state, the grid
+#: cell), numbers to the right, short codes centred (the A·B·C slots, the push glyph, a
+#: regime word). The header takes its column's alignment, so a label always sits over its
+#: data — SETS stood 90px from its own letters, PUSH's glyph sat right under a left header.
+#:
+#: Width: the tables filled their frame by `width:100%` alone, and the browser handed the
+#: slack to columns in proportion to their longest content, so the Grid column carried
+#: ~180px of blank. Now every data column is as wide as its content and one gutter (the
+#: cells' 12px padding either side), and Symbol takes the slack: the data keeps one even
+#: pitch however wide the frame, and nothing needs more room than it did.
+_COLS = {
+    "rank": "r", "symbol": "l", "pct": "r", "price": "r", "chg": "r", "corr": "r", "sets": "c",
+    "state": "l", "grid": "l", "push": "c", "trace": "r", "c": "r", "v": "r", "evidence": "c",
+    "hold": "r", "entry": "c", "regime": "c", "vol": "c", "column": "r", "vsmid": "r",
+    "risk": "r", "ladder": "r", "trend": "r", "bardelta": "r", "absorp": "r", "zone": "c",
+    "actual": "r", "expected": "r", "div": "r", "confluence": "r",
+}
+_FLEX_COL = "symbol"
+_ALIGN = {"l": "left", "r": "right", "c": "center"}
+
+
+def _cols_markup(cols) -> tuple:
+    """`<colgroup>` and the alignment rules for a column list (kinds from _COLS)."""
+    # width:1px on a nowrap column is "as wide as its content"; the one column without a
+    # width (Symbol) is where the browser puts the slack.
+    group = "".join("<col>" if k == _FLEX_COL else '<col style="width:1px">' for k in cols)
+    css = "".join(f"table.cols tr > :is(th, td:not(.sect):not(.empty)):nth-child({i}) "
+                  f"{{ text-align:{_ALIGN[_COLS[k]]} !important; }}"
+                  for i, k in enumerate(cols, 1))
+    # One body size: cells were 11px or 10px by renderer, so a row ran on two baselines.
+    css += f"table.cols tbody td:not(.sect):not(.empty) {{ font-size:{ui.FS['xs']} !important; }}"
+    return f"<colgroup>{group}</colgroup>", css
+
+
+def _sect_row(ncols: int, color: str, label: str, meta: str = "") -> str:
+    """A group row: what the group is, in the side's ink, then its tally, quieter."""
+    m = (f'<span style="color:{_neut_c()}; font-weight:500;"> · {meta}</span>' if meta else "")
+    return (f'<tr><td class="sect" colspan="{ncols}"><span style="color:{color};">{label}</span>'
+            f'{m}</td></tr>')
+
+
+def _html_doc(head_cells: str, rows: list, max_h: int, cols=None) -> str:
     """The iframe document every bespoke table uses — one shell, one set of tokens."""
+    group, css = _cols_markup(cols) if cols else ("", "")
     return f"""
     <!DOCTYPE html>
     <html>
     <head>
-    <style>{ui.table_shell_css(max_height=max_h)}</style>
+    <style>{ui.table_shell_css(max_height=max_h)}{css}</style>
     </head>
     <body>
     <div class="tt-scroll">
-        <table>
+        <table{' class="cols"' if cols else ''}>
+            {group}
             <thead><tr>{head_cells}</tr></thead>
             <tbody>{"".join(rows)}</tbody>
         </table>
@@ -4903,7 +4948,8 @@ def _build_confluence_table_html(df: pd.DataFrame) -> str:
             + _th("Div %", "Actual − Expected (positive = outperforming expectation)")
             + _th("Confluence", "|Correlation| × normalised signal strength (a ▲▼ today, else "
                                 "how far the trace is stretched)"))
-    return _html_doc(head, rows, _MAXH)
+    return _html_doc(head, rows, _MAXH, cols=("rank", "symbol", "corr", "trace", "state", "grid", "zone",
+                                              "actual", "expected", "div", "confluence"))
 
 
 def _is_latest(analysis_date) -> bool:
@@ -5004,13 +5050,14 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
             continue
         s = stats[age]
         u = s['avg_units']
-        rows.append(f"""
-        <tr>
-            <td class="sect" colspan="{_NCOLS}" style="color: {accent_light};">
-                {_pal["mark"]} {age} · {s['count']} name{'s' if s['count'] != 1 else ''}
-                · {' · '.join(f"{k} {s['by_set'][k]}" for k in lg.SETS)} · grid {'' if not np.isfinite(u) else f'{u:.2f}u avg'} · avg {s['avg_pct_change']:+.1f}%
-            </td>
-        </tr>""")
+        _tally = " · ".join(f"{k} {s['by_set'][k]}" for k in lg.SETS)
+        # The unit stays a lower-case u under the row's capitals (it read "1.00U").
+        _grid_avg = ("" if not np.isfinite(u) else
+                     f' · avg grid {u:.2f}<span style="text-transform:none;">u</span>')
+        rows.append(_sect_row(
+            _NCOLS, accent_light,
+            f"{_pal['mark']} {age} · {s['count']} name{'s' if s['count'] != 1 else ''}",
+            f"{_tally}{_grid_avg} · avg move {s['avg_pct_change']:+.1f}%"))
         for row in s['rows']:
             symbol = html.escape(str(row.get('DisplayName', row.get('Symbol', ''))))
             price = float(row.get('Price', 0) or 0)
@@ -5042,7 +5089,8 @@ def _build_signal_table_html(stats: dict, side: str = 'buy', timeframe: str = 'D
                               "ingredients disagree (gold)")
             + _th("Hold", "Bars into the declared hold window (entry was the open after the signal bar)")
             + _th("Entry", "Has price already run in the signal's direction since it fired (σ units)?"))
-    return _html_doc(head, rows, _MAXH)
+    return _html_doc(head, rows, _MAXH, cols=("symbol", "price", "chg", "sets", "grid", "push", "trace",
+                                              "c", "v", "evidence", "hold", "entry"))
 
 
 def _build_watch_table_html(df: pd.DataFrame, side: str = 'buy', study=None) -> str:
@@ -5120,7 +5168,8 @@ def _build_watch_table_html(df: pd.DataFrame, side: str = 'buy', study=None) -> 
             + _th("Trend", "The trend tape in σ — set C needs it on the event's side.")
             + _th("Grid", _TH_GRID, numeric=False)
             + _th("Hold", "Bars into the hold window of the latest event, of any set"))
-    return _html_doc(head, rows, _MAXH)
+    return _html_doc(head, rows, _MAXH, cols=("symbol", "price", "chg", "state", "column", "vsmid", "risk",
+                                              "ladder", "trend", "grid", "hold"))
 
 
 #: The watch groups, in the order they are listed, with what each one measured on the
@@ -5192,7 +5241,8 @@ def _build_narrative_table_html(df: pd.DataFrame, side: str = 'buy') -> str:
             + _th("Hold", "Bars into the declared hold window of the latest event")
             + _th("Bar Δ", "Inferred bar delta — context only")
             + _th("Absorp", "Absorption strength — context only"))
-    return _html_doc(head, rows, _MAXH)
+    return _html_doc(head, rows, _MAXH, cols=("symbol", "price", "chg", "state", "grid", "push", "trace",
+                                              "c", "v", "hold", "bardelta", "absorp"))
 
 
 def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy') -> str:
@@ -5249,7 +5299,8 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy') -> st
             + _th("C", _TH_C) + _th("V", _TH_V)
             + _th("Regime", "HMM regime — risk context, not a signal input")
             + _th("Vol", "GARCH volatility regime — risk context, not a signal input"))
-    return _html_doc(head, rows, _MAXH)
+    return _html_doc(head, rows, _MAXH, cols=("rank", "symbol", "pct", "price", "chg", "state", "grid",
+                                              "push", "trace", "c", "v", "regime", "vol"))
 
 
 _CENSUS_CELL_H = 68   # three stacked lines of text + padding, measured in the rendered iframe (66 left the last row 5px short)

@@ -7,6 +7,27 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.2.15] · 2026-11-14
+### One column grid for every table
+- **A header sits over its data.** The five screener tables (events, watchlist, the grid lists,
+  signal strength, confluence) aligned each cell by its renderer and each header by a flag, and
+  the two disagreed: SETS was a left header over right-aligned letters, 90px from its own data;
+  the push glyph and the state sat right under left or right headers at random. Every column now
+  has one alignment, by kind, for its header and its cells: words left (symbol, state, grid),
+  numbers right, short codes centred (the A·B·C slots, the push glyph, evidence, entry, regime).
+- **The slack goes to one place.** The tables filled their frame by `width:100%`, and the
+  browser shared the spare width out by content length, so the Grid column carried ~180px of
+  blank before PUSH. Each data column is now as wide as its content plus one gutter, and the
+  Symbol column takes the rest: an even pitch across the data however wide the frame, and no
+  table needs more room than it did.
+- **One cell size.** Cells were 11px or 10px depending on the renderer, so a row ran on two
+  baselines; every cell is now 11px.
+- **Group rows read once.** "GRID 1.00U AVG · AVG -0.4%" said avg twice and capitalised the unit;
+  the row is now its label in the side's ink, then a quieter tally: "A 0 · B 1 · C 0 · avg grid
+  1.00u · avg move −0.4%".
+
+---
+
 ## [v10.2.14] · 2026-11-14
 ### A rail button's label is sized for the button
 - **A rail button's label is sized for the button.** Every button in the sidebar is a full-width
