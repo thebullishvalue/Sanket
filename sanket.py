@@ -91,7 +91,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v10.2.12"
+VERSION = "v10.2.13"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -2924,13 +2924,13 @@ def render_sidebar() -> SidebarState:
 
         # Mode-specific RUN button label so users know what they're triggering.
         _RUN_LABELS = {
-            "Single Date":                "◈ RUN SCREENER",
-            "Pulse Narrative":            "◈ RUN PULSE",
-            "Historical Range":           "◈ RUN HARVEST",
-            "Correlation Analysis":       "◈ RUN CORRELATION",
+            "Single Date":                "RUN SCREENER",
+            "Pulse Narrative":            "RUN PULSE",
+            "Historical Range":           "RUN HARVEST",
+            "Correlation Analysis":       "RUN CORRELATION",
         }
         run_clicked = st.button(
-            _RUN_LABELS.get(analysis_mode, "◈ RUN ANALYSIS"),
+            _RUN_LABELS.get(analysis_mode, "RUN ANALYSIS"),
             type="primary", width='stretch',
             disabled=not date_range_valid,
         )
@@ -4589,7 +4589,12 @@ def _tone_ink(tone: str, t: "dict | None" = None) -> str:
 
 
 def _grid_cell(row) -> str:
-    """The grid state — the action, its reason and its units, in the cell's TONE (Pragyam's CVG_TONE)."""
+    """The grid state — the action and its reason, in the cell's TONE (Pragyam's CVG_TONE).
+
+    Only "■ Trim · paid" in the cell: the graded units and the chart cell's lead (↑/↓) are in
+    the hover. With them inline the cell ran to "■ Accumulate · washout · 1.5u ↑", and since a
+    cell never wraps the whole column reserved that width on every row of every table.
+    """
     try:
         cell = int(row.get('CVG_Cell', cg.UNREAD))
     except (TypeError, ValueError):
@@ -4604,13 +4609,10 @@ def _grid_cell(row) -> str:
     tip = cg.tooltip(cell, cg.UNITS[cell], int(row.get('CVG_Bars', 1) or 1),
                      int(row.get('CVG_From', cg.UNREAD) or cg.UNREAD),
                      int(row.get('CVG_Chart', cg.UNREAD) or cg.UNREAD), lead, held)
-    lead_g = (f' <span style="color:{_long_c() if lead > 0 else _short_c()};">'
-              f'{"↑" if lead > 0 else "↓"}</span>') if lead else ""
     return (f'<td style="color:{col}; font-weight:600; font-size:{ui.FS["2xs"]}; white-space:nowrap;" '
             f'title="{html.escape(tip)}"><span style="font-size:{ui.FS["3xs"]};">{_TONE_GLYPH[tone]}</span> '
             f'{html.escape(cg.action(cell))}'
-            f'<span style="color:{_neut_c()}; font-weight:400;"> · {html.escape(cg.reason(cell))} · '
-            f'{cg.UNITS[cell]:g}u</span>{lead_g}</td>')
+            f'<span style="color:{_neut_c()}; font-weight:400;"> · {html.escape(cg.reason(cell))}</span></td>')
 
 
 #: What each set's triangle means, per side — the tooltip an event cell carries for every
@@ -4854,8 +4856,8 @@ _TH_TRACE = ("The trace, ±100: conviction × value on this chart — how far th
 _TH_PUSH = ("The trace's push, from its histogram: ↑↑ impulse · ↑ push · · none · ↓ push · ↓↓ "
             "impulse. 'held' (gold): the grid row stands against its tape for want of a push.")
 _TH_GRID = ("The conviction-value grid (3 × 3, v8): where the two tapes place this name, as an "
-            "action with its graded units (Buy 4 … Exit 0.25). ↑/↓: the chart's own cell carries "
-            "more / fewer units. Hover for the full reading.")
+            "action and its reason. Hover a cell for its graded units (Buy 4 … Exit 0.25) and "
+            "whether the chart's own cell leads it ↑ / ↓.")
 _TH_C = "MTF conviction tape — who controls across the ladder. ±30 is the knee."
 _TH_V = "MTF value tape — rich (+) or cheap (−) across the ladder. ±43 (θ) is the knee."
 
@@ -5811,6 +5813,15 @@ def _render_system_data_tab(results_df, analysis_date, universe=None, selected_i
     _render_edge_study_panel(sid, study)
 
 
+def _event_frames(results_df) -> tuple:
+    """The Signals tab's two lists: every long / short event of the last 5 bars, by priority."""
+    buys = results_df[results_df['BUY_5d'].astype(str) != "—"].copy().sort_values(
+        'Priority_Long', ascending=False, na_position='last')
+    sells = results_df[results_df['SELL_5d'].astype(str) != "—"].copy().sort_values(
+        'Priority_Short', ascending=False, na_position='last')
+    return buys, sells
+
+
 def _render_signals_tab(results_df, study, timeframe, n_analyzed, n_universe, date_str, mv_label,
                         selected_index, analysis_date, n_warming, sid) -> None:
     """Signals — all three sets at once: the board, then every event of the last 5 bars by age.
@@ -5834,10 +5845,7 @@ def _render_signals_tab(results_df, study, timeframe, n_analyzed, n_universe, da
     )
     ui.render_set_board(_set_board_cards(results_df, study, when=when))
 
-    buys_df = results_df[results_df['BUY_5d'].astype(str) != "—"].copy().sort_values(
-        'Priority_Long', ascending=False, na_position='last')
-    sells_df = results_df[results_df['SELL_5d'].astype(str) != "—"].copy().sort_values(
-        'Priority_Short', ascending=False, na_position='last')
+    buys_df, sells_df = _event_frames(results_df)
     if buys_df.empty and sells_df.empty:
         ui.render_empty_state(
             "No events",
@@ -6350,8 +6358,9 @@ def main():
                                             sid=sid, study=study)
             else:
                 n_watch = len(_watch_frame(results_df, 'buy')) + len(_watch_frame(results_df, 'sell'))
+                n_events = sum(len(f) for f in _event_frames(results_df))
                 tab_signals, tab_watch, tab_grid, tab_strength, tab_raw = st.tabs(
-                    ["Signals", f"Watchlist · {n_watch}", "Grid", "Signal Strength", "System Data"])
+                    [f"Signals · {n_events}", f"Watchlist · {n_watch}", "Grid", "Signal Strength", "System Data"])
                 with tab_signals:
                     _render_signals_tab(results_df, study, timeframe, _n_analyzed, _n_universe,
                                         _date_str, _mv_label, selected_index, analysis_date, _n_warming, sid)

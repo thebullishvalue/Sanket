@@ -7,6 +7,19 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.2.13] · 2026-11-14
+### The grid cell says one thing
+- **"■ Trim · paid", nothing more, in every table's Grid column.** The cell also carried the
+  units and the chart cell's lead ("◆ Wait · idle · 1u ↑"). A cell never wraps, so every row of
+  every table reserved the widest of those, 167-178px of mostly blank column. The units and the
+  lead are in the cell's hover, where the full reading already was; the column is now 125-135px.
+- **Signals carries its count, as Watchlist does:** "Signals · n", the long and short events
+  its two lists hold.
+- **No diamond on the run button.** RUN SCREENER, RUN PULSE, RUN HARVEST, RUN CORRELATION: the
+  label alone, as on every other app's primary button.
+
+---
+
 ## [v10.2.12] · 2026-11-14
 ### The sidebar stays open under a calendar
 - **The sidebar stays open while you use a pop-up drawn from it on a phone.** Below 768px
