@@ -797,11 +797,13 @@ MONO_STACK = "'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace"
 #: tables so a Sanket screener table and a Tattva DataFrame are the same object.
 #:
 #: MEASURED, not estimated (Pragyam found this first): a body row is 0.6875rem at
-#: line-height 1.5 (16.5px) + 0.4rem padding top and bottom (12.8px) + a 1px rule
-#: = 30.3px. The old constant said 27, and because an iframe does not grow to its
-#: content, every table was 3px a row short — invisible on a long table, and the
-#: bottom row cut off on a short one. The header is ~29px plus the scroller's 2px.
-TABLE_ROW_H = 31
+#: One row is exactly TABLE_ROW_H: line-height 1.5 (16.5px) + a 1px rule + the cell
+#: padding DERIVED from it (TABLE_PAD_V above and below). A fixed 0.4rem made
+#: 30.3px rows against a 31px budget, and the slack piled up as a blank strip under
+#: every long table (17px on the screener). 30px is the family's row (Pragyam's).
+#: The header is ~29px plus the scroller's 2px.
+TABLE_ROW_H = 30
+TABLE_PAD_V = (TABLE_ROW_H - 17.5) / 2
 TABLE_HEADER_H = 31
 #: The empty-state row (`.empty`: 2rem padding above and below one line), measured 81px.
 TABLE_EMPTY_H = 82
@@ -843,7 +845,7 @@ def table_shell_css(*, max_height: int = 520) -> str:
                 transition:background 120ms cubic-bezier(0.2,0,0,1); }}
     tbody tr:last-child {{ border-bottom:none; }}
     tbody tr:hover {{ background:{t['accent_hover']}; }}
-    tbody td {{ padding:0.4rem 0.75rem; color:{t['ink_primary']}; font-size:{FS['xs']};
+    tbody td {{ padding:{TABLE_PAD_V}px 0.75rem; color:{t['ink_primary']}; font-size:{FS['xs']};
                 line-height:1.5; vertical-align:middle; white-space:nowrap; }}
     tbody td.numeric, tbody td.num {{ text-align:right; }}
     tbody td.symbol, tbody td.lbl {{ font-weight:600; color:{t['ink_primary']}; }}
