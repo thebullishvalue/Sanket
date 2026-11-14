@@ -2747,8 +2747,8 @@ def render_landing_page():
                     unsafe_allow_html=True,
                 )
 
-    # ── What a run returns ────────────────────────────────────────────────
-    ui.render_section_header("What a run returns", icon="target")
+    # ── What a Run Returns ────────────────────────────────────────────────
+    ui.render_section_header("What a Run Returns", icon="target")
     _out = (
         ("Signals", "Each set's events, watch and tested record, then every event of the last "
                     "five sessions."),
