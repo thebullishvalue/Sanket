@@ -5958,8 +5958,11 @@ def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
                 part = part.sort_values(pcol, ascending=False, na_position='last')
             if len(part):
                 with ui.html_panel(f"{key}-{name}", context=_chart_ctx(f"{len(part)} names")):
+                    # +8: the panel insets an iframe 8px below its header as padding on
+                    # the element container, which Streamlit holds at this height, so
+                    # the inset comes out of the frame (render_data_table adds the same).
                     st.components.v1.html(_build_narrative_table_html(part, side=side_key),
-                                          height=ui.table_iframe_height(len(part), max_height=900))
+                                          height=ui.table_iframe_height(len(part), max_height=900) + 8)
             else:
                 ui_info("No names in these cells on this bar.")
 
