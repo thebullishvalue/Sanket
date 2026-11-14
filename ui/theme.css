@@ -2825,7 +2825,9 @@
 .set-card .sc-watch .k { color: var(--ink-quaternary); text-transform: uppercase; letter-spacing: 0.1em; font-size: var(--fs-3xs); }
 .set-card .sc-watch .v { color: var(--ink-secondary); font-weight: 600; }
 .set-card .sc-edge { display: flex; flex-direction: column; gap: 4px; padding-top: var(--s2); border-top: 1px solid var(--line-faint); }
-.set-card .sc-edge-row { display: flex; align-items: center; gap: var(--s2); font-family: var(--mono); font-size: var(--fs-2xs); }
+/* The row wraps: at tablet width a card is narrower than label + chip + edge,
+   and the no-wrap edge ("−0.161σ · 41% hit") ran past the card and the page. */
+.set-card .sc-edge-row { display: flex; flex-wrap: wrap; row-gap: 2px; align-items: center; gap: var(--s2); font-family: var(--mono); font-size: var(--fs-2xs); }
 .set-card .sc-edge-row .k { color: var(--ink-quaternary); font-size: var(--fs-3xs); text-transform: uppercase; letter-spacing: 0.1em; min-width: 4.2em; }
 .set-card .sc-edge-row .e { margin-left: auto; color: var(--ink-secondary); white-space: nowrap; }
 .set-card .sc-edge-row .chip { font-size: var(--fs-3xs); }
@@ -2852,3 +2854,127 @@
     background-color: var(--accent) !important; border-color: var(--accent) !important;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   FIDELITY — measured defects, fixed at the rule that caused them
+   Found by a scan of every page, tab and expander at 1440 / 1024 / 834 /
+   390 px in Paper and Slate. Each rule names what it measured.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* A panel's header row (title left, control right) never wrapped: on a phone
+   the control was pushed wholly outside the panel and clipped (the 3M…ALL
+   window strip sat at x 373-589 in a panel ending at 374 — invisible and
+   untappable). The row wraps; the header shrinks and wraps its own text, and
+   the control drops to its own line, still on the right. */
+[class*="st-key-panelrow-"] { flex-wrap: wrap !important; row-gap: var(--s2) !important; }
+[class*="st-key-panelrow-"] > [data-testid="stElementContainer"]:has(.panel-hdr) {
+    flex: 1 1 auto !important; min-width: 0 !important;
+}
+[class*="st-key-panelrow-"] > [data-testid="stElementContainer"]:not(:has(.panel-hdr)) {
+    margin-left: auto !important;
+}
+
+/* The rail's tagline was one line with an ellipsis and lost its last word at
+   every width ("… PORTFOLIO LE…"). The 64px brand band holds two lines. */
+[data-testid="stSidebar"] .nav-brand .tagline {
+    white-space: normal !important; overflow: visible !important;
+    text-overflow: clip !important; line-height: 1.35;
+}
+/* Page names in the rail were cut with an ellipsis on the 200px iPad rail
+   ("Record Transac…", "Configurat…"). They wrap instead. */
+[data-testid="stSidebarNavLink"] { height: auto !important; }
+[data-testid="stSidebarNavLink"] span:not([data-testid="stIconMaterial"]) {
+    white-space: normal !important; overflow: visible !important;
+    text-overflow: clip !important; line-height: 1.3 !important; height: auto !important;
+}
+
+/* The instrument chip clips at overflow: hidden with a 1.15 line box, which
+   cut 2px off the tops of its capitals. Two pixels of room inside the clip,
+   given back outside it, so the bar keeps its height. */
+.command-bar .cb-instrument .sym { padding-block: 2px; margin-block: -2px; }
+
+/* A slider's min/max labels appear on hover in the NATIVE theme's text colour
+   (near-white at 60%) — invisible on Paper. Its value takes the accent. */
+[data-testid="stSliderTickBar"], [data-testid="stSliderTickBar"] * { color: var(--ink-tertiary) !important; }
+[data-testid="stSliderThumbValue"] { color: var(--accent) !important; }
+
+/* A text input measured 40px against 38px for every number input and select:
+   BaseWeb's wrapper keeps a 1px transparent border around the field's own.
+   In a two-column form each text field pushed its column 2px further down
+   (0 → 2 → 4px by the third row). The field's token border is the only one. */
+.stTextInput [data-baseweb="input"], .stTextInput [data-baseweb="base-input"],
+.stNumberInput [data-baseweb="input"], .stNumberInput [data-baseweb="base-input"] {
+    background: transparent !important; border-width: 0 !important;
+}
+
+/* Expanders: the summary row took the native near-black and the open body
+   the native near-white border — both from the fixed dark native theme, so
+   on Paper a black bar and an invisible rule. Painted from tokens. */
+[data-testid="stExpander"] summary { background: transparent !important; color: var(--ink-secondary) !important; }
+[data-testid="stExpander"] summary:hover { background: var(--surface-2) !important; color: var(--ink) !important; }
+[data-testid="stExpander"] summary p, [data-testid="stExpander"] summary span { color: inherit !important; }
+[data-testid="stExpanderDetails"] { border-color: var(--line) !important; }
+
+/* Toasts were the native near-black card on Paper. */
+[data-testid="stToast"] {
+    background: var(--surface-1) !important; color: var(--ink) !important;
+    border: 1px solid var(--line-strong) !important; box-shadow: var(--shadow-pop) !important;
+}
+[data-testid="stToast"] p, [data-testid="stToast"] span:not([data-testid="stIconMaterial"]) { color: var(--ink) !important; }
+
+/* Heatmaps that print a value in every cell: a value's width is fixed and a
+   cell's is not, so below the width where they fit the values ran into each
+   other (the monthly table's 13 columns on a phone; the holdings fingerprint's
+   one column per holding on a phone or tablet). There the cells keep their
+   colour and the value moves to the tap readout. */
+@media (max-width: 640px) { .st-key-chart-monthly-heatmap g.heatmap-label { display: none; } }
+@media (max-width: 1100px) { .st-key-chart-risk-alloc g.heatmap-label { display: none; } }
+
+/* A KPI card's tooltip opened to the RIGHT of an icon that sits in the card's
+   top-right corner — 220px past the card, and on the last card past the page.
+   Even hidden it counted toward the page's width: the whole page could be
+   dragged 171px sideways (179px on a phone). Anchored to the icon's right edge
+   it opens over its own card; the label keeps clear of the icon. */
+.metric-card .metric-tooltip-text { left: auto; right: 0; }
+.metric-card:has(.metric-tooltip) .label { padding-right: var(--s5); }
+@media (max-width: 640px) {
+    .metric-tooltip-text { min-width: min(220px, calc(100vw - 48px)); max-width: calc(100vw - 48px); }
+}
+
+/* Streamlit's icons are a FONT now, not an SVG, so the chevron rules that
+   coloured `svg` never reached them: the » that opens a collapsed rail (the
+   only way to the navigation on a phone or tablet) and a help mark's ⓘ were
+   the native near-white — invisible on Paper. */
+[data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"],
+[data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"],
+[data-testid="stSidebarHeader"] [data-testid="stIconMaterial"] { color: var(--ink-tertiary) !important; }
+[data-testid="stExpandSidebarButton"]:hover [data-testid="stIconMaterial"],
+[data-testid="stSidebarCollapseButton"]:hover [data-testid="stIconMaterial"] { color: var(--ink) !important; }
+[data-testid="stTooltipIcon"] [data-testid="stIconMaterial"],
+[data-testid="stTooltipHoverTarget"] [data-testid="stIconMaterial"] { color: var(--ink-quaternary) !important; }
+
+/* A widget's label outside the app's styled strips kept the native near-white
+   (a filter row's "Tier", "State", "Min coverage %" on Paper). The fallback;
+   every styled label keeps its own, more specific rule. */
+[data-testid="stMain"] [data-testid="stWidgetLabel"] p { color: var(--ink-secondary); }
+
+/* A select's value in the 200px tablet rail was cut with an ellipsis
+   ("Benchmark Inde…"). It wraps; the box grows to hold it. */
+[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div { height: auto !important; }
+[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div > div:first-child,
+[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div > div:first-child > div {
+    white-space: normal !important; overflow: visible !important; text-overflow: clip !important;
+}
+
+/* Dense category charts on a phone or tablet: one name per bar is more names
+   than the axis has room for, and they ran into each other. Every other name
+   is shown; the bar's tap readout names every one. */
+@media (max-width: 1100px) { .st-key-chart-gain-waterfall g.xtick:nth-of-type(even) > text { display: none; } }
+@media (max-width: 640px) {
+    .st-key-chart-risk-alloc g.xtick:nth-of-type(even) > text,
+    .st-key-chart-risk-contrib g.xtick:nth-of-type(even) > text,
+    .st-key-chart-cluster-corr g.xtick:nth-of-type(even) > text { display: none; }
+    /* Value labels on the half-width contribution bars, and the screener map's
+       point names, are wider than a phone gives them: tap readout instead. */
+    .st-key-chart-contribution text.bartext { display: none; }
+    .st-key-chart-sd-grid-map g.textpoint { display: none; }
+}

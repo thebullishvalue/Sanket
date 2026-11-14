@@ -91,7 +91,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v10.2.5"
+VERSION = "v10.2.6"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -5250,7 +5250,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy') -> st
     return _html_doc(head, rows, _MAXH)
 
 
-_CENSUS_CELL_H = 66   # three stacked lines of text + padding, measured in the rendered iframe
+_CENSUS_CELL_H = 68   # three stacked lines of text + padding, measured in the rendered iframe (66 left the last row 5px short)
 
 
 def _census_iframe_height(n_unread: int) -> int:
@@ -5896,7 +5896,7 @@ def _render_watch_tab(results_df, study, timeframe, key: str = "watch") -> None:
                     f'text-transform:uppercase; letter-spacing:0.1em; color:{_p["accent_light"]}; '
                     f'margin:0.6rem 0 0.4rem 0;">{label} · {len(w)}</p>', unsafe_allow_html=True)
         st.components.v1.html(_build_watch_table_html(w, side=side_key, study=study),
-                              height=ui.table_iframe_height(max(len(w), 1), max_height=620), scrolling=True)
+                              height=ui.table_iframe_height(len(w), max_height=620), scrolling=True)
 
 
 def _render_grid_tab(results_df, sid, key: str = "grid") -> None:
