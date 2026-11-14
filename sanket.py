@@ -5917,7 +5917,7 @@ def _render_watch_tab(results_df, study, timeframe, key: str = "watch") -> None:
                     f'text-transform:uppercase; letter-spacing:0.1em; color:{_p["accent_light"]}; '
                     f'margin:0.6rem 0 0.4rem 0;">{label} · {len(w)}</p>', unsafe_allow_html=True)
         st.components.v1.html(_build_watch_table_html(w, side=side_key, study=study),
-                              height=ui.table_iframe_height(max(len(w), 1), max_height=620), scrolling=True)
+                              height=ui.table_iframe_height(len(w), max_height=620), scrolling=True)
 
 
 def _render_grid_tab(results_df, sid, key: str = "grid") -> None:

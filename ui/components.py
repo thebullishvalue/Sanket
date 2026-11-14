@@ -803,6 +803,8 @@ MONO_STACK = "'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace"
 #: bottom row cut off on a short one. The header is ~29px plus the scroller's 2px.
 TABLE_ROW_H = 31
 TABLE_HEADER_H = 31
+#: The empty-state row (`.empty`: 2rem padding above and below one line), measured 81px.
+TABLE_EMPTY_H = 82
 
 
 def table_shell_css(*, max_height: int = 520) -> str:
@@ -859,6 +861,10 @@ def table_shell_css(*, max_height: int = 520) -> str:
 
 def table_iframe_height(n_rows: int, *, extra_rows: int = 0, max_height: int = 520) -> int:
     """Pixel height for a bespoke table iframe — one geometry, one formula."""
+    if n_rows <= 0 and not extra_rows:
+        # An empty table shows its `.empty` row, 81px, not a 31px data row: sized
+        # as one row it was 47px short and an empty table drew a scrollbar.
+        return int(min(TABLE_HEADER_H + TABLE_EMPTY_H + 4, max_height))
     content = TABLE_HEADER_H + (n_rows + extra_rows) * TABLE_ROW_H + 4
     return int(min(content, max_height))
 
