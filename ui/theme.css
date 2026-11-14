@@ -2825,7 +2825,9 @@
 .set-card .sc-watch .k { color: var(--ink-quaternary); text-transform: uppercase; letter-spacing: 0.1em; font-size: var(--fs-3xs); }
 .set-card .sc-watch .v { color: var(--ink-secondary); font-weight: 600; }
 .set-card .sc-edge { display: flex; flex-direction: column; gap: 4px; padding-top: var(--s2); border-top: 1px solid var(--line-faint); }
-.set-card .sc-edge-row { display: flex; align-items: center; gap: var(--s2); font-family: var(--mono); font-size: var(--fs-2xs); }
+/* The row wraps: at tablet width a card is narrower than label + chip + edge,
+   and the no-wrap edge ("−0.161σ · 41% hit") ran past the card and the page. */
+.set-card .sc-edge-row { display: flex; flex-wrap: wrap; row-gap: 2px; align-items: center; gap: var(--s2); font-family: var(--mono); font-size: var(--fs-2xs); }
 .set-card .sc-edge-row .k { color: var(--ink-quaternary); font-size: var(--fs-3xs); text-transform: uppercase; letter-spacing: 0.1em; min-width: 4.2em; }
 .set-card .sc-edge-row .e { margin-left: auto; color: var(--ink-secondary); white-space: nowrap; }
 .set-card .sc-edge-row .chip { font-size: var(--fs-3xs); }
