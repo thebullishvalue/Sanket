@@ -7,6 +7,17 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.2.14] · 2026-11-14
+### A rail button's label is sized for the button
+- **A rail button's label is sized for the button.** Every button in the sidebar is a full-width
+  44px action, but its label was 10px, the size of the 30px buttons in the page and the 24px
+  theme toggle, so "RUN ANALYSIS" filled 79 of its 195px. The rail's buttons now carry the type
+  scale's 12px. Where the rail narrows to 200px (1024px and below) the tracking closes from
+  0.08em to 0.04em so the longest label still sits on one line. The theme toggle, the collapse
+  arrow and the compact buttons in the page are unchanged.
+
+---
+
 ## [v10.2.13] · 2026-11-14
 ### The grid cell says one thing
 - **"■ Trim · paid", nothing more, in every table's Grid column.** The cell also carried the
