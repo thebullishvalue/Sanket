@@ -5234,7 +5234,7 @@ def _build_signal_strength_table_html(df: pd.DataFrame, side: str = 'buy') -> st
     return _html_doc(head, rows, _MAXH)
 
 
-_CENSUS_CELL_H = 66   # three stacked lines of text + padding, measured in the rendered iframe
+_CENSUS_CELL_H = 68   # three stacked lines of text + padding, measured in the rendered iframe (66 left the last row 5px short)
 
 
 def _census_iframe_height(n_unread: int) -> int:
