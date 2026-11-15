@@ -143,6 +143,22 @@ HOLD_HORIZONS = [1, 5, 10, 21]
 # and a test whose minimum detectable effect exceeds it cannot resolve anything (edge.py).
 LARGEST_KNOWN_EFFECT = 0.036
 
+# The effect worth resolving, per Edge Study slice (v10.3.1). A test whose minimum detectable
+# effect is above a slice's number cannot tell that slice's edge from nothing, so its verdict
+# is UNDERPOWERED. Until v10.3.1 every slice was held to LARGEST_KNOWN_EFFECT, which made sets
+# that measured several times larger out of sample read UNDERPOWERED on any normal universe.
+# Each number is what that set measured where it was never tuned (studies/v11_lab, v12_sets),
+# rounded DOWN, so the bar errs toward calling a test underpowered:
+#   D ▲  0.10   the lower bound of its confirmed 98.3% interval (+0.097; point +0.259)
+#   C ▲▼ 0.08   fresh daily ▼ +0.080, hourly ▼ +0.132 / ▲ +0.107, research ▲ +0.087
+#   A, B 0.036  no out-of-sample edge was found; the family's old ceiling stands
+SLICE_EFFECT = {"D_buy": 0.10, "C_buy": 0.08, "C_sell": 0.08}
+
+
+def effect_for(slice_key: str) -> float:
+    """The effect a slice's test must be able to resolve (see SLICE_EFFECT)."""
+    return float(SLICE_EFFECT.get(str(slice_key), LARGEST_KNOWN_EFFECT))
+
 # Cost-gate fallback in bps before a study has measured this universe's own cost charge.
 POOLED_BREAKEVEN_BPS = 7.0
 
@@ -832,7 +848,7 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
 __all__ = [
     "COST_BPS", "EVENT_LABEL", "EngineSettings", "HOLD_HORIZONS", "HORIZON", "KIND_GLYPH", "SET_CONDITIONS", "SET_PROSE",
     "SET_LINE", "SET_TITLE", "TRIGGER_PROSE", "event_label",
-    "LARGEST_KNOWN_EFFECT", "POOLED_BREAKEVEN_BPS", "PRG_NORM", "PRG_NORM_WEEKLY",
+    "LARGEST_KNOWN_EFFECT", "POOLED_BREAKEVEN_BPS", "PRG_NORM", "PRG_NORM_WEEKLY", "SLICE_EFFECT", "effect_for",
     "RANK_CONTRACT", "SNAPSHOT_COLUMNS", "add_pragati_features", "chart_of", "compute_frame",
     "compute_ranking", "cost_basis", "cost_in_vol_units", "cost_ok", "grid_weight",
     "instrument_class", "settings_for", "snapshot",

@@ -309,7 +309,7 @@ class SideResult:
 
     @property
     def underpowered(self) -> bool:
-        return bool(self.n_events < MIN_EVENTS or self.mde > LARGEST_KNOWN_EFFECT)
+        return bool(self.n_events < MIN_EVENTS or self.mde > eng.effect_for(self.side))
 
 
 # Verdict ladder. Order matters: the first matching rung wins.
@@ -377,8 +377,8 @@ class EdgeStudy:
         if all(r.underpowered for r in present):
             ref = max(present, key=lambda r: r.n_eff)
             return ("UNDERPOWERED", "neutral",
-                    f"MDE {ref.mde:.3f} vs the largest effect this indicator family has "
-                    f"shown anywhere ({LARGEST_KNOWN_EFFECT:.3f}) · {ref.n_events} events, "
+                    f"resolves {ref.mde:.3f}, but this set's edge to resolve is "
+                    f"{eng.effect_for(ref.side):.3f} · {ref.n_events} events, "
                     f"n_eff {ref.n_eff:.0f}")
         if hold is not None and hold.significant:
             if hold.net > 0:

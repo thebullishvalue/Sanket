@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.3.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.3.1`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -267,9 +267,10 @@ Each step kills one way of fooling yourself (step 2 changed in v9):
 | 7 | **Power stated**: `n_eff`, and a minimum detectable effect | "No edge" reported from a test that could never have seen one |
 
 Verdicts: `CONFIRMED` · `GROSS ONLY` · `DISCOVERY ONLY` · `NO EDGE` · `ANTI-PREDICTS` ·
-`UNDERPOWERED` (the MDE exceeds 0.036, the largest effect this indicator family has shown
-anywhere). **Expect UNDERPOWERED often**, set A above all — it is rare — and the app says "we
-could not tell" rather than "there is no edge".
+`UNDERPOWERED` (the MDE exceeds the slice's own edge to resolve: 0.10 for D, 0.08 for C, 0.036 for
+A and B — what each measured out of sample, rounded down; `engine.SLICE_EFFECT`). **Expect
+UNDERPOWERED** for set A above all — it is rare — and the app says "we could not tell" rather
+than "there is no edge".
 
 It fetches ~15 years once a day per universe (80-symbol fixed-seed sample above that), streams
 in chunks of 20, and reuses the measurement until the date rolls.
@@ -490,6 +491,10 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 ---
 
 ## What Changed
+
+**v10.3.1 — power judged per set.** A test is UNDERPOWERED when it cannot resolve the edge that
+set has shown out of sample — 0.10σ for D, 0.08σ for C, 0.036σ for A and B — instead of holding
+every set to 0.036σ, which made C and D read UNDERPOWERED on any normal universe.
 
 **v10.3.0 — set C reversed, set D added.** The research in `studies/v10_turns`, `v11_lab` and
 `v12_sets` found that in this system a flip *with* the trend is late and reverts, while a move
@@ -951,4 +956,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v10.3.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v10.3.1 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

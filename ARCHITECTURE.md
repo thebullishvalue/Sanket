@@ -265,8 +265,9 @@ sets A, B and C, each side alone, measured together whichever set is selected.
 | 6 | Cost in the same vol units | The same bps costing 4× more on a low-vol name |
 | 7 | Power stated: `n_eff = (dates / h) × participation ratio`, and an MDE | "No edge" from a test that could never have seen one |
 
-`UNDERPOWERED` (the MDE exceeds 0.036) is distinct from `NO EDGE`. The triangles are rare, so both
-slices will often be underpowered even over 15 years.
+`UNDERPOWERED` (the MDE exceeds the slice's own edge to resolve, `engine.SLICE_EFFECT`: 0.10 D,
+0.08 C, 0.036 A and B) is distinct from `NO EDGE`. Set A's triangles are rare, so its slices will
+often be underpowered even over 15 years.
 
 **Memory.** Streaming in chunks of 20 symbols, lean (no volume profile, no regime engine),
 universes above 80 sampled with a fixed seed. The macro drivers are one deep batch for the whole

@@ -7,6 +7,22 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.3.1] · 2026-11-16
+### Power judged per set
+
+- **UNDERPOWERED now means "this test cannot resolve the edge this set has shown"**, per Edge
+  Study slice (`engine.SLICE_EFFECT`, `engine.effect_for`): **0.10σ for D ▲** (the lower bound of its
+  confirmed interval), **0.08σ for C ▲ / C ▼** (fresh and research measurements, rounded down),
+  **0.036σ for A and B** (no out-of-sample edge; the old ceiling stands). Until now every slice was
+  held to 0.036σ, so C and D read UNDERPOWERED on any normal-sized universe however clearly they
+  measured. The verdict's detail names the slice's own number.
+- The cost gate is unchanged (`LARGEST_KNOWN_EFFECT`): it asks whether costs are survivable, not
+  whether a set has an edge.
+- Studies already measured keep their numbers; only the verdict label is recomputed, so no
+  re-measurement is needed and the cache key stays `prg7`.
+
+---
+
 ## [v10.3.0] · 2026-11-16
 ### Set C reversed; set D added
 
