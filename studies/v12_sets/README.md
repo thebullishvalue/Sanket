@@ -1,5 +1,10 @@
 # Can the evidence make sets A, B and C better? Yes, for set C.
 
+> **Correction (v13, `studies/v13_lab/README.md`).** This study scored events with the Edge Study's
+> drift-free score, which subtracts each instrument's trailing average return and so flatters any rule
+> that fires in a downtrend. Measured against same-day peers instead, the effect reported here
+> disappears. Read the results below as what the drift-free score says, not as a stock-picking edge.
+
 `PROTOCOL.md` was committed before any variant was scored. Stage 1 chose on the research set
 (the 151 instruments, daily and hourly). Stage 2 confirmed on fresh data, where the sets had been
 measured but never tuned:

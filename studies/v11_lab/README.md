@@ -1,5 +1,10 @@
 # Signal lab v11: a signal that beats sets A, B and C and holds on data it had never seen
 
+> **Correction (v13, `studies/v13_lab/README.md`).** This study scored events with the Edge Study's
+> drift-free score, which subtracts each instrument's trailing average return and so flatters any rule
+> that fires in a downtrend. Measured against same-day peers instead, the effect reported here
+> disappears. Read the results below as what the drift-free score says, not as a stock-picking edge.
+
 ## The signal
 
 > **▲ When the trend tape reads down (T < −0.5) and the close breaks above the landing band, buy
