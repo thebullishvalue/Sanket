@@ -63,8 +63,7 @@ def candidates(d, L, rules):
     pcat, _pnum, live = tu.readings(L, c)
     vcat, vnum, _tpo = tv.vp_readings(d, sig, ROOT)
     u = L.lg_u.to_numpy(float); rm = L.lg_rmom.to_numpy(float); prk = L.lg_prk.to_numpy(float)
-    lo20 = lc == pd.Series(lc).rolling(tu.LOOK).min().to_numpy()
-    hi20 = lc == pd.Series(lc).rolling(tu.LOOK).max().to_numpy()
+    lo20, hi20 = tu.new_extremes(lc)
     rec = lambda m: pd.Series(m.astype(float)).rolling(H, min_periods=1).max().to_numpy() > 0   # noqa: E731
     lo_recent, hi_recent = rec(lo20), rec(hi20)
     # risk at the most recent extreme (forward-filled from the extreme bar)

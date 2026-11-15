@@ -11,7 +11,7 @@ TURNS (a zig-zag on log closes, its reversal sized to each instrument's own risk
             closing lower; a top mirrors. sigma is the risk forecast at the extreme.
     major   3 x sigma x sqrt(40).
 CANDIDATES (for "real or failed")
-    every 20-bar closing low. TURNED if price then rises the swing amount before closing lower;
+    every new 20-bar closing low (strictly below the 19 closes before it). TURNED if price then rises the swing amount before closing lower;
     FAILED if it closes lower first. 20-bar highs mirror. Undecided at the end of data: dropped.
 
 READINGS (the pane: four tapes, the column, the midline and the cone)
@@ -84,6 +84,18 @@ def outcome(lc, thr, cand, side):
             if mv < 0:
                 res[k] = 0; break
     return res
+
+
+def new_extremes(lc):
+    """(new 20-bar low, new 20-bar high): the close strictly beyond every one of the 19 before it.
+
+    Strict, so a run of stale identical closes (holiday quotes) is not a low and a high on every
+    bar: with risk near zero there, it made one bar's scaled return explode (studies/v10_turns).
+    """
+    s = pd.Series(lc)
+    prev_lo = s.shift(1).rolling(LOOK - 1).min().to_numpy()
+    prev_hi = s.shift(1).rolling(LOOK - 1).max().to_numpy()
+    return lc < prev_lo, lc > prev_hi
 
 
 def readings(L, c):
@@ -177,10 +189,9 @@ def harvest():
                 timing.append(tm)
         # ---- 20-bar lows and highs: turned or failed ----
         thr = SCALES["swing"][0] * sig * np.sqrt(SCALES["swing"][1])
-        roll_lo = pd.Series(lc).rolling(LOOK).min().to_numpy()
-        roll_hi = pd.Series(lc).rolling(LOOK).max().to_numpy()
-        for side, ext in ((-1, roll_lo), (1, roll_hi)):
-            cand = np.where((lc == ext) & live & np.isfinite(thr))[0]
+        nlo, nhi = new_extremes(lc)
+        for side, ext in ((-1, nlo), (1, nhi)):
+            cand = np.where(ext & live & np.isfinite(thr))[0]
             res = outcome(lc, thr, cand, side)
             keep = res >= 0
             cc = pd.concat([meta.iloc[cand[keep]].reset_index(drop=True),

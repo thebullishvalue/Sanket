@@ -155,9 +155,8 @@ def harvest():
                     tm[f"{name} bars"] = int(later[0]) if len(later) else np.nan
                 timing.append(tm)
         thr = tu.SCALES["swing"][0] * sig * np.sqrt(tu.SCALES["swing"][1])
-        for side, ext in ((-1, pd.Series(lc).rolling(tu.LOOK).min().to_numpy()),
-                          (1, pd.Series(lc).rolling(tu.LOOK).max().to_numpy())):
-            cand = np.where((lc == ext) & live & np.isfinite(thr))[0]
+        for side, ext in zip((-1, 1), tu.new_extremes(lc)):
+            cand = np.where(ext & live & np.isfinite(thr))[0]
             res = tu.outcome(lc, thr, cand, side)
             keep = res >= 0
             cc = allc.iloc[cand[keep]].reset_index(drop=True)
