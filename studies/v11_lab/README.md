@@ -78,7 +78,8 @@ step before it.
 ## What it is not
 
 - **Not a short.** The mirror short failed confirmation.
-- **Not a forecast for every downtrend name.** It fires about 4 times per 1,000 bars (1,307
-  events across 151 instruments in 23 years of daily data). 40% of trades lose.
+- **Not a forecast for every downtrend name.** It fires about 1.4 times per 1,000 bars, roughly
+  once every three years per name (1,307 events across 151 instruments in 23 years of daily data).
+  About 40% of trades lose.
 - **Not tested on intraday stops or sizing.** The measurement is a 10-bar hold from the next bar,
   as the Edge Study defines it.
