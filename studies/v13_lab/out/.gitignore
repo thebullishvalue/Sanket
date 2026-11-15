@@ -1,0 +1,3 @@
+# Harvested event and peer-mean files are large (100 MB+) and fully regenerable with
+# harvest.py and xs.py; only the summaries are kept.
+*.pkl
