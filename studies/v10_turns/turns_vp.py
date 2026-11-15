@@ -76,11 +76,15 @@ def vp_readings(d, sig, root):
                 if np.isfinite(last[0]) and not any(abs(p - last[0]) <= atr[t] * 0.1 for p, _ in naked):
                     naked.append((last[0], t))
                     naked = naked[-5:]
-            pv = vv = 0.0; rows = {}; binw = max(atr[t] / 4.0, 1e-12)
+            # the Pine floors the row at the symbol's tick; bar data has no tick, so the floor is
+            # 5 bp of price - without it a zero-range opening bar makes ATR ~0 and a row ~0 wide
+            pv = vv = 0.0; rows = {}; binw = max(atr[t] / 4.0, c[t] * 5e-4)
         naked = [(p, b) for p, b in naked if not (l[t] <= p <= h[t]) and t - b <= 250]
         pv += (h[t] + l[t] + c[t]) / 3.0 * w[t]; vv += w[t]
         vwap[t] = pv / vv
         k0, k1 = int(np.floor(l[t] / binw)), int(np.floor(h[t] / binw))
+        if k1 - k0 > 400:                        # a bar far wider than the session's ATR: coarsen it
+            k1 = k0 + 400
         share = w[t] / (k1 - k0 + 1)
         for k in range(k0, k1 + 1):
             rows[k] = rows.get(k, 0.0) + share
@@ -113,6 +117,7 @@ def vp_readings(d, sig, root):
 
 def harvest():
     D = tu.load(ROOT, 1500 if ROOT == "data" else 2500)
+    n_inst = len(D)
     base, turns_, cands, paths, timing = [], [], [], [], []
     for sym, (cls, d) in D.items():
         d = d[d.close.notna() & d.high.notna() & d.low.notna() & (d.close > 0)]
@@ -124,7 +129,9 @@ def harvest():
         grp = "crypto" if cls == "crypto" else ("equity" if cls in ("us", "nse", "index") else "macro")
         meta = pd.DataFrame({"sym": sym, "cls": cls, "grp": grp, "date": d.index})
         allc = pd.concat([meta, pcat, vcat, pnum, vnum], axis=1)
-        base.append(allc[live])
+        # the all-bars frame needs only the VWAP / profile readings - kept as categories, it is a
+        # tenth of the memory of object strings across a million bars
+        base.append(pd.concat([meta[["sym", "date"]], vcat], axis=1)[live].astype({f: "category" for f in VPF + ["sym"]}))
         for scale, (k, hh) in tu.SCALES.items():
             thr = k * sig * np.sqrt(hh)
             piv = tu.zigzag(lc, thr)
@@ -154,9 +161,17 @@ def harvest():
             res = tu.outcome(lc, thr, cand, side)
             keep = res >= 0
             cc = allc.iloc[cand[keep]].reset_index(drop=True)
+            cc = cc.astype({f: "category" for f in tu.FEATS + VPF})
             cc["extreme"] = "low" if side < 0 else "high"; cc["turned"] = res[keep]
             cands.append(cc)
-    return (D, pd.DataFrame(turns_), pd.concat(cands, ignore_index=True), pd.concat(base, ignore_index=True),
+    del D
+    B = pd.concat(base, ignore_index=True)
+    for f in VPF + ["sym"]:
+        B[f] = B[f].astype(str).astype("category")
+    C = pd.concat(cands, ignore_index=True)
+    for f in tu.FEATS + VPF:
+        C[f] = C[f].astype(str)
+    return (n_inst, pd.DataFrame(turns_), C, B,
             pd.DataFrame(paths, columns=["kind", "off", *VPN]), pd.DataFrame(timing))
 
 
@@ -164,7 +179,7 @@ def fingerprint(T, B):
     rows = []
     for (scale, turn), t in T.groupby(["scale", "turn"]):
         for f in VPF:
-            st, sb = t[f].value_counts(normalize=True) * 100, B[f].value_counts(normalize=True) * 100
+            st, sb = t[f].value_counts(normalize=True) * 100, B[f].astype(str).value_counts(normalize=True) * 100
             for lvl in sb.index:
                 rows.append(dict(scale=scale, turn=turn, reading=f, state=lvl, n=len(t), at_turn=st.get(lvl, 0.0),
                                  all_bars=sb[lvl], lift=st.get(lvl, 0.0) / sb[lvl]))
@@ -205,10 +220,10 @@ def crossed(C, min_n):
 
 def reverse(B, T):
     rows = []
-    sw = T[T.scale == "swing"]; Bs = B.reset_index(drop=True); groups = Bs.groupby("sym").groups
+    sw = T[T.scale == "swing"]; Bs = B.reset_index(drop=True); groups = Bs.groupby("sym", observed=True).groups
     for turn in ("bottom", "top"):
         tset = {(s, dd) for s, dd in sw[sw.turn == turn][["sym", "date"]].itertuples(index=False)}
-        hit = np.fromiter(((s, dd) in tset for s, dd in zip(Bs.sym, Bs.date)), dtype=bool, count=len(Bs))
+        hit = np.fromiter(((s, dd) in tset for s, dd in zip(Bs.sym.astype(str), Bs.date)), dtype=bool, count=len(Bs))
         mark = np.zeros(len(Bs), bool)
         for _s, gi in groups.items():
             gi = np.asarray(gi); h_ = hit[gi]; hh = h_.copy()
@@ -217,7 +232,7 @@ def reverse(B, T):
             mark[gi] = hh
         mark = pd.Series(mark); p0 = mark.mean()
         for f in VPF:
-            for lvl, r in mark.groupby(Bs[f]).agg(["mean", "size"]).iterrows():
+            for lvl, r in mark.groupby(Bs[f].astype(str)).agg(["mean", "size"]).iterrows():
                 rows.append(dict(turn=turn, reading=f, state=lvl, bars=int(r["size"]), p_turn_near=100 * r["mean"],
                                  base=100 * p0, lift=r["mean"] / p0))
     return pd.DataFrame(rows)
@@ -259,5 +274,5 @@ if __name__ == "__main__":
                     sp.append(dict(by=by, group=lvl, extreme=ext, reading=f, state=st_, n=int(r["size"]),
                                    turned_pct=100 * r["mean"], lift=r["mean"] / p0))
     pd.DataFrame(sp).to_csv(os.path.join(OUT, f"vp_real_vs_failed_splits_{tag}.csv"), index=False)
-    print(json.dumps({"instruments": len(D), "volume_instruments": int(B.groupby("sym").volume.apply(lambda s: (s != "no volume").mean() > 0.5).sum()),
+    print(json.dumps({"instruments": D, "volume_instruments": int(B.groupby("sym", observed=True).volume.apply(lambda s: (s != "no volume").mean() > 0.5).sum()),
                       "turns": {f"{a} {b}": int(v) for (a, b), v in T.groupby(["scale", "turn"]).size().items()}}, indent=1))
