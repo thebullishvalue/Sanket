@@ -1,0 +1,65 @@
+{
+ "timeframe": "daily",
+ "split": "2017-12-06",
+ "part_ratio": 19.5,
+ "t5_rules": {
+  "low": {
+   "vp": [
+    "volume",
+    "light"
+   ],
+   "pane": [
+    "risk (inner)",
+    "normal"
+   ],
+   "lift_first": 1.269,
+   "lift_second": 0.921
+  },
+  "high": {
+   "vp": [
+    "naked POC above",
+    "within 1 ATR"
+   ],
+   "pane": [
+    "trend (inner)",
+    "down"
+   ],
+   "lift_first": 1.793,
+   "lift_second": 0.797
+  }
+ },
+ "developed": {
+  "\u25b2": {
+   "signal": "T5",
+   "label": "data-chosen combination",
+   "discovery_edge": 0.12,
+   "holdout_edge": 0.0219,
+   "holdout_ci": [
+    -0.0701,
+    0.1095
+   ],
+   "holdout_significant": false,
+   "best_set_holdout": {
+    "set": "A",
+    "edge": 0.277
+   },
+   "beats_sets": false
+  },
+  "\u25bc": {
+   "signal": "T4",
+   "label": "back into value",
+   "discovery_edge": 0.0328,
+   "holdout_edge": 0.0205,
+   "holdout_ci": [
+    -0.0308,
+    0.0769
+   ],
+   "holdout_significant": false,
+   "best_set_holdout": {
+    "set": "B",
+    "edge": 0.0566
+   },
+   "beats_sets": false
+  }
+ }
+}

@@ -1,0 +1,65 @@
+{
+ "timeframe": "hourly",
+ "split": "2025-11-14",
+ "part_ratio": 34.1,
+ "t5_rules": {
+  "low": {
+   "vp": [
+    "volume",
+    "above usual"
+   ],
+   "pane": [
+    "risk (inner)",
+    "calm"
+   ],
+   "lift_first": 1.237,
+   "lift_second": 1.096
+  },
+  "high": {
+   "vp": [
+    "volume",
+    "heavy (2x+)"
+   ],
+   "pane": [
+    "risk (inner)",
+    "calm"
+   ],
+   "lift_first": 1.297,
+   "lift_second": 1.224
+  }
+ },
+ "developed": {
+  "\u25b2": {
+   "signal": "T2",
+   "label": "risk easing after the extreme",
+   "discovery_edge": 0.0887,
+   "holdout_edge": 0.0315,
+   "holdout_ci": [
+    -0.0657,
+    0.119
+   ],
+   "holdout_significant": false,
+   "best_set_holdout": {
+    "set": "A",
+    "edge": 0.2236
+   },
+   "beats_sets": false
+  },
+  "\u25bc": {
+   "signal": "T4",
+   "label": "back into value",
+   "discovery_edge": 0.0408,
+   "holdout_edge": 0.0317,
+   "holdout_ci": [
+    -0.0087,
+    0.0715
+   ],
+   "holdout_significant": false,
+   "best_set_holdout": {
+    "set": "A",
+    "edge": 0.0468
+   },
+   "beats_sets": false
+  }
+ }
+}

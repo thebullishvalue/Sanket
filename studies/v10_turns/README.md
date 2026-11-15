@@ -1,157 +1,198 @@
-# What the tapes and the column read at turning points
+# What the tapes, the column, VWAP and the volume profile read at turning points, and whether a signal built from them beats sets A, B and C
 
-**Question:** when an instrument bottomed and turned up (or topped and turned down), what did each
-tape and the column read, and can those readings tell a real turn from a failed one?
+**The question:** when an instrument bottomed and turned up (or topped and turned down), what
+did the pane and the price chart read? Can those readings tell a real turn from a failed one,
+and does a signal built from them beat the existing sets?
 
-**Data:** the Indicator repo's 151 instruments. Every reading comes from `ledger.py`, the same
-code the Pragyam pane and Sanket run, and uses only bars up to that moment.
+**The data:** the Indicator repo's 151 instruments.
 
-| Timeframe | History | Swing bottoms | Swing tops | Major bottoms | Major tops |
-|---|---|---|---|---|---|
-| Daily | 2003–2026 | 3,953 | 3,977 | 630 | 671 |
-| Hourly | 2024–2026 | 4,394 | 4,375 | 780 | 796 |
+| | Daily (2003–2026) | Hourly (2024–2026) |
+|---|---|---|
+| Swing bottoms / tops | 3,953 / 3,977 | 4,394 / 4,375 |
+| Major bottoms / tops | 630 / 671 | 780 / 796 |
+| Instruments with volume | 136 | 118 |
 
-To run it:
-`python3 studies/v10_turns/turns.py <Indicator/research> [data|data1h]`
+| Script | What it does |
+|---|---|
+| `turns.py` | The pane: four tapes, the column, the midline and the cone, from `ledger.py`. |
+| `turns_vp.py` | `pragyam.pine`'s session VWAP and volume profile, ported to bar data. |
+| `signals_vs_sets.py` | Candidate signals against sets A, B and C, through Sanket's Edge Study. |
 
-Results are in `out/`.
+Run each with `python3 studies/v10_turns/<script> <Indicator/research> [data|data1h]`. Results
+are in `out/`. Every reading uses only the bars up to that moment.
 
 ## Method
 
 ### Turns
 
-Turns come from a zig-zag on closing prices, scaled to each instrument's own risk:
+Turns come from a zig-zag on closing prices, scaled to each instrument's own risk.
 
-- **Swing turn:** a reversal of at least 2.5 × σ × √10. The median swing is 26% / 19% daily and
-  7% / 6% hourly.
-- **Major turn:** a reversal of at least 3 × σ × √40.
-
-The turns are labelled with hindsight. The readings at each turn are what the chart showed live.
+- **Swing:** a reversal of at least 2.5 × σ × √10. The median swing is 26% / 19% on daily and
+  7% / 6% on hourly.
+- **Major:** a reversal of at least 3 × σ × √40.
 
 ### Real or failed
 
-This is the question a trader can act on. The candidates are every 20-bar low and high.
+The candidates are every new 20-bar closing low (or high). "New" means strictly beyond each of
+the 19 closes before it.
 
 - **Turned:** price reversed by the swing amount before making a new extreme.
 - **Failed:** price made a new extreme first.
 
-Only 11% of daily 20-bar lows turned. Because every candidate is already at a 20-bar extreme,
-the "price fell" part of the reading is held equal across both groups.
+On daily, 10.8% of lows turned and 5.5% of highs. On hourly, 8.4% and 7.3%. Because every
+candidate is already at an extreme, "price fell" is held equal across both groups.
 
-### Readings checked
+"Strict" matters. With ties allowed, a run of stale identical closes counted as a low and a high
+on every bar. Risk is near zero across such a run, so one bar's scaled return exploded. This
+corrupted the first run of the signal test and is fixed.
 
-- **Risk (inner tape):** calm, normal or stressed.
-- **Risk (outer tape):** rising or not.
-- **Trend (inner tape):** up, flat or down, and its colour.
-- **Stretch ladder (outer tape):** its colour.
-- **Column:** its colour.
-- **Close vs midline:** above or below.
-- **Cone:** below, inside or above.
-- **Ledger:** the bar's proven state.
+### VWAP and the profile, as `pragyam.pine` draws them
 
-## Findings
+- **Session:** a week on a daily chart, a day on an hourly chart.
+- **VWAP:** volume-weighted average price since the session began. It falls back to equal
+  weights where an instrument has volume on fewer than half its bars, as the Pine does.
+- **Profile:** each bar's volume is spread across its range, in rows ATR(20)/4 wide.
+  - The POC is the heaviest row.
+  - The value area holds 70% of the volume, walked out from the POC.
+  - The study also tracks the prior session's POC and value area, and naked POCs.
+- **Relative volume:** volume over its 50-bar median.
 
-### 1. The fingerprint at a turn is mostly price itself
+## Findings: the pane
 
-At every swing bottom the column, the ladder and the midline are red. At every top they are
-green. This is true by construction: at the lowest close, the 10-bar move is negative, so these
-readings tell you nothing beyond "price fell".
+**The readings price forces.** At every swing bottom the column, the ladder and the midline are
+red, and at every top they are green. This is true by construction: the lowest close comes after
+a fall, so these readings only say that price fell.
 
-The readings that are not tied to the price path:
+**The readings that carry information:**
 
 | At swing turns (daily) | Bottoms | Tops | All bars |
 |---|---|---|---|
-| Risk stressed | **51%** (major bottoms: 73%) | 26% | 31% |
+| Risk stressed | **51%** (major: 73%) | 26% | 31% |
 | Risk rising | **40%** | 20% | 19% |
-| Trend down | **50%** (major bottoms: 90%) | 1% | 15% |
+| Trend down | **50%** (major: 90%) | 1% | 15% |
 | Trend up | 6% | **82%** | 44% |
 
-Bottoms tend to form in stressed, rising risk inside a downtrend. Tops tend to form in calm
-risk inside an uptrend. Hourly data shows the same pattern, a little weaker.
+Risk climbs into a bottom and eases within about 10 bars after it (`out/paths_daily.png`). Tops
+form in calm risk, and risk rises after.
 
-### 2. No reading tells a real bottom from a failed one
+**Real or failed: no reading tells them apart.** At new 20-bar lows and highs, every single pane
+reading with at least 1,000 cases has a lift between 0.89 and 1.21. None holds across asset
+classes and eras.
 
-This is the central result. At 20-bar lows, the share that turned is the same whatever the pane
-shows:
+The combinations don't either. The best combinations reach about 1.2–1.6 in the second half. The
+first half's ranking predicts the second half poorly: correlation 0.25–0.29, and −0.53 for daily
+highs.
 
-- **Single readings:** every lift is between 0.93 and 1.06, daily and hourly, for both lows and
-  highs. For example, risk stressed vs calm at a daily low: 10.7% vs 11.3% turned.
-- **The one exception is unreliable:** a green column at a daily low turned 28% of the time.
-  But it covers only 1.4% of lows, and it falls to a lift of 1.36 hourly, on just 88 cases.
-- **Combinations:** the best mixes of all the colours reach lifts of only 1.1–1.3. The first
-  half of the dates barely predicts the second. The correlation is 0.25 to 0.33 for lows, and
-  negative (−0.39) for daily highs. That is selection noise, not a pattern.
+**Reverse check.** The strongest reading is "closed below the band". A swing bottom falls within
+±2 bars of it 10.9% of the time daily (4.6 times the base rate), so nine times in ten it isn't a
+bottom.
 
-So the stressed-risk, downtrend picture in Finding 1 describes **every** 20-bar low, not just the
-one that holds.
+**Timing after a swing bottom, in median bars (daily / hourly):**
 
-### 3. The reverse check: the fingerprint is common, so it is weak evidence
-
-The strongest single reading is "closed below the band". It is within ±2 bars of a swing bottom
-10.9% of the time daily and 8.5% hourly, against a base of about 2.4%. That is 4.6 times more
-likely, but roughly nine times in ten it is not a bottom.
-
-The next strongest:
-
-- **Trend down:** within ±2 bars of a bottom 7.1% of the time.
-- **Risk rising:** 4.9%.
-
-### 4. Timing: how late each tape confirms
-
-| After a swing bottom | Daily, median bars (IQR) | Hourly, median bars (IQR) |
+| Reading | Daily | Hourly |
 |---|---|---|
-| Column turns green | 5 (3–7) | 5 (3–7) |
-| Close crosses above the midline | 6 (4–8) | 5 (3–8) |
-| Ladder turns green | 6 (4–10) | 6 (4–10) |
-| Trend turns green | 9 (0–27); 23% were already green | 17 (3–37) |
+| Column turns green | 5 | 5 |
+| Ladder turns green | 6 | 6 |
+| Close above the midline | 6 | 5 |
+| Trend turns green | 9 | 17 |
 
-Tops mirror these. The column and ladder turn in about 5 bars, while the trend takes about 20.
+Set B fires near 37–42% of swing bottoms, at about bar +26. When it does, about 67% of the move
+to the next turn is still ahead.
 
-**Sets B and C at turns:**
+## Findings: VWAP and the volume profile
 
-- **Set B** fires near only 37–49% of swing turns, at a median of 18–27 bars after the turn.
-  When it does, about **two thirds** of the move to the next turn is still ahead: 67–71%
-  (IQR 48–83%).
-- **Set C** fires near 15–27% of turns, later (+35 to +39 bars), with about half the move left
-  (48–59%).
+**At turns they mostly restate the move.** At daily swing bottoms:
 
-### 5. The shape around a turn
+- 96% close below VWAP (lift 2.0).
+- 94% are below the prior week's value-area low (lift 3.5).
+- 66% are below the session POC (lift 2.4).
 
-See `out/paths_daily.png` and `out/paths_hourly.png`.
+Tops mirror this: 96% close above VWAP and 92% above the prior VAH.
 
-**Around bottoms:**
+**Volume is the one independent reading.**
 
-- **Risk:** risk's rank climbs into the bottom (about 44 to 71 by one bar after). Risk momentum
-  spikes at the turn, then falls below zero within about 10 bars. Risk peaks at the bottom and
-  eases after it.
-- **Trend:** the trend reading is at its low exactly at the turn.
+- **At daily bottoms:** heavy volume (2× or more) is present at 17% of bottoms against 7% of all
+  bars (lift 2.5), and above-usual volume at 36%. Volume builds over the 5 bars before a bottom
+  and peaks at about 1.3× its median on the turn (`out/vp_paths_daily.png`).
+- **At tops:** the rise is smaller, at about 1.15×.
+- **Hourly:** the same pattern (heavy volume lift 2.1).
 
-**Around tops:**
+**Naked POCs are less likely near a turn.** A naked POC within 1 ATR has a lift of 0.3–0.6.
 
-- **Risk:** tops form in calm risk (rank about 33), and risk climbs after.
-- **Trend:** the trend reading is at its high exactly at the turn.
+**Real or failed: no reading tells them apart here either.**
 
-**Tied to price:** the column and midline form a V shape with its tip 10 bars after the turn.
-This is mechanical, because both measure a 10-bar move.
+- **Single readings:** with at least 1,000 cases, VWAP and profile readings have lifts of
+  0.78–1.20, and none holds on both timeframes.
+- **Heavy volume at a 20-bar low:** 0.97 daily and 1.07 hourly. It marks capitulation at every
+  low, not just the low that holds.
+- **VWAP and profile crossed with every pane reading:** about 270 cells per side, with
+  first-half/second-half correlation of −0.02 to 0.43. On daily the best first-half cells fell
+  back to about 0.7–1.0.
+
+**Timing.** VWAP is reclaimed 1–2 bars after a turn, faster than any tape, because the weekly
+session VWAP resets often and price crosses it constantly.
+
+## Does a signal built from this beat sets A, B and C?
+
+**No.**
+
+The candidates were declared in `signals_vs_sets.py` and committed before the VWAP results were
+read. Each has a ▲ and a mirrored ▼, and fires at most once in 10 bars.
+
+| | Rule (▲) |
+|---|---|
+| **T1** confirmed low | a new 20-bar low in the last 10 bars, and the column turns green |
+| **T2** risk easing | T1, with risk stressed at the low and falling now |
+| **T3** VWAP reclaim | a 20-bar low in the last 10 bars, and the close crosses back above session VWAP |
+| **T4** back into value | a 20-bar low in the last 10 bars, and the close crosses back above the prior session's VAL |
+| **T5** data-chosen | at the low, the VWAP/profile × pane combination with the best turned-vs-failed lift on the first half of the dates |
+
+**How they were judged:** with Sanket's Edge Study, in **one** run with A, B and C, so all
+signals share the same symbols, dates and discovery/holdout split.
+
+- Entry is the bar after the signal, with a 10-bar hold.
+- Trailing drift is removed and returns are volatility-normalised.
+- Confidence intervals come from a block bootstrap over dates, with 3bp costs.
+- The **developed signal** is the candidate side with the best discovery edge. It beats the sets
+  only if its holdout edge is significant and above the best set's.
+
+| Timeframe | Side | Developed signal | Discovery edge | Holdout edge (95% CI) | Best set, holdout | Beats the sets? |
+|---|---|---|---|---|---|---|
+| Daily | ▲ | T5 (light volume, normal risk) | +0.120σ (significant) | +0.022 (−0.07, +0.11) | A +0.277 | **No** |
+| Daily | ▼ | T4 back into value | +0.033 | +0.021 (−0.03, +0.08) | B +0.057 | **No** |
+| Hourly | ▲ | T2 risk easing | +0.089σ (significant) | +0.032 (−0.07, +0.12) | A +0.224 | **No** |
+| Hourly | ▼ | T4 back into value | +0.041 (significant) | +0.032 (−0.01, +0.07) | A +0.047 | **No** |
+
+**None of the 10 candidate sides is significant in the holdout, on either timeframe.**
+
+- Every candidate that looked good in discovery shrank toward zero, which is the selection effect
+  the protocol exists to catch.
+- T1, T3 and T4 fire 20–36 times per 1,000 bars, with edges within ±0.05σ.
+- T5's chosen rules collapsed out of sample: daily lows went from a 1.27 lift to 0.92, highs from
+  1.79 to 0.80.
+
+**A note on set A.** Set A ▲ is the only signal with a significant holdout edge here (daily
++0.277σ). It fires only once per 11,000 bars, so the Edge Study still rates it UNDERPOWERED.
+Earlier work found it concentrated in very few names, so this is not a population edge either.
 
 ## What this means
 
-- **The pane describes a turn but does not call it.** Bottoms happen in stressed, rising risk
-  in a downtrend, but so does every failed low. Nothing on the pane, alone or combined, picks the
-  low that holds. This agrees with the earlier Edge Study and flip study, which found no
-  directional edge in any single-chart state.
-- **The pane confirms a turn, at a known delay.** The column and ladder take the new side about
-  5–6 bars after a swing turn, and the trend tape about 10–20. A trader who waits for the column
-  and the ladder gives up about 5 bars. Set B, the stricter confirmation with calm risk, gives up
-  about a third of the move and catches fewer than half of turns.
-- **One lead worth testing on its own:** after bottoms, risk momentum falls fast. Risk easing
-  after a spike is a different question from "is this the low". This study only shows it after
-  the fact; it has not been tested as a forward signal.
+1. **Turns have a recognisable look, but every failed low has it too.** Bottoms come with
+   stressed, rising risk, a downtrend, price below VWAP and value, and a burst of volume.
+   Nothing on the pane or the price chart, alone or combined, picks out the low that holds.
+2. **The tapes confirm a turn, late and reliably.**
+   - The column and ladder turn green about 5–6 bars after a swing bottom.
+   - VWAP is reclaimed in 1–2 bars, but it is noisy.
+   - The trend takes 10–20 bars.
+3. **No signal built from these studies beats the existing sets.** Sets B and C have no edge
+   either, so the honest summary is that nothing in the pane or the profile forecasts direction
+   over 10 bars on this universe. What the system does forecast reliably is risk: the cone and the
+   risk regime.
 
 **Caveats:**
 
-- Turns are labelled with hindsight; the readings are not.
-- Instruments are correlated, so the event counts overstate independent evidence. The real vs
-  failed result is a null result, and that only makes it more secure.
-- Swing size is sized to each instrument's own risk, so crypto and bonds are judged on the same
-  scale.
+- Turns are labelled with hindsight; the readings never are.
+- Instruments are correlated, so event counts overstate independent evidence. That only
+  strengthens the null results.
+- The Pine reads a developing profile from intraday bars where TradingView has them; this port
+  uses each bar's own range, which is what the Pine does without intraday data.

@@ -20,11 +20,11 @@
   "('swing', 'top')": 55.0
  },
  "candidates": {
-  "high": 129422,
-  "low": 84526
+  "high": 126602,
+  "low": 82299
  },
  "candidates_turned_pct": {
-  "high": 5.7,
-  "low": 11.0
+  "high": 5.5,
+  "low": 10.8
  }
 }
