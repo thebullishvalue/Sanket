@@ -11,6 +11,9 @@ import os, sys
 import numpy as np, pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import scorers                                              # noqa: E402
+SCORE = os.environ.get("V13_SCORE", "score")              # score (drift-free) | score_xs | score_raw
 OUT = os.path.join(HERE, "out")
 DSS = sys.argv[1:] or ["RD", "RH", "FD", "FH"]
 NUM = ["T", "ladder", "rungs_up", "rungs_dn", "u", "u_min10", "u_max10", "stretch", "vs_mid", "risk_rank",
@@ -18,9 +21,9 @@ NUM = ["T", "ladder", "rungs_up", "rungs_dn", "u", "u_min10", "u_max10", "stretc
 
 
 def load(ds):
-    E = pd.read_pickle(os.path.join(OUT, f"events_{ds}.pkl"))
-    E["ds"] = ds
-    return E
+    E = scorers.load(ds)
+    E["score"] = E[SCORE]                                   # the scorer under test
+    return E[np.isfinite(E["score"])]
 
 
 def tclust(x, d):
@@ -51,7 +54,7 @@ def main():
                                  t_bot=tclust(Q.score[Q.bin == 0], Q.date[Q.bin == 0]),
                                  cuts=",".join(f"{v:.3g}" for v in q)))
     R = pd.DataFrame(rows)
-    R.to_csv(os.path.join(OUT, "quintiles.csv"), index=False)
+    R.to_csv(os.path.join(OUT, f"quintiles_{SCORE}_{'_'.join(DSS)}.csv"), index=False)
     S = R.groupby(["pool", "side", "feature"]).agg(n_ds=("ds", "size"), min_spread=("spread", "min"),
                                                    max_spread=("spread", "max"), cuts=("cuts", "first"))
     S["consistent"] = (S.min_spread > 0) | (S.max_spread < 0)
