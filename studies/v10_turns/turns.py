@@ -37,6 +37,7 @@ warnings.filterwarnings("ignore")
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..")))
 RESEARCH = os.path.abspath(sys.argv[1])
+OUT = os.path.abspath(sys.argv[3] if len(sys.argv) > 3 else os.path.join(HERE, "out"))   # before the chdir
 sys.path.insert(0, RESEARCH)
 import numpy as np, pandas as pd
 import ledger
@@ -44,7 +45,6 @@ os.chdir(RESEARCH)
 from lib import load                                          # noqa: E402
 
 ROOT = sys.argv[2] if len(sys.argv) > 2 else "data"
-OUT = os.path.abspath(sys.argv[3] if len(sys.argv) > 3 else os.path.join(HERE, "out"))
 os.makedirs(OUT, exist_ok=True)
 H = 10
 SCALES = {"swing": (2.5, 10), "major": (3.0, 40)}

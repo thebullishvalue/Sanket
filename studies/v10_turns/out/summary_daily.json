@@ -1,0 +1,30 @@
+{
+ "instruments": 151,
+ "bars_live": 831633,
+ "turns": {
+  "('major', 'bottom')": 630,
+  "('major', 'top')": 671,
+  "('swing', 'bottom')": 3953,
+  "('swing', 'top')": 3977
+ },
+ "swing_size_median_pct": {
+  "('major', 'bottom')": 80.47,
+  "('major', 'top')": 44.02,
+  "('swing', 'bottom')": 25.64,
+  "('swing', 'top')": 19.26
+ },
+ "bars_between_turns_median": {
+  "('major', 'bottom')": 540.0,
+  "('major', 'top')": 200.0,
+  "('swing', 'bottom')": 94.0,
+  "('swing', 'top')": 55.0
+ },
+ "candidates": {
+  "high": 129422,
+  "low": 84526
+ },
+ "candidates_turned_pct": {
+  "high": 5.7,
+  "low": 11.0
+ }
+}
