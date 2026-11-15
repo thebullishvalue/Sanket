@@ -90,11 +90,14 @@ LARGEST_KNOWN_EFFECT = eng.LARGEST_KNOWN_EFFECT
 MIN_EVENTS = 30
 
 # The slices measured: key -> (side, kind or None for both kinds).
-SLICES = {f"{k}_{side}": (sgn, k) for k in ("A", "B", "C") for side, sgn in (("buy", 1.0), ("sell", -1.0))}
+# D is long only (ledger.LONG_ONLY), so it has no ▼ slice.
+SLICES = {f"{k}_{side}": (sgn, k) for k in ("A", "B", "C", "D") for side, sgn in (("buy", 1.0), ("sell", -1.0))
+          if not (k == "D" and side == "sell")}
 SLICE_LABEL = {
     "A_buy": "A · ▲ proven +", "A_sell": "A · ▼ proven −",
     "B_buy": "B · ▲ flip", "B_sell": "B · ▼ flip",
-    "C_buy": "C · ▲ flip + trend", "C_sell": "C · ▼ flip + trend",
+    "C_buy": "C · ▲ flip vs downtrend", "C_sell": "C · ▼ flip vs uptrend",
+    "D_buy": "D · ▲ band break in a downtrend",
 }
 
 
@@ -138,7 +141,7 @@ def symbol_events(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
     fwd = (exit_ / entry - 1.0).to_numpy()
 
     parts = []
-    for col, side, kind in ((f"{k.lower()}_{s}", sgn, k) for k in ("A", "B", "C")
+    for col, side, kind in ((f"{k.lower()}_{s}", sgn, k) for k in ("A", "B", "C", "D")
                             for s, sgn in (("buy", 1.0), ("sell", -1.0))):
         m = f[col].fillna(False).astype(bool).to_numpy() & np.isfinite(fwd)
         if m.any():
@@ -557,7 +560,7 @@ def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
 
     # Total usable bars across studied symbols -> the fire rate the cost story hinges on.
     total_bars = sum(len(b) for b in baselines.values()) or 1
-    fire_rates = {k: float((ev["kind"] == k).sum() / total_bars) for k in ("A", "B", "C")} if "kind" in ev.columns else {}
+    fire_rates = {k: float((ev["kind"] == k).sum() / total_bars) for k in ("A", "B", "C", "D")} if "kind" in ev.columns else {}
     fire_rate = fire_rates.get("A", float(len(ev) / total_bars))
 
     eras = {

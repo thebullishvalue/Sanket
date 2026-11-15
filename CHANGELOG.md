@@ -7,6 +7,34 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.3.0] · 2026-11-16
+### Set C reversed; set D added
+
+- **Set C now trades against the trend.** C was B with the trend tape agreeing (T ≥ 0 for ▲,
+  T < 0 for ▼). It is now B with the trend tape in its **opposing strong state**: T < −0.5 for ▲,
+  T > +0.5 for ▼ (`studies/v12_sets`, declared, chosen on the research set, confirmed on fresh data).
+  - Fresh daily (572 stocks): ▼ +0.011 → **+0.080σ** [+0.022, +0.142]; ▲ −0.053 → +0.029.
+  - Fresh hourly (595 stocks): ▼ −0.000 → **+0.132σ**; ▲ −0.059 → **+0.107σ**.
+  - Ready C follows (`ready_c_*`, `PRG_Ready_C`, `NEAR … B·C`); the Watchlist's ready rates were
+    re-measured (ready B·C: ~23-27% next bar, ~52-60% within 10).
+- **Set D added: a band break up in a downtrend, long only.** ▲ when the trend tape is in its down
+  state (T < −0.5) and the close enters above the landing band; at most once per 10 bars.
+  - Confirmed on 572 fresh stocks no study had used (`studies/v11_lab`, protocol committed before the
+    data was fetched): **+0.259σ** over 10 bars, 98.3% interval [+0.097, +0.407], 59% hit, +1.7%
+    raw mean, positive in the US and India and in 2005–12, 2013–19 and 2020–26. It also holds on
+    instruments that cannot be delisted (commodities, FX, bonds, crypto).
+  - `ledger.d_buy` / `d_sell` (always False), `ledger.LONG_ONLY`, `D_Buy` / `D_Sell`, a `D_buy` Edge
+    Study slice (no ▼ slice).
+- **Screens:** four set cards (four across, two by two under 1,200px); four slots per event; events
+  within a day ordered D, C, A, B by out-of-sample evidence; D on the rail, the Edge Study, the
+  Historical Range (cards, table, charts, terminal), the reference cards and the landing page.
+- **Edge Study cache key `prg6` → `prg7`:** C's answer changed and D is new.
+- Verified: the engine's C equals the confirmed rule (Cx5) and D equals the confirmed H2 bar for
+  bar on all 151 research instruments; lint clean (one pre-existing warning); every mode runs
+  without exception under Streamlit's test harness; checked in a browser on NIFTY 50.
+
+---
+
 ## [v10.2.15] · 2026-11-14
 ### One column grid for every table
 - **A header sits over its data.** The five screener tables (events, watchlist, the grid lists,

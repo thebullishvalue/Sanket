@@ -132,9 +132,11 @@ set B    ▲ surprise flips ≥ 0 · close > mid · risk rank < 33.3 · ln(σ/σ
 set C    set B, and T ≥ 0 for ▲, T < 0 for ▼
 ```
 
-**Three sets, all at once (v10.2).** Every set fires on every screen; there is no selection.
+**Four sets, all at once (v10.3).** Every set fires on every screen; there is no selection.
+C trades a flip *against* the trend tape's strong state; D (long only, `ledger.LONG_ONLY`) is a
+band break up in a downtrend, at most once per horizon, and has no ▼ slice in the Edge Study.
 `turn_buy` / `turn_sell` are any set's triangle, and `PRG_Buy_Sets` / `PRG_Sell_Sets` name the sets
-that fired (`ledger.tags`: `A`, `B`, `B·C`, `A·B·C` …; a C event is always a B one). The Edge Study
+that fired (`ledger.tags`: `A`, `B`, `B·C`, `C·D` …; a C event is always a B one). The Edge Study
 measures each set apart and every screen reads each set's own verdict (`EdgeStudy.verdict(side,
 set)`). Sets B and C first fire at bar ~752 (risk's rank needs 500 readings); the Weekly fetch was
 deepened for them. READY marks a side of B (`PRG_Ready`) or of C (`PRG_Ready_C`) with every condition

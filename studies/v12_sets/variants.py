@@ -78,7 +78,9 @@ def main():
         V = variants(L, c)
         # the current rules, rebuilt, must be ledger's own - bar for bar
         assert (V["B0"][0] == L.b_buy.to_numpy(bool)).all() and (V["B0"][1] == L.b_sell.to_numpy(bool)).all(), sym
-        assert (V["C0"][0] == L.c_buy.to_numpy(bool)).all() and (V["C0"][1] == L.c_sell.to_numpy(bool)).all(), sym
+        # since v10.3 ledger's C IS Cx5 (this study's result); before it, C0
+        cur_c = "Cx5" if getattr(ledger, "LONG_ONLY", None) else "C0"
+        assert (V[cur_c][0] == L.c_buy.to_numpy(bool)).all() and (V[cur_c][1] == L.c_sell.to_numpy(bool)).all(), sym
         checked += 1
         V["A"] = (L.a_buy.to_numpy(bool), L.a_sell.to_numpy(bool))
         fwd = (lo.close.shift(-1 - H) / lo.close.shift(-1) - 1.0).to_numpy()

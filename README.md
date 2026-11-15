@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.2.15`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.3.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -9,11 +9,12 @@ Conviction-Value Grid already reads — and asks of every name the indicator's o
 
 It reports three things, and keeps them apart:
 
-- **Events** (v10.2 — three signal sets, all on screen at once, all read from Pragyam's engine).
+- **Events** (v10.3 — four signal sets, all on screen at once, all read from Pragyam's engine).
   **A** — entering a state the name's own record has proven (rare). **B** — the surprise column
   flips, the close past the midline, risk calm and not rising, the stretch ladder agreeing.
-  **C** — B with the trend agreeing. A signal board shows each set's events, its watch and its
-  own measured verdict side by side; each event row lights the sets that fired it.
+  **C** — B *against* a strong trend. **D** — a band break up in a downtrend (long only). A signal
+  board shows each set's events, its watch and its own measured verdict side by side; each event
+  row lights the sets that fired it.
 - **State.** Every name's cell in the **3 × 3 conviction-value grid** (v8), named as an action —
   Buy · Accumulate · Hold · Wait · Trim · Exit — with the measured v8 units, the same units
   Pragyam's book now sizes from. Where the name stands *between* events.
@@ -114,7 +115,7 @@ to 1e-13.
 
 ## The Signals
 
-Three sets, all fired on every screen and shown side by side, all read from **Pragyam's engine** (`ledger.py`,
+Four sets, all fired on every screen and shown side by side, all read from **Pragyam's engine** (`ledger.py`,
 ported bar for bar from `pragyam.pine` and checked against its reference on 151 instruments:
 identical states, z-scores, cones, ladder and signals on every bar). Pragati's own signal set — the
 grid's capitulation / distribution, the ◆ RESUME and the watchlist — is not computed.
@@ -123,7 +124,14 @@ grid's capitulation / distribution, the ◆ RESUME and the watchlist — is not 
 |:---|:---|:---|:---|
 | **A · proven** | the name enters a state its own record has proven positive | proven negative | 0.2 |
 | **B · flip** | the surprise column flips positive · the close is above the midline · risk is calm · risk is not rising · the stretch ladder leans up | mirrors | 25 |
-| **C · flip + trend** | set B's ▲, and the trend tape up | set B's ▼, and the trend down | 14 |
+| **C · flip against the trend** | set B's ▲, with the trend tape in its down state (T < −0.5) | set B's ▼, with the trend in its up state (T > +0.5) | 0.8 ▲ · 5 ▼ |
+| **D · band break in a downtrend** | the trend tape in its down state, and the close enters above the landing band; at most once per 10 bars | — (long only) | 1.7 |
+
+Out of sample, on 572 fresh S&P 500 and Nifty 200 stocks (2005–2026; `studies/v11_lab`,
+`studies/v12_sets`), over 10 bars: **D +0.26σ** (98.3% interval +0.10 to +0.41, 59% hit, both markets,
+every era); **C ▼ +0.08σ** daily and **+0.13σ** hourly (significant); C ▲ +0.03σ daily and +0.11σ
+hourly; B ▼ +0.05σ; A and B ▲ none. Until v10.3, C asked the trend to *agree* — that half reverted
+(−0.05σ on the same data), so it was reversed.
 
 What each term means, exactly:
 
@@ -482,6 +490,14 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 ---
 
 ## What Changed
+
+**v10.3.0 — set C reversed, set D added.** The research in `studies/v10_turns`, `v11_lab` and
+`v12_sets` found that in this system a flip *with* the trend is late and reverts, while a move
+*against* a strong trend continues. **C** now asks for the trend tape in its opposing strong state
+(down for ▲, up for ▼); on fresh data its ▼ went from +0.01 to +0.08σ daily and from 0.00 to +0.13σ
+hourly, its ▲ from −0.05 to +0.03 daily and −0.06 to +0.11 hourly. **D** is new: a band break up in
+a downtrend, long only, confirmed at +0.26σ on 572 stocks no study had used. Four set cards, four
+slots per event, D on the rail and the Edge Study; the cache key moves to `prg7`.
 
 **v10.2.5 — production copy.** Every page's text rewritten to read as a finished product: the
 landing page says what Sanket is in a few lines; each tab carries a one-line subtitle and at most
@@ -935,4 +951,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v10.2.15 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v10.3.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
