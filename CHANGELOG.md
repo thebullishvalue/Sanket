@@ -7,6 +7,17 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.2.16] · 2026-11-16
+### The cursor shows on Paper
+- **The cursor and typed search text are visible on Paper.** Streamlit's base theme is the dark
+  one, and its inputs carried that theme's near-white text colour into two places the theme never
+  named: the blinking cursor in every text, number and date field, and the characters typed into
+  a dropdown to filter it ("Select transaction", "Select security"). On Paper's white fields both
+  measured 1.2:1, all but invisible. Both now take the page's ink: 17.7:1 on Paper, unchanged on
+  Slate. A dropdown keeps its hidden cursor; the letters you type are their own feedback.
+
+---
+
 ## [v10.2.15] · 2026-11-14
 ### One column grid for every table
 - **A header sits over its data.** The five screener tables (events, watchlist, the grid lists,
