@@ -19,7 +19,7 @@ THE STACK, bottom to top
     ledger.py      THE SIGNALS — three sets read from Pragyam's engine, all fired at
                    once: A, entering a state this name's own record has proven; B, a
                    column flip in calm risk with the stretch ladder agreeing; C, B
-                   against a strong trend; D, a band break up in a downtrend
+                   with the trend
     cvgrid.py      THE GRID — the 3 × 3 state the two tapes place a name in,
                    named as an action with its measured units
     engine.py      THIS FILE — the Sanket-facing layer: settings, per-symbol
@@ -29,25 +29,21 @@ THE STACK, bottom to top
 
 THREE KINDS OF OUTPUT, AND WHAT EACH CLAIMS
 ───────────────────────────────────────────
-    EVENTS    four sets, all fired on every screen and shown side by side, all read
+    EVENTS    three sets, all fired on every screen and shown side by side, all read
               by ledger.py from Pragyam's engine:
               A · PROVEN   ▲▼ on entering a state this name's own record has proven
                            (the shrunk edge past two standard errors). Rare: about one
                            per 5,500 bars on 151 instruments.
               B · FLIP     the surprise column flips, the close past the midline, risk
                            calm and not rising, the stretch ladder agreeing.
-              C · FLIP AGAINST THE TREND   B with the trend tape in its OPPOSING state
-                           (down for ▲, up for ▼). v10.3 reversed it: agreeing reverted.
-              D · BAND BREAK   ▲ only: trend tape down and the close breaks above the
-                           landing band. Once per horizon. Confirmed out of sample.
+              C · FLIP + TREND   B with the trend tape agreeing.
               One bar can carry several: a C triangle is always a B one, so an event is
-              labelled by every set that fired it (▲ A, ▲ B, ▲ B·C, ▲ C·D …). The
-              last event of any set stands as the DECLARATION. Only D has a cooldown; no
-              gate on the Pragati stack. Sets B and C first fire at bar ~752 (risk's rank
-              needs 500 readings). The Edge Study measures each set apart.
+              labelled by every set that fired it (▲ A, ▲ B, ▲ B·C, ▲ A·B·C …). The
+              last event of any set stands as the DECLARATION. No cooldown; no gate on
+              the Pragati stack. Sets B and C first fire at bar ~752 (risk's rank needs
+              500 readings). The Edge Study measures each set apart.
     READY     sets B and C: every condition of a side in place but the flip — READY B,
-              or READY B·C when the trend is in its opposing state too (the next flip
-              fires both).
+              or READY B·C when the trend agrees too (the next flip fires both).
     LEDGER    every bar's state and its record on this name: the samples behind
               it, the believed edge and its z - proven, unproven or learning.
     STATE     the grid cell — Buy / Accumulate / Hold / Wait / Trim / Exit —
@@ -142,22 +138,6 @@ HOLD_HORIZONS = [1, 5, 10, 21]
 # cost above it cannot be survived by any plausible version of the edge (the cost gate),
 # and a test whose minimum detectable effect exceeds it cannot resolve anything (edge.py).
 LARGEST_KNOWN_EFFECT = 0.036
-
-# The effect worth resolving, per Edge Study slice (v10.3.1). A test whose minimum detectable
-# effect is above a slice's number cannot tell that slice's edge from nothing, so its verdict
-# is UNDERPOWERED. Until v10.3.1 every slice was held to LARGEST_KNOWN_EFFECT, which made sets
-# that measured several times larger out of sample read UNDERPOWERED on any normal universe.
-# Each number is what that set measured where it was never tuned (studies/v11_lab, v12_sets),
-# rounded DOWN, so the bar errs toward calling a test underpowered:
-#   D ▲  0.10   the lower bound of its confirmed 98.3% interval (+0.097; point +0.259)
-#   C ▲▼ 0.08   fresh daily ▼ +0.080, hourly ▼ +0.132 / ▲ +0.107, research ▲ +0.087
-#   A, B 0.036  no out-of-sample edge was found; the family's old ceiling stands
-SLICE_EFFECT = {"D_buy": 0.10, "C_buy": 0.08, "C_sell": 0.08}
-
-
-def effect_for(slice_key: str) -> float:
-    """The effect a slice's test must be able to resolve (see SLICE_EFFECT)."""
-    return float(SLICE_EFFECT.get(str(slice_key), LARGEST_KNOWN_EFFECT))
 
 # Cost-gate fallback in bps before a study has measured this universe's own cost charge.
 POOLED_BREAKEVEN_BPS = 7.0
@@ -332,11 +312,10 @@ def cost_in_vol_units(cost_bps: float, sigma_h: float) -> float:
 # ════════════════════════════════════════════════════════════════════════════════════════
 # PER-SYMBOL FEATURES  (time-series; one name, every bar)
 # ════════════════════════════════════════════════════════════════════════════════════════
-KIND_GLYPH = {"A": "▲", "B": "▲", "C": "▲", "D": "▲"}       # per side: ▲ / ▼, whichever set fires
+KIND_GLYPH = {"A": "▲", "B": "▲", "C": "▲"}       # per side: ▲ / ▼, whichever set fires
 EVENT_LABEL = {("A", 1): "▲ A · PROVEN +", ("A", -1): "▼ A · PROVEN −",
                ("B", 1): "▲ B · FLIP", ("B", -1): "▼ B · FLIP",
-               ("C", 1): "▲ C · FLIP VS TREND", ("C", -1): "▼ C · FLIP VS TREND",
-               ("D", 1): "▲ D · BAND BREAK"}
+               ("C", 1): "▲ C · FLIP + TREND", ("C", -1): "▼ C · FLIP + TREND"}
 def event_label(side: int, tag: str) -> str:
     """'▲ A', '▼ B·C' — an event named by every set that fired it."""
     return f"{'▲' if side > 0 else '▼'} {tag}" if tag else ""
@@ -345,18 +324,15 @@ def event_label(side: int, tag: str) -> str:
 SET_PROSE = {
     "A": "set A · ▲▼ on entering a state proven on the name's own record",
     "B": "set B · the column flips, close past the midline, risk calm and not rising, the ladder agreeing",
-    "C": "set C · set B, against the trend tape's strong state",
-    "D": "set D · a band break up in a downtrend (long only)",
+    "C": "set C · set B, and the trend tape agreeing",
 }
-TRIGGER_PROSE = ("sets A · B · C · D side by side — A proven state, B flip in calm risk, C flip against "
-                 "the trend, D band break in a downtrend")
+TRIGGER_PROSE = "sets A · B · C side by side — A proven state, B flip in calm risk, C flip with the trend"
 # One line per set for the board: what it is, in a trader's words.
-SET_TITLE = {"A": "Proven state", "B": "Flip · calm risk", "C": "Flip against the trend", "D": "Band break · downtrend"}
+SET_TITLE = {"A": "Proven state", "B": "Flip · calm risk", "C": "Flip · calm risk + trend"}
 SET_LINE = {
     "A": "entering a state this name's own record has proven",
     "B": "column flips past the midline · risk calm, not rising · ladder agrees",
-    "C": "set B against a strong trend — down for ▲, up for ▼",
-    "D": "trend down, and the close breaks above the band · long only",
+    "C": "set B with the trend tape agreeing",
 }
 # What each set's ▲ needs, in the order the screen lists them (▼ mirrors).
 SET_CONDITIONS = {
@@ -365,9 +341,7 @@ SET_CONDITIONS = {
           "risk not rising (outer tape grey)", "ladder leaning up (outer tape green)"),
     "C": ("the column flips positive", "close above the midline", "risk calm (inner tape)",
           "risk not rising (outer tape grey)", "ladder leaning up (outer tape green)",
-          "trend tape in its down state (T < −0.5)"),
-    "D": ("trend tape in its down state (T < −0.5)", "the close enters above the landing band",
-          "no D in the last 10 bars"),
+          "trend up (inner tape green)"),
 }
 
 
@@ -479,7 +453,7 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
       LG_Risk_Rank / LG_Calm     σ's rank in its last 500 bars, and calm = bottom third
       LG_Risk_Mom / LG_Rising    ln(σ / σ[h]), and rising = past +10%
       LG_Ladder / LG_Lad_Up / LG_Lad_Dn   the stretch ladder's lean, and rungs outside
-      A_Buy … D_Sell             each set's ▲ / ▼ on this bar (D_Sell is always False: D is long only)
+      A_Buy … C_Sell             each set's ▲ / ▼ on this bar
       PRG_Ready / PRG_Ready_C    +1 / −1: set B's (set C's) side has every condition but the trigger,
                                  the column armed (on the far side of zero, so its next crossing is the flip)
       PRG_Near                   +1 / −1: armed and calm, the ladder within ledger.NEAR of agreeing
@@ -543,8 +517,8 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
 
     df["turn_buy"], df["turn_sell"] = tb, ts
     df["long_cond"], df["short_cond"] = long_c, short_c
-    buy_tag = lg.tags(b("a_buy"), b("b_buy"), b("c_buy"), b("d_buy"))
-    sell_tag = lg.tags(b("a_sell"), b("b_sell"), b("c_sell"), b("d_sell"))
+    buy_tag = lg.tags(b("a_buy"), b("b_buy"), b("c_buy"))
+    sell_tag = lg.tags(b("a_sell"), b("b_sell"), b("c_sell"))
     df["PRG_Buy_Sets"], df["PRG_Sell_Sets"] = buy_tag, sell_tag
     ev_lab = np.where(tb, np.array(["▲ " + t for t in buy_tag], dtype=object),
                       np.where(ts, np.array(["▼ " + t for t in sell_tag], dtype=object), ""))
@@ -574,7 +548,7 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     df["LG_Ladder"] = f["lg_ladx"]
     df["LG_Lad_Up"] = f["lg_lad_up"]
     df["LG_Lad_Dn"] = f["lg_lad_dn"]
-    for k in ("a", "b", "c", "d"):
+    for k in ("a", "b", "c"):
         df[f"{k.upper()}_Buy"], df[f"{k.upper()}_Sell"] = b(f"{k}_buy"), b(f"{k}_sell")
     rdy = np.where(b("ready_b_buy"), 1, np.where(b("ready_b_sell"), -1, 0))
     rdy_c = np.where(b("ready_c_buy"), 1, np.where(b("ready_c_sell"), -1, 0))
@@ -582,8 +556,7 @@ def add_pragati_features(df: pd.DataFrame, drivers: pd.DataFrame | None = None,
     near = np.where(b("near_b_buy"), 1, np.where(b("near_b_sell"), -1, 0))
     df["PRG_Near"] = near
     tr = f["lg_trend"].to_numpy(dtype=float)
-    # C too when the trend tape is in its OPPOSING strong state (down for an up-flip, up for a down-flip)
-    near_c = ((near > 0) & np.isfinite(tr) & (tr < -0.5)) | ((near < 0) & np.isfinite(tr) & (tr > 0.5))
+    near_c = (near != 0) & np.isfinite(tr) & (np.where(tr >= 0, 1, -1) == near)    # the trend agrees: C too
     decl = f["decl"].fillna(0).astype(int).to_numpy()
     since = f["decl_since"].fillna(-1).astype(int).to_numpy()
     pos = np.arange(T)
@@ -643,7 +616,7 @@ SNAPSHOT_COLUMNS = (
     "turn_buy", "turn_sell", "long_cond", "short_cond",
     "LG_State", "LG_State_Name", "LG_N", "LG_Edge", "LG_Post", "LG_Z", "LG_Proven", "LG_Sigma", "LG_Trend",
     "LG_U", "LG_Flip", "LG_Mid", "LG_Above_Mid", "LG_Risk_Rank", "LG_Calm", "LG_Risk_Mom", "LG_Rising",
-    "LG_Ladder", "LG_Lad_Up", "LG_Lad_Dn", "A_Buy", "A_Sell", "B_Buy", "B_Sell", "C_Buy", "C_Sell", "D_Buy", "D_Sell", "PRG_Ready",
+    "LG_Ladder", "LG_Lad_Up", "LG_Lad_Dn", "A_Buy", "A_Sell", "B_Buy", "B_Sell", "C_Buy", "C_Sell", "PRG_Ready",
     "PRG_Ready_C", "PRG_Near", "PRG_Buy_Sets", "PRG_Sell_Sets",
     "PRG_Decl", "PRG_Decl_Age",
     "PRG_Hold_Dir", "PRG_Hold_Age", "PRG_Hold_Kind",
@@ -822,9 +795,7 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
             if "B" in tag:
                 whys.append(("B: the column flipped " + ("up, close above" if tb[i] else "down, close below") + " the midline, "
                              "risk calm and not rising, the ladder " + ("leaning up" if tb[i] else "leaning down"))
-                            + (", C: against a strong " + ("downtrend" if tb[i] else "uptrend") if "C" in tag else ""))
-            if "D" in tag:
-                whys.append("D: in a downtrend, the close broke above the landing band")
+                            + (", C: the trend agreeing" if "C" in tag else ""))
             reasons.append(f"{event_label(1 if tb[i] else -1, tag)} · {'; '.join(whys)} · {_note(side_key, tag)} · {grid}{cost_txt}")
             continue
         if np.isfinite(rdy[i]) and rdy[i] != 0:
@@ -848,7 +819,7 @@ def compute_ranking(df: pd.DataFrame, settings: EngineSettings | None = None,
 __all__ = [
     "COST_BPS", "EVENT_LABEL", "EngineSettings", "HOLD_HORIZONS", "HORIZON", "KIND_GLYPH", "SET_CONDITIONS", "SET_PROSE",
     "SET_LINE", "SET_TITLE", "TRIGGER_PROSE", "event_label",
-    "LARGEST_KNOWN_EFFECT", "POOLED_BREAKEVEN_BPS", "PRG_NORM", "PRG_NORM_WEEKLY", "SLICE_EFFECT", "effect_for",
+    "LARGEST_KNOWN_EFFECT", "POOLED_BREAKEVEN_BPS", "PRG_NORM", "PRG_NORM_WEEKLY",
     "RANK_CONTRACT", "SNAPSHOT_COLUMNS", "add_pragati_features", "chart_of", "compute_frame",
     "compute_ranking", "cost_basis", "cost_in_vol_units", "cost_ok", "grid_weight",
     "instrument_class", "settings_for", "snapshot",

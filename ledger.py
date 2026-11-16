@@ -1,7 +1,7 @@
 """
-ledger.py — Sanket's signals: four sets, all read from Pragyam's engine.
+ledger.py — Sanket's signals: three sets, all read from Pragyam's engine.
 
-THE FOUR SETS (all fire on every screen, side by side; the Edge Study measures each)
+THE THREE SETS (all three fire on every screen, side by side; the Edge Study measures each)
 -----------------------------------------------------------------------------------------
     A · PROVEN      ▲ the first closed bar of a state this name's own record has proven
                     POSITIVE; ▼ proven NEGATIVE. Pragyam's triangles - the ledger below.
@@ -16,20 +16,9 @@ THE FOUR SETS (all fire on every screen, side by side; the Edge Study measures e
                       · the stretch ladder (the outer trend tape) leans up - green, any shade
                     ▼ mirrors: flips negative, close below the midline, risk calm and not
                     rising, the ladder leaning down.
-    C · FLIP AGAINST THE TREND   B, and the trend tape (the inner trend tape) in its OPPOSING
-                    state - down (T < −0.5) for ▲, up (T > +0.5) for ▼. Until v10.3 C asked
-                    for the trend to AGREE; that half reverted (studies/v12_sets: a flip with
-                    the trend is late, priced in, and reverts; a flip against a strong trend is
-                    the trend's grip breaking, and continues). Confirmed on fresh data: ▼
-                    +0.080σ daily [+0.022, +0.142] and +0.132σ hourly; ▲ +0.029σ daily (not
-                    significant) and +0.107σ hourly, against the old rule's −0.053 / −0.059.
-    D · BAND BREAK IN A DOWNTREND   ▲ only: the trend tape in its down state (T < −0.5) and the
-                    close ENTERS above the landing band (the h-bar cone drawn h bars ago) -
-                    a downtrend name making a move larger than its own risk forecast allowed.
-                    At most once per horizon. Found in studies/v11_lab and confirmed on 572
-                    fresh stocks: +0.259σ over 10 bars, 98.3% interval [+0.097, +0.407], 59%
-                    hit, both markets and every era. No ▼: the mirror short was not confirmed.
-A tape with no reading yet blocks B, C and D. Only D has a cooldown.
+    C · FLIP+TREND  B, and the trend tape (the inner trend tape) on the same side - green
+                    (T ≥ 0) for ▲, red (T < 0) for ▼, any shade.
+A tape with no reading yet blocks B and C. No set has a cooldown.
 
 READY (B and C): every condition of a side in place except the trigger - the flip and the
 close crossing the midline, which arrive together - AND the column armed: still below zero for
@@ -42,13 +31,14 @@ NEAR (B): armed, risk calm and not rising, but the stretch ladder still on the w
 of the B events that were not READY the bar before, 81-87% were short only the ladder. Near names
 fire on the next bar about 9-12% of the time; READY and NEAR together held ~80% of B events the bar
 before they fired. C's
-ready is B's with the trend in its opposing state, so a name ready for C is ready for B as well.
+ready is B's with the trend agreeing, so a name ready for C is ready for B as well.
 
 An EVENT is any set's triangle; a bar can carry several (a C triangle is always a B one).
 
-How often (151 instruments, daily, per 1,000 bars): A ~0.1, B ~12 per side, C ~0.8 ▲ / ~5 ▼, D
-~1.7. What they measured, out of sample on 572 fresh stocks (10-bar edge, σ): A and B ▲ none; B ▼
-+0.05; C as above; D +0.26. The Edge Study measures every set on YOUR symbols - read it first.
+How often, and what to expect: A fires about once per 5,500 bars (151 instruments); B and C
+fire far more often. The Indicator repo's flip study tested the nearest versions of B and C
+(research/flips.txt): +0.7 and +0.9 σ × 100 over 10 bars, t below 1. The Edge Study measures all
+three on your symbols - read it before leaning on any of them.
 
 THE ENGINE, carried from pragyam.pine (research/pragyam.py in the Indicator repo)
 ---------------------------------------------------------------------------------
@@ -81,17 +71,15 @@ TAU = 0.10            # the believable edge, σ over the horizon
 STATE_NAMES = tuple(f"trend {t} · {c}" for t in ("down", "flat", "up")
                     for c in ("closed below the band", "inside the band", "closed above the band"))
 
-SETS = ("A", "B", "C", "D")
-SET_NAMES = {"A": "A · proven state", "B": "B · flip, calm, ladder", "C": "C · flip against the trend",
-             "D": "D · band break in a downtrend"}
-LONG_ONLY = ("D",)    # sets with no ▼
+SETS = ("A", "B", "C")
+SET_NAMES = {"A": "A · proven state", "B": "B · flip, calm, ladder", "C": "C · flip, calm, ladder + trend"}
 RISE = 0.10           # risk momentum past this is "rising" (the outer risk tape turns gold)
 NEAR = 0.20           # 'near': the ladder this close to agreeing - the flip itself often tips it
 COLUMNS = ("lg_sigma", "lg_trend", "lg_state", "lg_n", "lg_mean", "lg_grand", "lg_edge",
            "lg_post", "lg_z", "lg_proven",
            "lg_u", "lg_band_up", "lg_band_dn", "lg_mid", "lg_prk", "lg_calm", "lg_rmom", "lg_rising",
            "lg_ladx", "lg_lad_up", "lg_lad_dn", "lg_flip",
-           "a_buy", "a_sell", "b_buy", "b_sell", "c_buy", "c_sell", "d_buy", "d_sell",
+           "a_buy", "a_sell", "b_buy", "b_sell", "c_buy", "c_sell",
            "ready_b_buy", "ready_b_sell", "ready_c_buy", "ready_c_sell", "near_b_buy", "near_b_sell",
            "turn_buy", "turn_sell", "decl", "decl_since")
 
@@ -121,7 +109,7 @@ def compute(lo: pd.DataFrame, horizon: int = 10, tau: float = TAU) -> pd.DataFra
       lg_rmom / lg_rising     ln(σ / σ[h]); rising = past +10% (the outer risk tape gold)
       lg_ladx / lg_lad_up / lg_lad_dn   the stretch ladder's lean, and rungs outside above / below
       lg_flip                 +1 the column flipped positive on this bar, −1 negative, 0 none
-      a_* / b_* / c_* / d_*   each set's ▲ (buy) and ▼ (sell); d_sell is always False
+      a_* / b_* / c_*         each set's ▲ (buy) and ▼ (sell)
       ready_b_* / ready_c_*   set B's / set C's conditions in place bar the trigger, the column armed
       near_b_*                armed and calm, the ladder within NEAR of agreeing
       turn_buy / turn_sell    any set's ▲ / ▼ on this bar
@@ -240,33 +228,21 @@ def compute(lo: pd.DataFrame, horizon: int = 10, tau: float = TAU) -> pd.DataFra
         set_b_sell = quiet & lad_ok & (ladx < 0)
         b_buy = (flip == 1) & (c > mid) & set_b_buy
         b_sell = (flip == -1) & (c < mid) & set_b_sell
-        up_state, dn_state = t_ok & (T > 0.5), t_ok & (T < -0.5)     # the trend tape's strong states
-        c_buy = b_buy & dn_state                                    # the flip AGAINST the trend
-        c_sell = b_sell & up_state
+        c_buy = b_buy & t_ok & (T >= 0)
+        c_sell = b_sell & t_ok & (T < 0)
         # READY = the slow conditions AND the column ARMED - still on the far side of zero, so its
         # next crossing is the flip. Without the second half, 85% of 'ready' bars had a column
         # already past zero: 0% fired on the next bar (studies/v10_watch/watch_check.py).
         ready_b_buy = set_b_buy & (u < 0)
         ready_b_sell = set_b_sell & (u >= 0)
-        ready_c_buy, ready_c_sell = ready_b_buy & dn_state, ready_b_sell & up_state
+        ready_c_buy, ready_c_sell = ready_b_buy & t_ok & (T >= 0), ready_b_sell & t_ok & (T < 0)
         # NEAR = armed, risk calm and not rising, the ladder on the wrong side by at most NEAR. The
         # ladder averages the column with three other horizons, so the flip itself often tips it:
         # 81-87% of the B events that were not READY the bar before were short only the ladder.
         near_b_buy = quiet & lad_ok & (ladx < 0) & (ladx >= -NEAR) & (u < 0)
         near_b_sell = quiet & lad_ok & (ladx >= 0) & (ladx <= NEAR) & (u >= 0)
 
-    # ── set D: a band break up in a downtrend (studies/v11_lab/confirm.py, H2, as confirmed) ──
-    cone = np.where(st >= 0, st % 3, -1)                            # 0 below, 1 inside, 2 above the band
-    above = cone == 2
-    brk = dn_state & np.isfinite(T) & (st >= 0) & above & ~np.r_[False, above[:-1]]
-    d_buy = np.zeros(n, dtype=bool)
-    last = -10 ** 9
-    for t in np.where(brk)[0]:
-        if t - last > H:                                            # at most once per horizon
-            d_buy[t] = True; last = t
-    d_sell = np.zeros(n, dtype=bool)
-
-    buy, sell = a_buy | b_buy | c_buy | d_buy, a_sell | b_sell | c_sell
+    buy, sell = a_buy | b_buy | c_buy, a_sell | b_sell | c_sell
     decl = np.zeros(n, dtype=int)
     since = np.full(n, -1, dtype=int)
     d_now, d_bar = 0, -1
@@ -283,7 +259,6 @@ def compute(lo: pd.DataFrame, horizon: int = 10, tau: float = TAU) -> pd.DataFra
         "lg_calm": calm, "lg_rmom": rmom, "lg_rising": rising,
         "lg_ladx": ladx, "lg_lad_up": lad_up, "lg_lad_dn": lad_dn, "lg_flip": flip,
         "a_buy": a_buy, "a_sell": a_sell, "b_buy": b_buy, "b_sell": b_sell, "c_buy": c_buy, "c_sell": c_sell,
-        "d_buy": d_buy, "d_sell": d_sell,
         "ready_b_buy": ready_b_buy, "ready_b_sell": ready_b_sell,
         "ready_c_buy": ready_c_buy, "ready_c_sell": ready_c_sell,
         "near_b_buy": near_b_buy, "near_b_sell": near_b_sell,
@@ -291,12 +266,11 @@ def compute(lo: pd.DataFrame, horizon: int = 10, tau: float = TAU) -> pd.DataFra
     }, index=idx)[list(COLUMNS)]
 
 
-def tags(a, b, c, d=None) -> np.ndarray:
-    """Which sets fired, per bar, as one label: 'A', 'B', 'B·C', 'A·D' … or ''."""
+def tags(a, b, c) -> np.ndarray:
+    """Which sets fired, per bar, as one label: 'A', 'B', 'B·C', 'A·B·C' … or ''."""
     a, b, c = (np.asarray(x, dtype=bool) for x in (a, b, c))
-    d = np.zeros(a.shape, bool) if d is None else np.asarray(d, dtype=bool)
     out = np.full(a.shape, "", dtype=object)
-    for k, m in (("A", a), ("B", b), ("C", c), ("D", d)):
+    for k, m in (("A", a), ("B", b), ("C", c)):
         out = np.where(m, np.where(out == "", k, out + "·" + k), out)
     return out
 
@@ -316,4 +290,4 @@ def ready_bars(horizon: int = 10) -> int:
     return WARM + int(horizon) + 30 * int(horizon) + 1
 
 
-__all__ = ["COLUMNS", "LONG_ONLY", "NEAR", "RISE", "SETS", "SET_NAMES", "STATE_NAMES", "TAU", "compute", "ready_bars", "state_name", "tags"]
+__all__ = ["COLUMNS", "NEAR", "RISE", "SETS", "SET_NAMES", "STATE_NAMES", "TAU", "compute", "ready_bars", "state_name", "tags"]

@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.3.1`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.4.0`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -9,12 +9,11 @@ Conviction-Value Grid already reads — and asks of every name the indicator's o
 
 It reports three things, and keeps them apart:
 
-- **Events** (v10.3 — four signal sets, all on screen at once, all read from Pragyam's engine).
+- **Events** (three signal sets, all on screen at once, all read from Pragyam's engine).
   **A** — entering a state the name's own record has proven (rare). **B** — the surprise column
   flips, the close past the midline, risk calm and not rising, the stretch ladder agreeing.
-  **C** — B *against* a strong trend. **D** — a band break up in a downtrend (long only). A signal
-  board shows each set's events, its watch and its own measured verdict side by side; each event
-  row lights the sets that fired it.
+  **C** — B with the trend agreeing. A signal board shows each set's events, its watch and its
+  own measured verdict side by side; each event row lights the sets that fired it.
 - **State.** Every name's cell in the **3 × 3 conviction-value grid** (v8), named as an action —
   Buy · Accumulate · Hold · Wait · Trim · Exit — with the measured v8 units, the same units
   Pragyam's book now sizes from. Where the name stands *between* events.
@@ -115,7 +114,7 @@ to 1e-13.
 
 ## The Signals
 
-Four sets, all fired on every screen and shown side by side, all read from **Pragyam's engine** (`ledger.py`,
+Three sets, all fired on every screen and shown side by side, all read from **Pragyam's engine** (`ledger.py`,
 ported bar for bar from `pragyam.pine` and checked against its reference on 151 instruments:
 identical states, z-scores, cones, ladder and signals on every bar). Pragati's own signal set — the
 grid's capitulation / distribution, the ◆ RESUME and the watchlist — is not computed.
@@ -124,14 +123,13 @@ grid's capitulation / distribution, the ◆ RESUME and the watchlist — is not 
 |:---|:---|:---|:---|
 | **A · proven** | the name enters a state its own record has proven positive | proven negative | 0.2 |
 | **B · flip** | the surprise column flips positive · the close is above the midline · risk is calm · risk is not rising · the stretch ladder leans up | mirrors | 25 |
-| **C · flip against the trend** | set B's ▲, with the trend tape in its down state (T < −0.5) | set B's ▼, with the trend in its up state (T > +0.5) | 0.8 ▲ · 5 ▼ |
-| **D · band break in a downtrend** | the trend tape in its down state, and the close enters above the landing band; at most once per 10 bars | — (long only) | 1.7 |
+| **C · flip + trend** | set B's ▲, and the trend tape up | set B's ▼, and the trend down | 14 |
 
-Out of sample, on 572 fresh S&P 500 and Nifty 200 stocks (2005–2026; `studies/v11_lab`,
-`studies/v12_sets`), over 10 bars: **D +0.26σ** (98.3% interval +0.10 to +0.41, 59% hit, both markets,
-every era); **C ▼ +0.08σ** daily and **+0.13σ** hourly (significant); C ▲ +0.03σ daily and +0.11σ
-hourly; B ▼ +0.05σ; A and B ▲ none. Until v10.3, C asked the trend to *agree* — that half reverted
-(−0.05σ on the same data), so it was reversed.
+Measured against same-day peers on the research set and 572 fresh stocks (`studies/v13_lab`), no
+set picks names that beat their peers over 10 bars by a margin worth trading: B and C sit within
+about ±0.06σ on every dataset, and A is too rare to judge (+0.09 to +0.12 on the research set,
+−0.05 to −0.07 on the fresh stocks). v10.3 briefly reversed C and added a set D on the strength of the old
+drift-free score; v13 showed that score produced the effect, and v10.4 rolled both back.
 
 What each term means, exactly:
 
@@ -259,7 +257,7 @@ Each step kills one way of fooling yourself (step 2 changed in v9):
 | # | Step | The failure it prevents |
 |:--|:---|:---|
 | 1 | Event study at the declared horizon (enter the bar after the signal, hold 10) | Measuring a continuous form nobody trades |
-| 2 | **Drift removal, causal**: the symbol's mean h-bar return over the 500 returns realised before the event | Every long signal in a bull market prints a profit — beta, not edge. (Up to v8.4 the mean was taken inside the era — a look-ahead that flatters reversal events) |
+| 2 | **Measured against peers** (v10.4): the same-day mean h-bar return of the other names on screen (at least 5) is subtracted; drift-free (the symbol's own trailing mean) is kept as a second column | Every long signal in a bull market prints a profit — beta, not edge. (Up to v8.4 the mean was taken inside the era — a look-ahead that flatters reversal events) |
 | 3 | Vol normalisation by the symbol's own trailing σ | FX, bond ETFs and small-caps on incomparable scales |
 | 4 | Sign folding | The two sides on opposite conventions |
 | 5 | **Block bootstrap over dates** | Overlapping returns and a correlated cross-section inflating significance |
@@ -267,10 +265,9 @@ Each step kills one way of fooling yourself (step 2 changed in v9):
 | 7 | **Power stated**: `n_eff`, and a minimum detectable effect | "No edge" reported from a test that could never have seen one |
 
 Verdicts: `CONFIRMED` · `GROSS ONLY` · `DISCOVERY ONLY` · `NO EDGE` · `ANTI-PREDICTS` ·
-`UNDERPOWERED` (the MDE exceeds the slice's own edge to resolve: 0.10 for D, 0.08 for C, 0.036 for
-A and B — what each measured out of sample, rounded down; `engine.SLICE_EFFECT`). **Expect
-UNDERPOWERED** for set A above all — it is rare — and the app says "we could not tell" rather
-than "there is no edge".
+`UNDERPOWERED` (the MDE exceeds 0.036, the largest effect this indicator family has shown
+anywhere). **Expect UNDERPOWERED often**, set A above all — it is rare — and the app says "we
+could not tell" rather than "there is no edge".
 
 It fetches ~15 years once a day per universe (80-symbol fixed-seed sample above that), streams
 in chunks of 20, and reuses the measurement until the date rolls.
@@ -344,7 +341,7 @@ pragati.pine         ← the indicator itself, v9.3 — the Pine the port mirror
 intraday.py          ← the conviction ladder's lower frames from yfinance (1m … 4h), batched and cached
 studies/v9_lab/      ← the v9 audit: look-ahead-free scorers, feature caches, every experiment
 charts.py            ← chart builders: the conviction-value map, tone history, correlation heatmap
-edge.py              ← measured expectancy: event study, causal drift removal, block bootstrap, power
+edge.py              ← measured expectancy: event study, scored against peers, block bootstrap, power
 logger.py            ← structured terminal logging
 ARCHITECTURE.md      ← the stack, the evidence, and the design rationale
 ui/                  ← theme.py · theme.css · components.py (the Graphite design system)
@@ -491,6 +488,14 @@ rolls. `scipy` is required (the value engine's Šidák floor).
 ---
 
 ## What Changed
+
+**v10.4.0 — the Edge Study scores against peers; v10.3's set changes rolled back.** The v13 study
+(`studies/v13_lab`) found the Edge Study's drift-free score — each event against the name's *own*
+trailing average return — flatters any rule that fires in a downtrend, and that it alone produced
+the "counter-trend works" result behind v10.3. The Edge Study now scores each event against the
+**same-day average of the other names on screen**, with drift-free kept as a second column. Set C
+is back to B with the trend agreeing, set D is removed, and the per-set power rule (built on the
+inflated numbers) is withdrawn; the screen and copy work of v10.2.x stays.
 
 **v10.3.1 — power judged per set.** A test is UNDERPOWERED when it cannot resolve the edge that
 set has shown out of sample — 0.10σ for D, 0.08σ for C, 0.036σ for A and B — instead of holding
@@ -956,4 +961,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v10.3.1 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v10.4.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

@@ -7,6 +7,32 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.4.0] · 2026-11-16
+### The Edge Study scores against peers; v10.3's set changes rolled back
+
+- **Why.** The v13 study (`studies/v13_lab`) re-scored every event on four datasets three ways. The
+  Edge Study's drift-free score subtracts each name's OWN trailing average return, so a name in a
+  downtrend (negative trailing average) scores an ordinary future as a gain. Under a raw score and a
+  peer-relative score the "counter-trend works" gradient vanished, and with it the edge behind
+  v10.3:
+  - D ▲ against peers: −0.031 / −0.023 / −0.009 / 0.000 (research daily / hourly, fresh daily /
+    hourly). Its raw gains sit on days when many names fire together — broad rebounds after
+    selloffs — and failed in the last two years.
+  - The reversed C was about zero against peers, and the original C was marginally better on the
+    fresh data.
+- **The Edge Study now scores against same-day peers.** Each event's return has the same-day mean of
+  the OTHER names on screen subtracted (leave-one-out, at least 5), scaled by the name's own trailing
+  σ. The drift-free reading is still measured and shown as a **Drift-free** column; a universe with
+  fewer than six names falls back to it. `EdgeStudy.score_basis`, `results_drift`, `get_drift`;
+  `edge.PEER_MIN`. Cache key `prg7` → `prg8`.
+- **Rolled back to v10.2.15's sets** (`ledger.py`, `engine.py`, `edge.py`, `sanket.py`, `ui/theme.css`
+  restored exactly, then the scoring added): set C is again B with the trend agreeing; set D is
+  removed; the per-set power rule (`SLICE_EFFECT`), whose numbers came from the drift-free score, is
+  withdrawn. Every v10.2.x screen and copy change stays.
+- `studies/v11_lab` and `studies/v12_sets` carry correction notes pointing to `studies/v13_lab`.
+
+---
+
 ## [v10.3.1] · 2026-11-16
 ### Power judged per set
 

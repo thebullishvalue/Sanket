@@ -19,8 +19,8 @@ Six slices - the three signal sets, each side alone - each with the full method 
                       rising, the stretch ladder agreeing
     C_buy / C_sell    set C: set B with the trend tape agreeing
 
-All three are measured on every run whichever the screen fires, so they can be compared on the
-same symbols and dates. The screen's 'buy' / 'sell' verdicts read the selected set's slices.
+All three are measured on every run, on the same symbols and dates, and every screen reads each
+set's own verdict.
 Set A is rare by construction (about one triangle per 5,500 bars) and will often read
 UNDERPOWERED; sets B and C fire roughly 140 and 80 times as often.
 
@@ -29,20 +29,23 @@ Method (each step exists to kill a specific way of fooling yourself)
 1. **Event study at the declared horizon.** Enter at the bar AFTER the signal bar closes,
    exit ``horizon`` bars later (EXEC-B).
 
-2. **Drift removal, CAUSAL.** Subtract each symbol's own mean h-bar forward return over
-   the 500 returns fully REALISED before the event (ending h + 1 bars earlier). Without
-   drift removal every long signal on an equity universe in a bull market prints a profit
-   and you have measured beta, not edge. (Up to v8.4 the mean was taken inside the era being
-   measured — a look-ahead the v9 audit showed flatters reversal signals: on random walks
-   it alone scores a persistent momentum reading as reversion, and events that cluster in
-   names whose era went badly look better than they were.)
+2. **Measured against same-day PEERS (v10.4).** Subtract the mean h-bar forward return, on the
+   same date, of every OTHER name in the universe (at least ``PEER_MIN`` of them). Without
+   it every long signal on an equity universe in a bull market prints a profit and you
+   have measured beta, not edge. Until v10.4 the baseline was each symbol's OWN trailing
+   mean over the 500 returns realised before the event ("drift-free"). That baseline
+   flatters any rule that fires in a downtrend - a falling name's trailing mean is
+   negative, so an ordinary future scores as a gain - and v13 measured it producing the
+   whole of the "counter-trend works" pattern (studies/v13_lab). The drift-free result is
+   still computed and kept as a secondary reading (``results_drift``); a universe with fewer
+   than ``PEER_MIN + 1`` names falls back to it (``score_basis``).
 
 3. **Volatility normalisation.** Divide by the symbol's own forward-return sigma over the
    same trailing window, so an FX pair, a bond ETF and a small-cap equity land on one
    scale — and the cost charge means the same thing on each.
 
-4. **Sign folding.** A long event scores positive when the return beat the symbol's drift;
-   a short event scores positive when it fell short.
+4. **Sign folding.** A long event scores positive when the return beat its peers; a short
+   event scores positive when it fell short of them.
 
 5. **Block bootstrap over DATES.** h-bar forward returns overlap, and every symbol on one
    date shares the market factor. Resampling contiguous blocks of whole dates handles
@@ -90,14 +93,11 @@ LARGEST_KNOWN_EFFECT = eng.LARGEST_KNOWN_EFFECT
 MIN_EVENTS = 30
 
 # The slices measured: key -> (side, kind or None for both kinds).
-# D is long only (ledger.LONG_ONLY), so it has no ▼ slice.
-SLICES = {f"{k}_{side}": (sgn, k) for k in ("A", "B", "C", "D") for side, sgn in (("buy", 1.0), ("sell", -1.0))
-          if not (k == "D" and side == "sell")}
+SLICES = {f"{k}_{side}": (sgn, k) for k in ("A", "B", "C") for side, sgn in (("buy", 1.0), ("sell", -1.0))}
 SLICE_LABEL = {
     "A_buy": "A · ▲ proven +", "A_sell": "A · ▼ proven −",
     "B_buy": "B · ▲ flip", "B_sell": "B · ▼ flip",
-    "C_buy": "C · ▲ flip vs downtrend", "C_sell": "C · ▼ flip vs uptrend",
-    "D_buy": "D · ▲ band break in a downtrend",
+    "C_buy": "C · ▲ flip + trend", "C_sell": "C · ▼ flip + trend",
 }
 
 
@@ -141,7 +141,7 @@ def symbol_events(df: pd.DataFrame, drivers: pd.DataFrame | None, symbol: str,
     fwd = (exit_ / entry - 1.0).to_numpy()
 
     parts = []
-    for col, side, kind in ((f"{k.lower()}_{s}", sgn, k) for k in ("A", "B", "C", "D")
+    for col, side, kind in ((f"{k.lower()}_{s}", sgn, k) for k in ("A", "B", "C")
                             for s, sgn in (("buy", 1.0), ("sell", -1.0))):
         m = f[col].fillna(False).astype(bool).to_numpy() & np.isfinite(fwd)
         if m.any():
@@ -309,7 +309,7 @@ class SideResult:
 
     @property
     def underpowered(self) -> bool:
-        return bool(self.n_events < MIN_EVENTS or self.mde > eng.effect_for(self.side))
+        return bool(self.n_events < MIN_EVENTS or self.mde > LARGEST_KNOWN_EFFECT)
 
 
 # Verdict ladder. Order matters: the first matching rung wins.
@@ -350,11 +350,19 @@ class EdgeStudy:
     note: str = ""
     fire_rates: dict = field(default_factory=dict)   # set -> fraction of usable bars it fired
     active: str = "A"                 # the set 'buy' / 'sell' resolve to when no set is named
+    score_basis: str = "drift"        # 'peer' (v10.4) or 'drift' - what `results` measured
+    results_drift: dict = field(default_factory=dict)   # the drift-free reading, kept beside it
 
     # ── accessors ──
     def get(self, side: str, era: str, sset: str | None = None) -> SideResult | None:
         """One slice and era: ``side`` is a slice key ('B_sell') or a side, with ``sset`` naming the set."""
         d = (self.results.get(slice_key(side, sset or self.active)) or {}).get(era)
+        return SideResult(**d) if isinstance(d, dict) else d
+
+    def get_drift(self, side: str, era: str, sset: str | None = None) -> SideResult | None:
+        """The same slice under the drift-free score (the secondary reading)."""
+        src = self.results if self.score_basis == "drift" else self.results_drift
+        d = (src.get(slice_key(side, sset or self.active)) or {}).get(era)
         return SideResult(**d) if isinstance(d, dict) else d
 
     def rate(self, sset: str | None = None) -> float:
@@ -377,8 +385,8 @@ class EdgeStudy:
         if all(r.underpowered for r in present):
             ref = max(present, key=lambda r: r.n_eff)
             return ("UNDERPOWERED", "neutral",
-                    f"resolves {ref.mde:.3f}, but this set's edge to resolve is "
-                    f"{eng.effect_for(ref.side):.3f} · {ref.n_events} events, "
+                    f"MDE {ref.mde:.3f} vs the largest effect this indicator family has "
+                    f"shown anywhere ({LARGEST_KNOWN_EFFECT:.3f}) · {ref.n_events} events, "
                     f"n_eff {ref.n_eff:.0f}")
         if hold is not None and hold.significant:
             if hold.net > 0:
@@ -427,6 +435,16 @@ class EdgeStudy:
 # ════════════════════════════════════════════════════════════════════════════════════════
 BASE_WINDOW = 500      # realised h-bar returns behind each event's drift and sigma
 BASE_MIN = 100         # fewer than this and the symbol's event is not scored
+PEER_MIN = 5           # other names with a forward return on the date, for a peer-relative score
+
+
+def _peer_table(baselines: dict) -> tuple:
+    """(sum, count) of every symbol's h-bar forward return, per date - the peer baseline."""
+    cols = [b.rename(sym) for sym, b in baselines.items() if b is not None and not b.empty]
+    if not cols:
+        return pd.Series(dtype=float), pd.Series(dtype=float)
+    W = pd.concat(cols, axis=1).sort_index()
+    return W.sum(axis=1, min_count=1), W.notna().sum(axis=1)
 
 
 def _causal_stats(b: pd.Series, horizon: int) -> tuple:
@@ -440,8 +458,13 @@ def _causal_stats(b: pd.Series, horizon: int) -> tuple:
 
 
 def _score_events(ev: pd.DataFrame, baselines: dict, symbols: np.ndarray,
-                  lo: pd.Timestamp, hi: pd.Timestamp, horizon: int = 1) -> pd.DataFrame:
-    """Drift-remove and vol-normalise the events dated inside ``[lo, hi]``. Returns scored events.
+                  lo: pd.Timestamp, hi: pd.Timestamp, horizon: int = 1,
+                  basis: str = "drift", peers: tuple | None = None) -> pd.DataFrame:
+    """Score and vol-normalise the events dated inside ``[lo, hi]``. Returns scored events.
+
+    ``basis`` 'drift': the baseline is the symbol's own trailing mean (causal). 'peer': the
+    mean forward return of the OTHER names on the same date (``peers`` = :func:`_peer_table`),
+    leave-one-out, needing ``PEER_MIN`` of them. Sigma is the symbol's trailing one either way.
 
     ``baselines[sym]`` is that symbol's dated forward-return series. Each event's drift and
     sigma are the symbol's trailing ones as known at the event (:func:`_causal_stats`) —
@@ -462,10 +485,19 @@ def _score_events(ev: pd.DataFrame, baselines: dict, symbols: np.ndarray,
         b = baselines.get(sym)
         if b is None or b.empty:
             continue
-        mc, sc = _causal_stats(b.sort_index(), int(horizon))
+        b = b.sort_index()
+        mc, sc = _causal_stats(b, int(horizon))
         k = syms == sym
-        mu[k] = mc.reindex(dts[k], method="ffill").to_numpy(dtype=float)
         sg[k] = sc.reindex(dts[k], method="ffill").to_numpy(dtype=float)
+        if basis == "peer" and peers is not None:
+            tot = peers[0].reindex(dts[k]).to_numpy(dtype=float)
+            cnt = peers[1].reindex(dts[k]).to_numpy(dtype=float)
+            own = b.reindex(dts[k]).to_numpy(dtype=float)
+            own_ok = np.isfinite(own)
+            n_other = cnt - own_ok
+            mu[k] = np.where(n_other >= PEER_MIN, (tot - np.where(own_ok, own, 0.0)) / np.maximum(n_other, 1), np.nan)
+        else:
+            mu[k] = mc.reindex(dts[k], method="ffill").to_numpy(dtype=float)
 
     keep = np.isfinite(mu) & np.isfinite(sg) & (sg > 0)
     if not keep.any():
@@ -560,7 +592,7 @@ def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
 
     # Total usable bars across studied symbols -> the fire rate the cost story hinges on.
     total_bars = sum(len(b) for b in baselines.values()) or 1
-    fire_rates = {k: float((ev["kind"] == k).sum() / total_bars) for k in ("A", "B", "C", "D")} if "kind" in ev.columns else {}
+    fire_rates = {k: float((ev["kind"] == k).sum() / total_bars) for k in ("A", "B", "C")} if "kind" in ev.columns else {}
     fire_rate = fire_rates.get("A", float(len(ev) / total_bars))
 
     eras = {
@@ -568,15 +600,22 @@ def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
         "discovery": (lo_all, split - pd.Timedelta(days=1)),
         "holdout":   (split, hi_all),
     }
+    # Peer-relative when the universe has peers to compare with; drift-free otherwise. The
+    # drift-free reading is measured either way and kept beside the primary one.
+    n_with_base = sum(1 for b in baselines.values() if b is not None and not b.empty)
+    basis = "peer" if n_with_base >= PEER_MIN + 1 else "drift"
+    peers = _peer_table(baselines) if basis == "peer" else None
     results: dict = {k: {} for k in SLICES}
+    results_drift: dict = {k: {} for k in SLICES}
     for era, (a, b) in eras.items():
-        scored = _score_events(ev, baselines, ev["symbol"].unique(), a, b, int(horizon))
-        if scored.empty:
-            continue
-        for side_key in SLICES:
-            r = _measure_side(scored, side_key, era, int(horizon), pr, float(cost_bps))
-            if r is not None:
-                results[side_key][era] = asdict(r)
+        for bas, store in ((basis, results),) + ((("drift", results_drift),) if basis == "peer" else ()):
+            scored = _score_events(ev, baselines, ev["symbol"].unique(), a, b, int(horizon), basis=bas, peers=peers)
+            if scored.empty:
+                continue
+            for side_key in SLICES:
+                r = _measure_side(scored, side_key, era, int(horizon), pr, float(cost_bps))
+                if r is not None:
+                    store[side_key][era] = asdict(r)
 
     return EdgeStudy(
         universe=universe, selected_index=selected_index, timeframe=timeframe,
@@ -588,4 +627,5 @@ def measure(events: pd.DataFrame, baselines: dict, ret_matrix: pd.DataFrame, *,
         start=str(lo_all.date()), end=str(hi_all.date()),
         part_ratio=float(pr), fire_rate=fire_rate, split_date=str(split.date()),
         results=results, measured_at=measured_at, partial=partial, fire_rates=fire_rates,
+        score_basis=basis, results_drift=results_drift if basis == "peer" else {},
     )

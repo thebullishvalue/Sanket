@@ -132,11 +132,9 @@ set B    ▲ surprise flips ≥ 0 · close > mid · risk rank < 33.3 · ln(σ/σ
 set C    set B, and T ≥ 0 for ▲, T < 0 for ▼
 ```
 
-**Four sets, all at once (v10.3).** Every set fires on every screen; there is no selection.
-C trades a flip *against* the trend tape's strong state; D (long only, `ledger.LONG_ONLY`) is a
-band break up in a downtrend, at most once per horizon, and has no ▼ slice in the Edge Study.
+**Three sets, all at once (v10.2).** Every set fires on every screen; there is no selection.
 `turn_buy` / `turn_sell` are any set's triangle, and `PRG_Buy_Sets` / `PRG_Sell_Sets` name the sets
-that fired (`ledger.tags`: `A`, `B`, `B·C`, `C·D` …; a C event is always a B one). The Edge Study
+that fired (`ledger.tags`: `A`, `B`, `B·C`, `A·B·C` …; a C event is always a B one). The Edge Study
 measures each set apart and every screen reads each set's own verdict (`EdgeStudy.verdict(side,
 set)`). Sets B and C first fire at bar ~752 (risk's rank needs 500 readings); the Weekly fetch was
 deepened for them. READY marks a side of B (`PRG_Ready`) or of C (`PRG_Ready_C`) with every condition
@@ -265,9 +263,15 @@ sets A, B and C, each side alone, measured together whichever set is selected.
 | 6 | Cost in the same vol units | The same bps costing 4× more on a low-vol name |
 | 7 | Power stated: `n_eff = (dates / h) × participation ratio`, and an MDE | "No edge" from a test that could never have seen one |
 
-`UNDERPOWERED` (the MDE exceeds the slice's own edge to resolve, `engine.SLICE_EFFECT`: 0.10 D,
-0.08 C, 0.036 A and B) is distinct from `NO EDGE`. Set A's triangles are rare, so its slices will
-often be underpowered even over 15 years.
+`UNDERPOWERED` (the MDE exceeds 0.036) is distinct from `NO EDGE`. The triangles are rare, so both
+slices will often be underpowered even over 15 years.
+
+**Scored against peers (v10.4).** Each event's h-bar return has the same-day mean of the OTHER
+names in the universe subtracted (leave-one-out, at least `PEER_MIN` = 5 of them), then is divided
+by the symbol's own trailing σ. Before v10.4 the baseline was the symbol's own trailing 500-return
+mean ("drift-free"); v13 showed that baseline rewards any rule firing in a downtrend. It is still
+measured, as `EdgeStudy.results_drift` / `get_drift`, and shown as a second column. A universe with
+fewer than six names falls back to it (`EdgeStudy.score_basis`).
 
 **Memory.** Streaming in chunks of 20 symbols, lean (no volume profile, no regime engine),
 universes above 80 sampled with a fixed seed. The macro drivers are one deep batch for the whole
