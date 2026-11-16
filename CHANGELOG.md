@@ -7,6 +7,17 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.4.1] · 2026-11-16
+### The cursor shows on Paper
+- **The cursor and typed search text are visible on Paper.** Streamlit's base theme is the dark
+  one, and its inputs carried that theme's near-white text colour into two places the theme never
+  named: the blinking cursor in every text, number and date field, and the characters typed into
+  a dropdown to filter it. On Paper's white fields both measured 1.2:1, all but invisible. Both
+  now take the page's ink: 16.3:1 on the rail's Paper fields, unchanged on Slate. A dropdown
+  keeps its hidden cursor; the letters you type are their own feedback.
+
+---
+
 ## [v10.4.0] · 2026-11-16
 ### The Edge Study scores against peers; v10.3's set changes rolled back
 

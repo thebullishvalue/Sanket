@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.4.0`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.4.1`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -961,4 +961,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v10.4.0 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v10.4.1 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
