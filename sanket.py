@@ -50,7 +50,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 from nsepython import nse_get_advances_declines
-from logger import console
+from logger import console, capture_library_output
 
 # UI — Obsidian Quant Terminal System
 from ui.theme import (inject_css, apply_chart_theme, progress_bar, chart_color,
@@ -91,7 +91,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v10.4.5"
+VERSION = "v10.4.6"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -494,7 +494,7 @@ def _edge_cache_get(key: str, require_fresh: bool = False):
             with open(path, "r") as fh:
                 study = edge.EdgeStudy.from_dict(json.load(fh))
             mem[key] = study
-            console.detail(f"Edge study: loaded from disk cache ({key})")
+            console.detail("Edge study: loaded from disk cache")
             return None if (require_fresh and not _study_is_fresh(study)) else study
     except Exception as e:
         console.detail(f"Edge study: disk cache read skipped ({type(e).__name__}: {e})")
@@ -871,7 +871,7 @@ def run_edge_study(universe, selected_index, timeframe, sid: eng.EngineSettings,
             progress_bar(progress_slot, int(progress_offset + pct * progress_scale / 100),
                          label, sub)
 
-    console.start_phase("EDGE STUDY", 1, 1)
+    console.start_phase("Edge study")
     console.section("Measuring expectancy on this universe")
 
     all_symbols = _universe_symbols(universe, selected_index)
@@ -935,7 +935,7 @@ def run_edge_study(universe, selected_index, timeframe, sid: eng.EngineSettings,
     if len(baselines) < _STUDY_MIN_SYMBOLS:
         console.warning(f"Edge study: only {len(baselines)} symbols usable — "
                         f"cross-section too thin to measure")
-        console.end_phase("EDGE STUDY")
+        console.end_phase("Edge study")
         return None
 
     _p(88, "Measuring Edge", "bootstrapping confidence intervals")
@@ -967,7 +967,7 @@ def run_edge_study(universe, selected_index, timeframe, sid: eng.EngineSettings,
                              f"{study.end} · participation ratio {study.part_ratio:.1f}")
     console.item("Fire rate", " · ".join(f"set {k} {study.rate(k)*1000:.1f}" for k in lg.SETS) + " events per 1000 bars "
                               "(the Siddhi zero-cross fired ~113)")
-    console.end_phase("EDGE STUDY")
+    console.end_phase("Edge study")
     _p(100, "Edge Measured", f"{study.n_symbols_studied} symbols")
     return study
 
@@ -3026,11 +3026,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         pct_val = progress_offset + (5 * progress_scale / 100)
         progress_bar(progress_slot, pct_val, "Initializing Engine", f"Universe: {universe}")
 
-    console.start_phase("DATA ACQUISITION", 1, 2)
-    console.section("Universe Configuration")
-    console.item("Universe", universe)
-    console.item("Selected Index", selected_index)
-    console.item("Timeframe", timeframe)
+    console.start_phase("Data acquisition", 1, 2)
 
     stock_list, msg = resolve_universe(universe, selected_index)
 
@@ -3071,7 +3067,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     if drivers is None:
         console.warning("Macro drivers unavailable — the value ingredient runs unhedged")
 
-    console.end_phase("DATA ACQUISITION")
+    console.end_phase("Data acquisition")
 
     console.start_phase("SIGNAL SCREEN", 2, 2)
 
@@ -3112,7 +3108,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     _tf_label = "weekly" if timeframe == "Weekly" else "daily"
     _ladders = {}
-    console.section(f"Signal Analysis — {len(data_dict)} {_tf_label} instruments")
+    _snapped: dict = {}           # (asked, bar) → instruments, reported once after the loop
+    console.section(f"Signal analysis — {len(data_dict)} {_tf_label} instruments")
+    # The column heads, built from the rows' own widths (a row is "→ " + these fields).
+    console.text(f"  {'#':>2} {'instrument':<14} {'trace':>6}  {'state':<9} {'grid':<6} {'C':>5}  {'V':>4}")
 
     for i, (ticker, df) in enumerate(data_dict.items()):
         try:
@@ -3138,7 +3137,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             # so a short frame cached by the (unguarded) harvest can't slip through.
             _min_bars = max(reg_len + 30, sid.min_bars)
             if len(df) < _min_bars:
-                console.detail(f"{ticker}: Skipped (warming up: {len(df)} of {_min_bars} bars needed)")
+                console.detail(f"{i + 1:>2} {ticker:<14} warming up · {len(df)} of {_min_bars} bars")
                 _warmup_skipped += 1
                 continue
 
@@ -3165,7 +3164,8 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
                 continue
             idx_pos = int(_pos)
             if df.index[idx_pos] != target_dt:
-                console.detail(f"{ticker}: snapped {analysis_date} → bar {df.index[idx_pos].date()}")
+                _k = (str(analysis_date), str(df.index[idx_pos].date()))
+                _snapped[_k] = _snapped.get(_k, 0) + 1
 
             if idx_pos < 5:
                 continue
@@ -3242,10 +3242,10 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
             row.update(eng.snapshot(df, idx_pos, sid))
             results.append(row)
 
-            console.detail(f"[{i+1}/{len(data_dict)}] {ticker}: trace={_num('PRG_Trace', float('nan')):+.1f}  "
-                           f"state={last_row.get('PRG_State', '—')}  grid={last_row.get('CVG_Action', '—')}  "
-                           f"C{ {'down': '↓', 'up↺': '↺'}.get(str(last_row.get('PRG_Ladder', '')), '')}={_num('PRG_CTape', float('nan')):+.0f} "
-                           f"V={_num('PRG_VTape', float('nan')):+.0f}")
+            _arrow = {'down': '↓', 'up↺': '↺'}.get(str(last_row.get('PRG_Ladder', '')), ' ')
+            console.detail(f"{i + 1:>2} {ticker:<14} {_num('PRG_Trace', float('nan')):+6.1f}  "
+                           f"{str(last_row.get('PRG_State', '—')):<9} {str(last_row.get('CVG_Action', '—')):<6} "
+                           f"{_arrow}{_num('PRG_CTape', float('nan')):+4.0f}  {_num('PRG_VTape', float('nan')):+4.0f}")
             _ladders[str(last_row.get('PRG_Ladder', '') or 'warming')] = _ladders.get(str(last_row.get('PRG_Ladder', '') or 'warming'), 0) + 1
 
         except Exception as e:
@@ -3255,6 +3255,9 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
 
     if _ladders:
         console.item("Conviction ladder", " · ".join(f"{k} {v}" for k, v in sorted(_ladders.items())))
+    for (_asked, _bar), _n in _snapped.items():
+        console.detail(f"Snapped {_asked} → bar {_bar} for {_n} instrument{'s' * (_n != 1)} "
+                       f"(no bar on the date asked)")
     console.end_phase("SIGNAL SCREEN")
     if _cache_hits:
         console.detail(f"Analyzed-frame cache: reused {_cache_hits}/{len(data_dict)} frames from the range harvest (skipped re-analysis)")
@@ -3264,7 +3267,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
     _analyzed_cache_clear()
 
     _fail_count = len(_failed_symbols)
-    console.summary("RUN SUMMARY", {
+    console.summary("Run summary", {
         "Universe": universe,
         "Universe Index": selected_index,
         "Instrument Class": sid.iclass,
@@ -3274,7 +3277,7 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         "Warming Up": _warmup_skipped,
         "Failed Symbols": f"{_fail_count} ({', '.join(_failed_symbols[:5])}{'…' if _fail_count > 5 else ''})" if _fail_count else "0",
         "Analysis Date": analysis_date,
-        "Status": "COMPLETE",
+        "Status": "COMPLETE" if results else "FAILED",
     })
     # Surface run stats so body renders can show "47 / 50 symbols · Daily · 2025-01-15"
     st.session_state["screener_run_stats"] = {
@@ -3287,7 +3290,6 @@ def run_screener_analysis(universe, selected_index, analysis_date, reg_len, wt_n
         # analysed (past warm-up) but a tape still calibrating — no signal can fire on them
         "paused":            sum(1 for r in results if not r.get("PRG_Stack_OK", False)),
     }
-    console.line('═', 70)
 
     if show_progress or external_progress_slot is not None:
         # If this run owns the tail of the bar (offset+scale reaches 100), show a
@@ -3520,7 +3522,7 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
 
     daily_agg, summary = _aggregate_timeseries(ts_df)
 
-    console.summary("HISTORICAL RANGE SUMMARY", {
+    console.summary("Harvest summary", {
         "Universe": universe,
         "Universe Index": selected_index,
         "Instrument Class": sid.iclass,
@@ -3534,7 +3536,6 @@ def run_timeseries_analysis(universe, selected_index, start_date, end_date, reg_
         "HMM Regime": summary['dominant_regime'],
         "Status": "HARVEST COMPLETE"
     })
-    console.line('═', 70)
 
     st.session_state["timeseries_done"] = True
     st.session_state["ts_results_df"] = ts_df
@@ -4083,6 +4084,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         sid = _engine_settings(universe, selected_index, timeframe)
     progress_slot = st.empty()
     progress_bar(progress_slot, 5, "Initializing Correlation Engine", "Fetching Market Data")
+    console.start_phase("Correlation", 1, 1)
 
     try:
         # Fetch universe symbols
@@ -4147,7 +4149,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         if not close_dict:
             ui_error("No valid price data found for universe")
-            console.item("Error", "No Close prices extracted")
+            console.error("No Close prices extracted")
             return None
 
         console.item("Close prices extracted for", len(close_dict))
@@ -4159,7 +4161,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         if len(close_df) < lookback + 10:
             ui_error(f"Insufficient historical data for correlation analysis (only {len(close_df)} rows, need {lookback + 10})")
-            console.item("Error", f"Only {len(close_df)} rows, need {lookback + 10}")
+            console.error(f"Only {len(close_df)} rows, need {lookback + 10}")
             return None
 
         # Resample to weekly if needed
@@ -4178,7 +4180,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         if target_ticker not in returns_df.columns:
             ui_error(f"Target asset '{target_ticker}' not in data")
-            console.item("Error", f"Target {target_ticker} not in returns columns")
+            console.error(f"Target {target_ticker} not in returns columns")
             return None
 
         target_returns = returns_df[target_ticker].dropna()
@@ -4188,7 +4190,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         common_idx = returns_df.index.intersection(target_returns.index)
         if len(common_idx) < lookback + 10:
             ui_error(f"Insufficient overlapping data (only {len(common_idx)} days). Try a shorter lookback period.")
-            console.item("Error", f"Only {len(common_idx)} common dates, need {lookback + 10}")
+            console.error(f"Only {len(common_idx)} common dates, need {lookback + 10}")
             return None
 
         returns_df = returns_df.loc[common_idx]
@@ -4228,7 +4230,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
         if rolling_corr_df.empty or len(rolling_corr_df) == 0:
             ui_error("Could not compute rolling correlations. Check data availability.")
-            console.item("Error", "Rolling correlation DataFrame is empty")
+            console.error("Rolling correlation DataFrame is empty")
             return None
 
         # Get current and average correlations
@@ -4362,7 +4364,7 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         corr_df = pd.DataFrame(corr_data_list)
         if len(corr_df) == 0:
             ui_error("No correlation data could be computed")
-            console.item("Error", "Empty correlation DataFrame")
+            console.error("Empty correlation DataFrame")
             return None
 
         corr_df = corr_df.sort_values('Corr_Current', key=abs, ascending=False)
@@ -4405,6 +4407,11 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
         progress_bar(progress_slot, 100, "Analysis Complete", "Ready to display")
         time.sleep(0.3)
         progress_slot.empty()
+        console.summary("Correlation summary", {
+            "Target": f"{target_name} ({target_ticker})", "Method": f"{method} · {lookback} bars",
+            "Instruments": corr_df.shape[0] if hasattr(corr_df, "shape") else len(corr_df),
+            "Status": "COMPLETE"})
+        console.end_phase("Correlation")
 
         return {
             "corr_df": corr_df,
@@ -4422,9 +4429,9 @@ def run_correlation_analysis(universe, selected_index, target_ticker, lookback, 
 
     except Exception as e:
         ui_error(f"Correlation analysis error: {str(e)}")
-        console.item("Exception", str(e))
+        console.error(f"Correlation analysis failed: {type(e).__name__}: {e}")
         import traceback
-        console.item("Traceback", traceback.format_exc()[:2000])
+        console.text(traceback.format_exc().rstrip()[-2000:])
         return None
 
 
@@ -6123,10 +6130,11 @@ def main():
 
     # ── Session-start log (once per browser session) ──────────────────────
     # Banner-style header anchors the terminal output for grep-by-session.
-    if is_first_render:
-        console.header("SANKET TERMINAL — Session Start", VERSION)
-        console.item("Started", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        console.item("Signal engine", f"{ENGINE_CODE} — {ENGINE_NAME} (pragati.pine v9.3)")
+    # The terminal's masthead: once per process (the family console keeps the count, so a new
+    # browser session no longer reprints it); library output joins the run trace.
+    capture_library_output()
+    console.banner("Sanket", VERSION, f"Market Signal Screener · {ENGINE_NAME}",
+                   {"Signal engine": f"{ENGINE_CODE} — {ENGINE_NAME} (pragati.pine v9.3)"})
 
     # Render sidebar and get parameters + run button state
     sbs = render_sidebar()
@@ -6164,6 +6172,19 @@ def main():
         st.session_state["run_error"] = None
         st.session_state["run_screener_flag"] = False  # legacy guard, kept for safety
 
+        # The run opens here, ahead of the edge study it starts with: one header, one id.
+        _run_title = {"Single Date": "Signal screen", "Pulse Narrative": "Pulse narrative",
+                      "Historical Range": "Historical signal harvest",
+                      "Correlation Analysis": "Correlation analysis"}.get(mode, mode)
+        console.header(f"Sanket · {_run_title}", VERSION)
+        console.main_header("Run inputs", {
+            "Universe": universe, "Index": selected_index, "Timeframe": timeframe, "Mode": mode,
+            **({"Range": f"{start_date} → {end_date}"} if mode == "Historical Range"
+               else {"Target date": analysis_date}),
+            **({"Correlate with": f"{corr_target_ticker} · {corr_lookback} bars · {corr_method}"}
+               if mode == "Correlation Analysis" else {}),
+        })
+
         # ── Edge study — runs on EVERY run ───────────────────────────────
         # First, because the screener's cost gate and every reported verdict read from it.
         # Reuses a same-day measurement (identical inputs ⇒ identical answer), re-measures
@@ -6192,13 +6213,7 @@ def main():
         _an_scale = (100 - _STUDY_PROGRESS_SHARE) if _measures_now else 100
 
         if mode in ("Single Date", "Pulse Narrative"):
-            header_text = "Pragati Signal Screener" if mode == "Single Date" else "Pulse Narrative Analysis"
-            console.header(f"SANKET TERMINAL — {header_text}", VERSION)
-            console.main_header("ANALYSIS RUN START", {
-                "Universe": universe, "Index": selected_index, "Timeframe": timeframe,
-                "Target Date": analysis_date, "Mode": mode,
-                "Measured edge": _board_state(study)[0],
-            })
+            console.item("Measured edge", _board_state(study)[0])
             results_df = run_screener_analysis(
                 universe, selected_index, analysis_date,
                 reg_len, wt_n1, wt_n2, levels, timeframe,
@@ -6220,7 +6235,6 @@ def main():
             }
 
         elif mode == "Historical Range":
-            console.header("SANKET TERMINAL — Historical Signal Harvest", VERSION)
             run_timeseries_analysis(
                 universe, selected_index, start_date, end_date,
                 reg_len, wt_n1, wt_n2, levels, timeframe,
@@ -6243,6 +6257,8 @@ def main():
                 corr_lookback, corr_method, timeframe, analysis_date, sid=sid, study=study,
             )
             st.session_state["corr_data"] = corr_data
+
+        console.end_run("FAILED" if st.session_state.get("run_error") else None)
 
     # ── Mode-change cleanup ──────────────────────────────────────────────
     last_mode = st.session_state.get("_last_mode")
