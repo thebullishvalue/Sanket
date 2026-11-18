@@ -91,7 +91,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v10.4.3"
+VERSION = "v10.4.4"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -982,17 +982,16 @@ _THEME_CHOICE = "theme_choice"
 #: The two appearances. Both are reading surfaces — Slate is the dark one you
 #: work on, Paper the light one you read a result on and print from.
 #:
-#: SLATE LEADS, and the order is the default: `theme_choice()` falls back to
+#: PAPER LEADS, and the order is the default: `theme_choice()` falls back to
 #: APPEARANCES[0] for any unset or unrecognised value, so first-in-tuple IS
 #: first-run. Kept as one fact rather than a separate DEFAULT_ constant, so the
 #: toggle's left-to-right order and the default can never disagree.
 #:
-#: Slate leads here where Paper leads in Tattva, and .streamlit/config.toml is
-#: set to match: a screener is a working surface, and the run console beside it
-#: is dark. `base` in that file must agree with whatever leads here, or the
-#: FIRST load — before any choice exists — renders Streamlit's own natives for
-#: one theme on the other theme's ground.
-APPEARANCES = ("Slate", "Paper")
+#: Paper leads as in every member of the family (Sanket led with Slate until
+#: v10.4.4). .streamlit/config.toml keeps the dark base, as in Tattva: theme.css
+#: is built Slate-first and ui.theme.LIGHT_TOKENS reclaims Streamlit's natives
+#: for Paper, so the first load renders them on Paper's ground.
+APPEARANCES = ("Paper", "Slate")
 
 
 def theme_choice() -> str:

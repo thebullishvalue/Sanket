@@ -1,5 +1,5 @@
 # SANKET — Institutional Market Signal Terminal
-### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.4.3`
+### Pragati · Conviction × Value · Graphite · Pragyam Family · `v10.4.4`
 
 > **संकेत** *(Sanketa)* — Sanskrit for *Signal* · *Indicator* · *Forewarning*
 
@@ -399,7 +399,7 @@ reverting one.
 | Interactive | Cobalt `#4C7DF0` (Slate) / `#2B5FD9` (Paper) |
 | Long / Short | `#2CA36B` / `#DD5A5A` (Slate) · `#0F7A54` / `#C0392F` (Paper) |
 | Caution | Amber `#D79A3C` — **caution only, never brand** |
-| Appearances | **Slate** (dark, default) and **Paper** (light, for reading and print) |
+| Appearances | **Paper** (light, default, for reading and print) and **Slate** (dark) |
 | Display / data fonts | Inter (prose) · JetBrains Mono (every figure, tabular numerals) |
 
 **Amber is no longer the brand.** The previous system made amber-gold both the product accent
@@ -961,4 +961,4 @@ See [`LICENSE`](LICENSE) for full terms.
 
 ---
 
-*Sanket v10.4.3 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*
+*Sanket v10.4.4 · Pragyam Family · Built by [@thebullishvalue](https://github.com/thebullishvalue)*

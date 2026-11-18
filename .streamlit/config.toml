@@ -15,9 +15,9 @@
 #
 # With ONE section Streamlit takes the other branch — a single "Custom Theme"
 # for every viewer, whatever their OS — so the native layer is a known, fixed
-# state. It is DARK, to agree with APPEARANCES[0] in sanket.py (Slate is the
-# first-run default); Paper's natives are reclaimed in ui.theme.LIGHT_TOKENS and
-# theme.css. Same fix as Pragyam and the other terminals. If you add a widget
+# state. It is the dark ramp because ui/theme.css is built Slate-first; Paper,
+# the first-run appearance (APPEARANCES[0] in sanket.py, as in Tattva), reclaims
+# the natives in ui.theme.LIGHT_TOKENS and theme.css. Same fix as Pragyam and the other terminals. If you add a widget
 # that paints itself from Streamlit's theme, claim it in CSS — do not add a
 # section back here.
 [theme]

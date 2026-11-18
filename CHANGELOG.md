@@ -7,6 +7,17 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.4.4] · 2026-11-18
+### Paper first, as the family
+- **Paper is the first-run appearance**, as in every member of the family (Tattva, Nishkarsh,
+  Nivesa, Pragyam, Arthagati, Samhita, Swing, VAAYDO); the switch reads PAPER · SLATE. Sanket
+  was the one member that opened in Slate. A choice once made is kept for the session, as
+  before. `.streamlit/config.toml` keeps the dark base, as in Tattva: the stylesheet is built
+  Slate-first and Paper's tokens reclaim Streamlit's native widgets (the date picker included)
+  on the first load.
+
+---
+
 ## [v10.4.3] · 2026-11-18
 ### The appearance switch reaches the rail's foot
 - **The appearance switch reaches the rail's foot.** The rail is meant to read identity →
