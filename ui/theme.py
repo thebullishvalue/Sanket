@@ -609,6 +609,7 @@ RUN_PHASES = (
     (1, "Edge Study",       ("measuring edge", "edge measured")),
     (2, "Data Acquisition", ("initializing engine", "initializing correlation engine",
                              "fetching market data", "fetching ohlcv data",
+                             "fetching intraday ladder",
                              "fetching historical depth", "building price matrix")),
     (3, "Signal Screen",    ("analyzing instruments", "ranking cross-section",
                              "harvesting signals", "computing returns",

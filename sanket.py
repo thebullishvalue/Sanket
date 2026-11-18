@@ -91,7 +91,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v10.4.4"
+VERSION = "v10.4.5"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -757,6 +757,18 @@ def ensure_edge_study(universe, selected_index, timeframe, sid,
     """
     return _ensure_edge_study(universe, selected_index, timeframe, sid, progress_slot,
                               progress_offset, progress_scale)
+
+
+def _edge_study_will_measure(universe, selected_index, timeframe, sid) -> bool:
+    """Whether :func:`ensure_edge_study` will measure on this call, and so paint the head of the
+    run's progress bar: no measurement from today, and no failed attempt today. The run reads this
+    BEFORE the study, to hand the analysis the rest of the bar; deciding afterwards from whether a
+    study came back put the analysis back at 0% whenever a measurement failed (the bar ran to
+    ~30%, then restarted at 15%) or a stale one was re-measured."""
+    key = _edge_key(universe, selected_index, timeframe, sid)
+    if _edge_cache_get(key, require_fresh=True) is not None:
+        return False
+    return st.session_state.get("_edge_failed", {}).get(key) != _today_ist().strftime("%Y-%m-%d")
 
 
 def _ensure_edge_study(universe, selected_index, timeframe, sid, progress_slot, progress_offset,
@@ -6158,6 +6170,7 @@ def main():
         # once the date rolls, and never blocks the run if it fails.
         _study_slot = st.empty()
         _had_study = _edge_cache_get(_edge_key(universe, selected_index, timeframe, sid)) is not None
+        _measures_now = _edge_study_will_measure(universe, selected_index, timeframe, sid)
         study = ensure_edge_study(universe, selected_index, timeframe, sid,
                                   progress_slot=_study_slot, progress_offset=0,
                                   progress_scale=_STUDY_PROGRESS_SHARE)
@@ -6171,12 +6184,12 @@ def main():
                 "request from a shared cloud IP). The screen below still runs; the expectancy "
                 "simply reads as not measured, and the study is retried on the next session."
             )
-        # ONE progress bar for the whole click. When the study actually measured it owns the
-        # head of the bar, so the analysis renders into the tail of the SAME bar; when the
-        # study was reused from cache it painted nothing and the analysis owns all of it.
-        _measured_now = study is not None and not _had_study
-        _an_offset = _STUDY_PROGRESS_SHARE if _measured_now else 0
-        _an_scale = (100 - _STUDY_PROGRESS_SHARE) if _measured_now else 100
+        # ONE progress bar for the whole click. When the study measured on this click it owns
+        # the head of the bar, whether or not the measurement succeeded, so the analysis renders
+        # into the tail of the SAME bar and the bar never runs backwards; when the study was
+        # reused (or already failed today) it painted nothing and the analysis owns all of it.
+        _an_offset = _STUDY_PROGRESS_SHARE if _measures_now else 0
+        _an_scale = (100 - _STUDY_PROGRESS_SHARE) if _measures_now else 100
 
         if mode in ("Single Date", "Pulse Narrative"):
             header_text = "Pragati Signal Screener" if mode == "Single Date" else "Pulse Narrative Analysis"

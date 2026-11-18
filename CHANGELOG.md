@@ -7,6 +7,26 @@ Format: `[version] · date — release title`
 
 ---
 
+## [v10.4.5] · 2026-11-18
+### The progress bar never runs backwards; numbers written as text read as numbers
+- **One bar, forward only.** When the edge study measured and failed, the bar ran to about 30%
+  and then restarted at 15%: the screen's share of the bar was decided by whether a study came
+  back, not by whether one was measured on this click, so a failed (or re-measured stale) study
+  handed the screen the whole bar again. The split is now decided before the study runs; when it
+  measures, it owns the head of the bar whether it succeeds or not, and the screen fills the rest.
+- **"Fetching Intraday Ladder" is a Data Acquisition step.** The phase table did not know it, so
+  the card fell back to a guess from the percentage and showed "Phase 1 of 4 · Edge Study"
+  between two Data Acquisition steps.
+- **Numbers written as text read as numbers.** A table column whose numbers arrive already
+  formatted ("1,901.70", "+3.4%", "₹25,575", "12.4×", "1,625.48 (−14.5%)") was read by its type,
+  text, so it sat left-aligned in the tertiary ink like a column of labels, beside the right-aligned
+  numbers of the same table. A column whose every value is a written number (a dash for a missing
+  one allowed) is now a numeric column: right-aligned, tabular, in the primary ink, and one the
+  table colours by sign takes its colour from the written sign. The label column stays a label,
+  whatever it holds. Brought from VAAYDO, where it was built.
+
+---
+
 ## [v10.4.4] · 2026-11-18
 ### Paper first, as the family
 - **Paper is the first-run appearance**, as in every member of the family (Tattva, Nishkarsh,
