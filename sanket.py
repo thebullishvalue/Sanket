@@ -91,7 +91,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v10.4.7"
+VERSION = "v10.4.8"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -6160,9 +6160,6 @@ def main():
         study = ensure_edge_study(universe, selected_index, timeframe, sid,
                                   progress_slot=_study_slot, progress_offset=0,
                                   progress_scale=_STUDY_PROGRESS_SHARE)
-        # The sidebar card was painted before this ran — repaint it so a study measured on
-        # THIS click shows immediately instead of one interaction later.
-        _refresh_engine_card()
         if study is None and not _had_study:
             ui_warning(
                 "**Edge study could not complete.** Not enough history came back to measure "
@@ -6444,107 +6441,18 @@ def main():
         # Always render footer
         render_footer()
 
-#: Verdict kind (from `_verdict_kind`) -> the tone class `.rail-readout .v`
-#: understands. The readout speaks long/short/caution/accent; the study speaks
-#: success/danger/warning/neutral. One mapping, stated once, rather than a
-#: conditional at each call site.
-_VERDICT_TONE = {"success": "long", "danger": "short",
-                 "warning": "caution", "neutral": ""}
-
-
-def _render_engine_status_body(sid, study) -> None:
-    """Paint the engine's state into the current container.
-
-    Four rows at most, each one fact, in the rail's own readout grammar — the
-    same component the session readout below it uses, so the sidebar is made of
-    one kind of thing instead of a card pretending to be a rail.
-
-    Everything this deliberately does NOT show — the per-side confidence
-    intervals, the hit rate, the minimum detectable effect, the participation
-    ratio, the studied date range — is in System Data ▸ Edge Study, in full,
-    per era, with a glossary. A 145px column clipped to twelve characters was
-    not reporting those numbers, it was hinting at them.
-
-    Nor does it carry the engine's caveats any more. The bare-crossing warning
-    is stated twice in the body already — on the Signal Reference card and in
-    the SELL tab's own description — and a rail is not where a reader goes to
-    be argued with. The one disclosure with nowhere else to live, the adapted
-    weekly normalization window, moved to the notice rail, which is the
-    component for "something about THIS run you should know".
-    """
-    gate_ok = sid.cost_ok(study)
-    rows = []
-    # One row per set, each side's verdict in short form — the three sets are read
-    # together, so the rail reports them together.
-    for k in lg.SETS:
-        if study is None:
-            rows.append((f"Set {k}", "not measured", ""))
-            continue
-        vb, vs = study.verdict("buy", k)[0], study.verdict("sell", k)[0]
-        tone = _VERDICT_TONE.get(_set_tone(study, k), "")
-        rows.append((f"Set {k}", f"▲ {_VERDICT_SHORT.get(vb, vb)} · ▼ {_VERDICT_SHORT.get(vs, vs)}", tone))
-    rows.append(("Hold", f"{sid.horizon} bars", ""))
-    rows.append(("Cost", f"{sid.cost_bps:.0f}bp · " + ("net +" if gate_ok else "NET NEG"),
-                 "long" if gate_ok else "short"))
-
-    ui.render_rail_readout(rows)
-
-
-
-def _refresh_engine_card() -> None:
-    """Repaint the Engine Status card after a run measured a study.
-
-    The sidebar is rendered before the analysis executes, so a study measured during this
-    click would otherwise not show until the next interaction.
-    """
-    slot = st.session_state.get("_engine_card_slot")
-    args = st.session_state.get("_engine_card_args")
-    if slot is None or args is None:
-        return
-    try:
-        sid = _active_engine_settings()
-        # `.container()` because the body is now several components rather than
-        # one HTML string; writing into the slot replaces whatever it held.
-        with slot.container():
-            _render_engine_status_body(sid, _edge_cache_get(_edge_key(*args, sid)))
-    except Exception:
-        pass
-
 
 def _render_engine_status_sidebar(current_universe: str, current_index,
-                                  current_timeframe) -> tuple:
-    """Sidebar Engine panel — visible in every mode.
+                                  current_timeframe):
+    """Resolve the engine settings for the selection on screen and stash them in session state,
+    so renderers that do not take them as an argument can read them back.
 
-    A status line, and now actually one: the verdict for the universe on screen (or an honest
-    "not measured yet"), the number behind it, what fires, and what it costs. Four rows in the
-    rail's own readout grammar. The per-era breakdown, both sides' intervals, the hit rate and
-    the power behind them live in System Data ▸ Edge Study, which is where a reader who
-    wants them is already going.
-
-    There are no controls here. Parameters are all the indicator's own defaults, so
-    a slider would only invite fitting them to whatever universe is on screen — the exact thing
-    that would destroy the credibility of the measurement above it. And the edge study is not
-    opt-in: it runs on every run (see :func:`ensure_edge_study`), so there is nothing to tick.
-
-    Caller must be inside a ``with st.sidebar:`` context. Returns the resolved
-    :class:`eng.EngineSettings` and stashes it in session state so renderers that do not take it as
-    an argument can read it back.
+    The rail drew an Engine readout here (each set's verdict, the hold, the cost). The family's
+    rails hold controls only: the set verdicts are on the set board, and the hold and the cost in
+    the set board's context and System Data's definitions. Caller is inside ``with st.sidebar:``.
     """
-    st.markdown('<div class="sidebar-title">Engine</div>', unsafe_allow_html=True)
-
     sid = _engine_settings(current_universe, current_index, current_timeframe)
     st.session_state["engine_settings"] = sid
-
-    study = _edge_cache_get(_edge_key(current_universe, current_index, current_timeframe, sid))
-    # Painted into a placeholder so it can be repainted after a run measures a study — the
-    # sidebar renders BEFORE the analysis executes (single-pass render), so without this the
-    # card would show "not measured" for one extra interaction after you measured.
-    _slot = st.empty()
-    with _slot.container():
-        _render_engine_status_body(sid, study)
-    st.session_state["_engine_card_slot"] = _slot
-    st.session_state["_engine_card_args"] = (current_universe, current_index, current_timeframe)
-
     return sid
 
 
