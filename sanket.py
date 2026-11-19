@@ -91,7 +91,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "v10.4.6"
+VERSION = "v10.4.7"
 
 # ── Engine identity ───────────────────────────────────────────────────────────
 # Named for what it measures: progress (प्रगति), and the price it was made at. Defined here
@@ -2677,52 +2677,46 @@ def render_footer():
     """, unsafe_allow_html=True)
 
 
-#: The three parts of the system, as the cold-start screen describes them.
-#: Data, not markup — the landing page renders them through one template, so
-#: the three panels cannot drift apart in structure the way three hand-written
-#: HTML blocks did.
-_SYSTEM_PANELS = (
-    ("engine", "Readings", "Conviction × value",
-     "Who controls a move, and the price it was made at — one trace, its push, and two tapes "
-     "read across timeframes.",
-     (("Conviction", "who controls, 1m → W"),
-      ("Value", "rich or cheap vs. macro drivers"),
-      ("Trace", "conviction × value, ±100"),
-      ("Grid", "3 × 3 · Buy → Exit"))),
-    ("events", "Signals", "Three sets, side by side",
-     "Every set fires on every screen, each with its own tested record. A watchlist holds the "
-     "names one flip from firing.",
-     (("A", "entering a state proven on the name"),
-      ("B", "a flip in calm risk"),
-      ("C", "B, with the trend agreeing"),
-      ("Watchlist", "ready · near · proven"))),
-    ("measured", "Edge Study", "Tested on your symbols",
-     "Every run tests each set on the universe in front of you, out of sample, and shows the "
-     "verdict beside the signal.",
-     (("History", "~15 years"),
-      ("Baseline", "same-day peers"),
-      ("Intervals", "block bootstrap"),
-      ("Verdict", "per set and side"))),
+#: The landing page's three segments, as data: Engines, Inputs & Scope, Run Outputs, in the
+#: order Arthagati reads them. Plain words first; a method's name only where it helps.
+_ENGINES = (
+    ("Readings", "Conviction × value",
+     "Reads every name on two questions: who is in control of the move, buyers or sellers, "
+     "measured from minutes up to weeks; and whether the price is rich or cheap against the "
+     "market forces that usually drive it. The two combine into one trace from −100 to +100 "
+     "and a place on a grid from Buy to Exit.",
+     (("Conviction", "Buyers or sellers in control"),
+      ("Value", "Rich or cheap against its drivers"),
+      ("Grid", "Nine states, Buy to Exit"))),
+    ("Signals", "Three sets, side by side",
+     "Three rules fire on every screen, each with its own record: A, a name entering a state "
+     "that has worked for it before; B, a turn while risk is calm; C, the same turn with the "
+     "trend agreeing. A watchlist holds the names one turn away from firing.",
+     (("Set A", "A state proven on the name"),
+      ("Set B", "A turn in calm conditions"),
+      ("Set C", "Set B, with the trend"))),
+    ("Edge Study", "Tested on your symbols",
+     "Every run tests each set on the very universe on screen, over about fifteen years, "
+     "against what the same names did on ordinary days, and shows the verdict beside the "
+     "signal. A set that has not earned its keep says so.",
+     (("History", "About 15 years"),
+      ("Compared with", "Same-day peers"),
+      ("Verdict", "Per set, long and short"))),
+)
+
+_OUTPUTS = (
+    ("Signals", "What fired in each set, what is close, and each set's tested record, then every "
+                "signal from the last five sessions."),
+    ("Watchlist", "The names one turn away from firing, and how often each group has fired "
+                  "before."),
+    ("Grid", "Where every name stands right now, from Buy through Hold to Exit."),
+    ("System Data", "The full readings for every name, with exports, definitions and the edge "
+                    "study in full."),
 )
 
 
 def render_landing_page():
-    """Cold start — a description of the product, built from the product's own parts.
-
-    Every block here uses the components the analysis pages use: a section
-    header for each division, ``render_kpi_strip`` for the coverage numbers,
-    and ``panel()`` for each part. The previous version was built from
-    compositions that existed nowhere else in the app — a bespoke
-    ``.system-card`` with a coloured top bar where every other container is a
-    hairline panel, and a ``.landing-prompt`` with its own heading scale — so
-    the landing page was the only page not on the section-rhythm contract. It
-    read as a different product's marketing page bolted to the front of this
-    one.
-
-    The claim leads, because a reader who has not run anything needs to know
-    what the thing IS before they are shown what it covers.
-    """
-    # ── The proposition ───────────────────────────────────────────────────
+    """Cold start: the claim, then Engines, Inputs & Scope and Run Outputs (Arthagati's three)."""
     st.markdown(
         """<div class="lede">
   <div class="lede-claim">A whole universe on one screen — what fired, what is about to,
@@ -2732,69 +2726,40 @@ def render_landing_page():
 </div>""",
         unsafe_allow_html=True,
     )
-
-    # ── Coverage — the app's own KPI grammar, not a bespoke number row ─────
-    ui.render_section_header("Coverage", icon="layers")
+    ui.render_section_header(
+        "Engines",
+        "How each name is read, how a signal fires from that reading, and how every signal is "
+        "tested before you rely on it.",
+        icon="cpu",
+    )
+    ui.render_system_grid(_ENGINES)
+    ui.render_section_header(
+        "Inputs & Scope",
+        "What Sanket can be pointed at, the ways to read it, and the history behind each "
+        "reading.",
+        icon="database",
+    )
     ui.render_kpi_strip(
         [
             {"label": "Universe Groups", "value": str(len(UNIVERSE_OPTIONS)),
-             "subtext": "India and US indices, global benchmarks, NSE ETFs, "
-                        "commodities, FX, crypto and macro"},
+             "subtext": "Indian, US and global indices, NSE ETFs, commodities, currencies, "
+                        "crypto and global macro series"},
             {"label": "Analysis Modes", "value": "4",
-             "subtext": "Single Date · Pulse Narrative · Historical Range · "
-                        "Correlation"},
+             "subtext": "A single date, a pulse narrative, a historical range, and correlation "
+                        "with an asset of your choice"},
             {"label": "History Per Run", "value": "~3.5y",
-             "subtext": "Daily · ~16 years on Weekly · every reading uses only the bars "
-                        "before it"},
+             "subtext": "On daily bars (about 16 years on weekly); every reading uses only the "
+                        "bars before it"},
         ],
         max_cols=3,
         key="landing-coverage",
     )
-
-    # ── The three parts, as panels ────────────────────────────────────────
-    ui.render_section_header("System", icon="cpu")
-    cols = st.columns(3, gap="small")
-    for col, (cls, name, kicker, body, specs) in zip(cols, _SYSTEM_PANELS):
-        with col:
-            with ui.panel(f"landing-{cls}", name, context=kicker):
-                st.markdown(
-                    f'<div class="panel-copy">{body}</div>'
-                    '<div class="panel-specs">'
-                    + "".join(
-                        f'<div class="lookback-row"><span class="lbl">{html.escape(k)}</span>'
-                        f'<span class="val">{html.escape(v)}</span></div>'
-                        for k, v in specs
-                    )
-                    + "</div>",
-                    unsafe_allow_html=True,
-                )
-
-    # ── What a Run Returns ────────────────────────────────────────────────
-    ui.render_section_header("What a Run Returns", icon="target")
-    _out = (
-        ("Signals", "Each set's events, watch and tested record, then every event of the last "
-                    "five sessions."),
-        ("Watchlist", "The names one flip from firing, with how often each group has fired."),
-        ("Grid", "Where every name stands, from Buy to Exit."),
-        ("System Data", "The full frame, exports, definitions and the Edge Study."),
+    ui.render_section_header(
+        "Run Outputs",
+        "Four views land on screen when a run finishes, one per tab.",
+        icon="target",
     )
-    # ONE markdown block, not four panels. These four cards are static text, so
-    # they gain nothing from a Streamlit container and lose something real to
-    # it: on 1.52 the anonymous row Streamlit wraps markdown in sizes to 31px
-    # around 47px of copy and will not grow, so each panel comes out ~15px
-    # short and clips its own last line at `overflow: hidden` — by a different
-    # amount per card, which is what makes such a grid ragged. A single grid of
-    # plain divs has no wrapper to collapse.
-    st.markdown(
-        '<div class="outcome-grid">'
-        + "".join(
-            f'<div class="outcome"><div class="o-t">{html.escape(t)}</div>'
-            f'<div class="o-d">{html.escape(d)}</div></div>'
-            for t, d in _out
-        )
-        + "</div>",
-        unsafe_allow_html=True,
-    )
+    ui.render_outcome_grid(_OUTPUTS)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
