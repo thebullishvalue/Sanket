@@ -1,9 +1,11 @@
-# CHANGELOG
-### Sanket — Pragati · Conviction × Value
+# Changelog
 
-All notable changes to the **Sanket** platform are documented here. Sanket is part of the **Pragyam Product Family** by [@thebullishvalue](https://github.com/thebullishvalue).
+All notable changes to **Sanket** are documented in this file.
 
-Format: `[version] · date — release title`
+The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
+
+Entries read `[version] · date — release title`.
 
 ---
 

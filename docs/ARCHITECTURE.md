@@ -8,7 +8,7 @@
 >
 > Two kinds of number appear below. Numbers about **the source indicator** come from the Pine's
 > own evidence section; numbers about **Pragyam's grid** come from Pragyam's pre-registered study.
-> Numbers about **your universe** are measured live by [`edge.py`](edge.py) and appear only in the
+> Numbers about **your universe** are measured live by [`edge.py`](../edge.py) and appear only in the
 > app — nothing about your symbols is hardcoded anywhere in this system.
 
 ## Why the engine changed
