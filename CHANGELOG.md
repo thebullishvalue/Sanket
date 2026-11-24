@@ -9,6 +9,15 @@ Entries read `[version] · date — release title`.
 
 ---
 
+## [v10.4.10] · 2026-11-24
+### The help icon, in step
+- **The family's fidelity block, in step.** It gains the rule that makes a help icon's (?) follow its colour:
+  Streamlit strokes the ring near-white at 60% whatever colour it is given, which all but hid it on Paper in
+  Vyāpti, Pragyam, Arthagati, Nivesa and Anumaan. No widget here shows a help icon today; the block stays
+  identical in every member, so the next one reads.
+
+---
+
 ## [v10.4.9] · 2026-11-20
 ### One box per tooltip
 - **A tooltip is one box, in the family's note type.** Every `help=` tip, the rail's refresh hint
